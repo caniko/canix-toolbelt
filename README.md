@@ -40,7 +40,13 @@ Two output families:
 ```nix
 {
   inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     canix-toolbelt.url = "git+ssh://git@codeberg.org/caniko/canix-toolbelt.git";
   };
 
@@ -53,6 +59,11 @@ Two output families:
       ];
 
       perSystem = {pkgs, ...}: {
+        canix-toolbelt.pre-commit.mypy = {
+          enable = true;
+          excludes = ["^vendor/" "^submodules/"];
+        };
+
         canix-toolbelt.structure-check = {
           enable = true;
           src = ./.;
