@@ -8,7 +8,6 @@
       deadnix.enable = true;
       gofmt.enable = true;
       just.enable = true;
-      mypy.enable = true;
       ruff-check.enable = true;
       alejandra.enable = true;
       rustfmt.enable = true;
