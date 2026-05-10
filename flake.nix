@@ -20,12 +20,18 @@
       ];
 
       flake = {
+        lib = import ./lib;
         nixosModules = import ./modules/nixos;
         flakeModules = {
+          agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
+          caddy-helpers = ./flake-modules/caddy-helpers.nix;
           dev-stack = ./flake-modules/dev-stack.nix;
           formatters = ./flake-modules/formatters.nix;
           git-hooks = ./flake-modules/git-hooks.nix;
+          ops-shell = ./flake-modules/ops-shell.nix;
+          shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
+          topology = ./flake-modules/topology.nix;
         };
       };
 
