@@ -84,6 +84,11 @@
     flake.topology = let
       tcfg = config.canix-toolbelt.topology;
 
+      nixosConfigurations =
+        lib.filterAttrs
+        (name: _: builtins.hasAttr name tcfg.hosts)
+        self.nixosConfigurations;
+
       wgServerName =
         lib.findFirst
         (name: tcfg.wgServerDetector name tcfg.hosts.${name})
@@ -153,7 +158,7 @@
           inherit pkgs;
           modules = [
             topologyModule
-            {inherit (self) nixosConfigurations;}
+            {inherit nixosConfigurations;}
           ];
         });
   };
