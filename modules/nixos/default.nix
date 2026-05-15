@@ -1,4 +1,7 @@
 {
+  # Generic host config profiles toggled via specialisations
+  profiles = ./profiles.nix;
+
   # Hardware
   hardware-base = ./hardware/base.nix;
 
