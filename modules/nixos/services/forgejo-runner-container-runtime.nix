@@ -11,6 +11,19 @@
   cfg = config.canix-toolbelt.services.forgejoRunner.containerRuntime;
   runnerCfg = config.services.forgejo.runner;
 
+  jobContainerPath = concatStringsSep ":" [
+    "/usr/local/bin"
+    "/usr/local/cargo/bin"
+    "/root/.cargo/bin"
+    "/root/.nix-profile/bin"
+    "/nix/var/nix/profiles/default/bin"
+    "/nix/var/nix/profiles/default/sbin"
+    "/bin"
+    "/usr/bin"
+    "/sbin"
+    "/usr/sbin"
+  ];
+
   actionRuntime = pkgs.buildEnv {
     name = "canix-forgejo-action-runtime";
     paths = cfg.actionRuntimePackages;
@@ -51,8 +64,31 @@
     };
   };
 
+  hostNixRunnerImage = pkgs.dockerTools.buildLayeredImage {
+    name = cfg.hostNixImageName;
+    tag = cfg.hostNixImageTag;
+    contents = cfg.hostNixImageContents ++ cfg.hostNixImageExtraContents;
+    extraCommands = ''
+      mkdir -p usr/bin
+      ln -s /bin/env usr/bin/env
+    '';
+    config = {
+      Env = [
+        "PATH=/bin:/usr/bin"
+        "NIX_REMOTE=daemon"
+        "NIX_PAGER=cat"
+        "USER=root"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+        "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+      ];
+      WorkingDir = "/";
+      Cmd = ["/bin/bash"];
+    };
+  };
+
   runtimeOptions =
     [
+      "-e PATH=${jobContainerPath}"
       "-v /nix/store:/nix/store:ro"
       "-v ${actionRuntime}/etc/ssl/certs:/canix-forgejo-action-certs:ro"
       "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
@@ -60,6 +96,21 @@
     ]
     ++ actionRuntimeMounts
     ++ cfg.extraContainerOptions;
+
+  hostNixRuntimeOptions =
+    [
+      "-e PATH=${jobContainerPath}"
+      "-e NIX_REMOTE=daemon"
+      "-e NIX_PAGER=cat"
+      "-e USER=root"
+      "-v /nix/store:/nix/store:ro"
+      "-v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket"
+      "-v ${actionRuntime}/etc/ssl/certs:/canix-forgejo-action-certs:ro"
+      "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+      "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+    ]
+    ++ actionRuntimeMounts
+    ++ cfg.hostNixExtraContainerOptions;
 
   runnerServiceNames =
     map
@@ -79,6 +130,18 @@ in {
       type = types.str;
       default = "local";
       description = "Local runner OCI image tag.";
+    };
+
+    hostNixImageName = mkOption {
+      type = types.str;
+      default = "canix-nix-runner";
+      description = "Local host-nix runner OCI image name loaded into the container runtime.";
+    };
+
+    hostNixImageTag = mkOption {
+      type = types.str;
+      default = "local";
+      description = "Local host-nix runner OCI image tag.";
     };
 
     imageContents = mkOption {
@@ -101,6 +164,29 @@ in {
       type = types.listOf types.package;
       default = [];
       description = "Additional packages to bake into the base runner image.";
+    };
+
+    hostNixImageContents = mkOption {
+      type = types.listOf types.package;
+      default = with pkgs; [
+        dockerTools.caCertificates
+        nix
+        bashInteractive
+        coreutils
+        gitMinimal
+        nodejs_24
+        curl
+        gnutar
+        gzip
+        which
+      ];
+      description = "Packages baked into the trusted host-nix runner image.";
+    };
+
+    hostNixImageExtraContents = mkOption {
+      type = types.listOf types.package;
+      default = [];
+      description = "Additional packages to bake into the trusted host-nix runner image.";
     };
 
     actionRuntimePackages = mkOption {
@@ -130,6 +216,7 @@ in {
         "git"
         "gzip"
         "node"
+        "sh"
         "tar"
         "tail"
         "which"
@@ -143,10 +230,22 @@ in {
       description = "Additional act container options appended after the reusable runtime mounts.";
     };
 
+    hostNixExtraContainerOptions = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Additional act container options appended after the trusted host-nix runtime mounts.";
+    };
+
     extraValidVolumes = mkOption {
       type = types.listOf types.str;
       default = [];
       description = "Additional volume sources allowed for workflow job containers.";
+    };
+
+    hostNixExtraValidVolumes = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Additional volume sources allowed for trusted host-nix workflow job containers.";
     };
 
     imageRef = mkOption {
@@ -155,10 +254,22 @@ in {
       description = "Fully qualified local image reference for Forgejo runner labels.";
     };
 
+    hostNixImageRef = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Fully qualified local trusted host-nix image reference for Forgejo runner labels.";
+    };
+
     containerOptions = mkOption {
       type = types.str;
       readOnly = true;
       description = "Reusable container options for Forgejo runner job containers.";
+    };
+
+    hostNixContainerOptions = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Reusable container options for trusted host-nix Forgejo runner job containers.";
     };
 
     validVolumes = mkOption {
@@ -166,31 +277,47 @@ in {
       readOnly = true;
       description = "Reusable valid volume sources for Forgejo runner job containers.";
     };
+
+    hostNixValidVolumes = mkOption {
+      type = types.listOf types.str;
+      readOnly = true;
+      description = "Reusable valid volume sources for trusted host-nix Forgejo runner job containers.";
+    };
   };
 
   config = mkIf cfg.enable {
     canix-toolbelt.services.forgejoRunner.containerRuntime = {
       imageRef = "docker://localhost/${cfg.imageName}:${cfg.imageTag}";
+      hostNixImageRef = "docker://localhost/${cfg.hostNixImageName}:${cfg.hostNixImageTag}";
       containerOptions = concatStringsSep " " runtimeOptions;
+      hostNixContainerOptions = concatStringsSep " " hostNixRuntimeOptions;
       validVolumes =
         [
           "/nix/store"
         ]
         ++ actionRuntimeVolumeSources
         ++ cfg.extraValidVolumes;
+      hostNixValidVolumes =
+        [
+          "/nix/store"
+          "/nix/var/nix/daemon-socket/socket"
+        ]
+        ++ actionRuntimeVolumeSources
+        ++ cfg.hostNixExtraValidVolumes;
     };
 
     systemd.services.forgejo-runner-image-load =
       {
         description = "Load canix forgejo-runner OCI image into podman";
         wantedBy = ["multi-user.target"];
-        restartTriggers = [runnerImage];
+        restartTriggers = [runnerImage hostNixRunnerImage];
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
           ExecStart = "${pkgs.writeShellScript "forgejo-runner-image-load" ''
             set -eu
             ${config.virtualisation.podman.package}/bin/podman load -i ${runnerImage}
+            ${config.virtualisation.podman.package}/bin/podman load -i ${hostNixRunnerImage}
           ''}";
         };
       }
