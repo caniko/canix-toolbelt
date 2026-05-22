@@ -16,6 +16,10 @@
   boot-assessment = ./hardware/boot-assessment.nix;
   watchdog = ./hardware/watchdog.nix;
 
+  # Services
+  forgejo-runner = ./services/forgejo-runner.nix;
+  forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
+
   # GPU — backends
   gpu-backend = ./hardware/gpu/backend/common.nix;
   gpu-backend-opengl-only = ./hardware/gpu/backend/opengl-only.nix;

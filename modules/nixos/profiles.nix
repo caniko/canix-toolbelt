@@ -101,12 +101,11 @@ in {
 
     {
       specialisation = genAttrs specNames (specName: {
-        configuration.canix-toolbelt.profiles =
-          mapAttrs' (pName: p:
-            nameValuePair pName {
-              enable = mkForce p.specialisations.${specName}.enable;
-            })
-          (profilesForSpec specName);
+        configuration.canix-toolbelt.profiles = mapAttrs' (pName: p:
+          nameValuePair pName {
+            enable = mkForce p.specialisations.${specName}.enable;
+          })
+        (profilesForSpec specName);
       });
     }
 
@@ -127,7 +126,7 @@ in {
         })
         {
           canix-toolbelt.profiles =
-            mapAttrs (_: p: {enable = p.enable;}) cfg;
+            mapAttrs (_: p: {inherit (p) enable;}) cfg;
         }
       ];
     }
