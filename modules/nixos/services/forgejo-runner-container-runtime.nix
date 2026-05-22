@@ -36,6 +36,10 @@
     name = cfg.imageName;
     tag = cfg.imageTag;
     contents = cfg.imageContents ++ cfg.imageExtraContents;
+    extraCommands = ''
+      mkdir -p usr/bin
+      ln -s /bin/env usr/bin/env
+    '';
     config = {
       Env = [
         "PATH=/bin:/usr/bin"
@@ -122,10 +126,12 @@ in {
       default = [
         "bash"
         "curl"
+        "env"
         "git"
         "gzip"
         "node"
         "tar"
+        "tail"
         "which"
       ];
       description = "Action-runtime executables mounted into job containers under /usr/local/bin.";
