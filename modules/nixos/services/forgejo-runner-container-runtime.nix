@@ -91,11 +91,13 @@
       "-e PATH=${jobContainerPath}"
       "-v /nix/store:/nix/store:ro"
       "-v ${actionRuntime}/etc/ssl/certs:/canix-forgejo-action-certs:ro"
-      "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
-      "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
     ]
     ++ actionRuntimeMounts
-    ++ cfg.extraContainerOptions;
+    ++ cfg.extraContainerOptions
+    ++ [
+      "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+      "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+    ];
 
   hostNixRuntimeOptions =
     [
@@ -106,11 +108,13 @@
       "-v /nix/store:/nix/store:ro"
       "-v /nix/var/nix/daemon-socket/socket:/nix/var/nix/daemon-socket/socket"
       "-v ${actionRuntime}/etc/ssl/certs:/canix-forgejo-action-certs:ro"
-      "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
-      "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
     ]
     ++ actionRuntimeMounts
-    ++ cfg.hostNixExtraContainerOptions;
+    ++ cfg.hostNixExtraContainerOptions
+    ++ [
+      "-e SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+      "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
+    ];
 
   runnerServiceNames =
     map

@@ -36,6 +36,10 @@
       };
 
       perSystem = {pkgs, ...}: {
+        checks = {
+          forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+        };
+
         formatter = pkgs.alejandra;
       };
     };
