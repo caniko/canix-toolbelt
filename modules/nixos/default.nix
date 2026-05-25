@@ -19,6 +19,7 @@
   # Services
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
+  stalwart-seed-accounts = ./services/stalwart-seed-accounts.nix;
 
   # GPU — backends
   gpu-backend = ./hardware/gpu/backend/common.nix;
