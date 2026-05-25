@@ -15,6 +15,7 @@
 }: let
   inherit (lib) mapAttrs' mkEnableOption mkIf mkOption nameValuePair types;
   cfg = config.canix-toolbelt.services.stalwartSeedAccounts;
+  shellLiteral = value: "${lib.escapeShellArg value}''";
 
   accountSubmodule = types.submodule {
     options = {
@@ -55,8 +56,8 @@
     text = ''
       set -euo pipefail
 
-      endpoint=${lib.escapeShellArg cfg.endpoint}
-      admin_user=${lib.escapeShellArg cfg.adminUser}
+      endpoint=${shellLiteral cfg.endpoint}
+      admin_user=${shellLiteral cfg.adminUser}
       admin_pw=$(cat ${lib.escapeShellArg cfg.adminPasswordFile})
       auth=$(printf '%s:%s' "$admin_user" "$admin_pw" | base64 -w0)
 
