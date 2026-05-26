@@ -12,9 +12,18 @@
   fwupd = ./hardware/fwupd.nix;
   pipewire = ./hardware/pipewire.nix;
   btrfs-autoscrub = ./hardware/btrfs.nix;
+  disko-bcache-initrd = ./hardware/disko-bcache-initrd.nix;
 
+  amd-sensors-boot = ./hardware/amd-sensors-boot.nix;
   boot-assessment = ./hardware/boot-assessment.nix;
+  fan-control-thinkfan = ./hardware/fan-control-thinkfan.nix;
+  goxlr = ./hardware/goxlr.nix;
+  openrgb = ./hardware/openrgb.nix;
+  razer = ./hardware/razer.nix;
+  usb-tty = ./hardware/usb-tty.nix;
+  vial = ./hardware/vial.nix;
   watchdog = ./hardware/watchdog.nix;
+  wooting = ./hardware/wooting.nix;
 
   # Services
   caddy-base = ./services/caddy-base.nix;
