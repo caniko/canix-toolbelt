@@ -4,22 +4,19 @@
   options,
   ...
 }: let
-  cfg = config.canix-toolbelt.networking.networkmanager;
   nm = import ../../../lib/networkmanager.nix;
+  hostname = config.networking.hostName;
+  hostData = config.canix-toolbelt.hosts.${hostname} or {};
+  wakeOnLanInterface = hostData.wakeOnLanInterface or null;
   hasFacterDhcpInterfaces =
     options ? facter
     && options.facter ? detected
     && options.facter.detected ? dhcp
     && options.facter.detected.dhcp ? interfaces;
 in {
-  options.canix-toolbelt.networking.networkmanager.wakeOnLanInterface = lib.mkOption {
-    type = lib.types.nullOr lib.types.str;
-    default = null;
-    description = ''
-      Interface name that should receive a NetworkManager profile enabling
-      Wake-on-LAN magic packets.
-    '';
-  };
+  imports = [
+    ../registry/hosts.nix
+  ];
 
   config = lib.mkIf config.networking.networkmanager.enable (lib.mkMerge [
     {
@@ -29,9 +26,9 @@ in {
     (lib.mkIf hasFacterDhcpInterfaces {
       facter.detected.dhcp.interfaces = [];
     })
-    (lib.mkIf (cfg.wakeOnLanInterface != null) {
-      networking.networkmanager.ensureProfiles.profiles.${cfg.wakeOnLanInterface} =
-        nm.mkAutoWakeOnLanProfile cfg.wakeOnLanInterface;
+    (lib.mkIf (wakeOnLanInterface != null) {
+      networking.networkmanager.ensureProfiles.profiles.${wakeOnLanInterface} =
+        nm.mkAutoWakeOnLanProfile wakeOnLanInterface;
     })
   ]);
 }
