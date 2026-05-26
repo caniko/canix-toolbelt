@@ -17,6 +17,7 @@
   watchdog = ./hardware/watchdog.nix;
 
   # Services
+  caddy-base = ./services/caddy-base.nix;
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
