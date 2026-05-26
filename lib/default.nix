@@ -1,5 +1,6 @@
 {
   agenixPaths = import ./agenixPaths.nix;
+  caddy = import ./caddy.nix;
   dns = import ./dns.nix;
   gpu = import ./gpu.nix;
   mkPkgs = import ./mkPkgs.nix;
