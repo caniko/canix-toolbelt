@@ -18,6 +18,7 @@
 
   # Services
   caddy-base = ./services/caddy-base.nix;
+  caddy-service-registry = ./services/caddy-service-registry.nix;
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;

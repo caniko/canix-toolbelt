@@ -11,7 +11,11 @@
     };
   };
 
-  outputs = inputs @ {flake-parts, ...}:
+  outputs = inputs @ {
+    flake-parts,
+    nixpkgs,
+    ...
+  }:
     flake-parts.lib.mkFlake {inherit inputs;} {
       systems = ["x86_64-linux" "aarch64-linux"];
 
@@ -20,7 +24,7 @@
       ];
 
       flake = {
-        lib = import ./lib;
+        lib = import ./lib {inherit (nixpkgs) lib;};
         nixosModules = import ./modules/nixos;
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
