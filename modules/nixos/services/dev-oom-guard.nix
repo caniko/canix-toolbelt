@@ -535,7 +535,7 @@ in {
       description = "Per-user OOM kill-priority biaser for AI-agent descendants";
       wantedBy = ["default.target"];
       serviceConfig = {
-        ExecStart = "${devOomGuardScript}/bin/dev-oom-guard /etc/dev-oom-guard/config.json";
+        ExecStart = "${devOomGuardScript} /etc/dev-oom-guard/config.json";
         Restart = "on-failure";
         RestartSec = "10s";
         OOMScoreAdjust = -1000;
