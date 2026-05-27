@@ -5,6 +5,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     treefmt-nix.url = "github:numtide/treefmt-nix";
+    # TODO: swap to upstream github:Janik-Haag/NixOS-DNS after Phase 07 PR #2 merges.
+    nixos-dns = {
+      url = "git+https://codeberg.org/caniko/NixOS-DNS?ref=feat/cloudflare-backend";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
