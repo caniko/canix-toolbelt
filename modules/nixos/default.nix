@@ -26,12 +26,20 @@
   wooting = ./hardware/wooting.nix;
 
   # Services
+  attic-projects-registry = ./services/attic-projects-registry.nix;
+  atticd-preset = ./services/atticd-preset.nix;
   caddy-base = ./services/caddy-base.nix;
   caddy-service-registry = ./services/caddy-service-registry.nix;
+  foundry-vtt = ./services/foundry-vtt.nix;
   host-registry = ./registry/hosts.nix;
   impure-files = ./registry/impure-files.nix;
+  initrd-ssh = ./services/initrd-ssh.nix;
+  power-cycle-relay = ./services/power-cycle-relay.nix;
+  pypi-server = ./services/pypi-server.nix;
   rbac = ./registry/rbac.nix;
+  samba = ./services/samba.nix;
   service-registry = ./registry/services.nix;
+  wol-relay = ./services/wol-relay.nix;
 
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
