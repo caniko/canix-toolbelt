@@ -28,6 +28,11 @@
   # Services
   caddy-base = ./services/caddy-base.nix;
   caddy-service-registry = ./services/caddy-service-registry.nix;
+  host-registry = ./registry/hosts.nix;
+  impure-files = ./registry/impure-files.nix;
+  rbac = ./registry/rbac.nix;
+  service-registry = ./registry/services.nix;
+
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   direct-link = ./networking/direct-link.nix;
