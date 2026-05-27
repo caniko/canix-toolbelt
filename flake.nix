@@ -7,7 +7,7 @@
     treefmt-nix.url = "github:numtide/treefmt-nix";
     # TODO: swap to upstream github:Janik-Haag/NixOS-DNS after Phase 07 PR #2 merges.
     nixos-dns = {
-      url = "git+https://codeberg.org/caniko/NixOS-DNS?ref=feat/cloudflare-backend";
+      url = "git+https://codeberg.org/caniko/NixOS-DNS?ref=feat/agenix-rekey";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     git-hooks = {

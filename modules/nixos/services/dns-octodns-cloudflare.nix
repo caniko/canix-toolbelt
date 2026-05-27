@@ -17,7 +17,6 @@
     filterAttrs
     foldl'
     hasSuffix
-    hashString
     literalExpression
     mapAttrs
     mkEnableOption
@@ -363,11 +362,15 @@
       inherit (record) comment;
     };
 
-  secretPlaceholderForRecord = record: "__CANIX_DNS_SECRET_${hashString "sha256" "${normalizeName record.name}|${normalizeType record.type}|${toString record.dataFile}|${toString record.dataAgenixFile}"}__";
+  agenixRecordFor = record: {
+    inherit (record) name type;
+    secretPath = record.dataFile;
+    agenixFile = record.dataAgenixFile;
+  };
 
   valueForRecord = record:
     if record.dataFile != null || record.dataAgenixFile != null
-    then secretPlaceholderForRecord record
+    then inputs.nixos-dns.utils.cloudflare.secretPlaceholderForRecord (agenixRecordFor record)
     else record.data;
 
   dataForRecord = record: let
@@ -487,108 +490,7 @@
 
   secretRecordFiles = filter (record: record.dataFile != null || record.dataAgenixFile != null) allEffectiveRecords;
 
-  secretReplacements =
-    builtins.map (record: {
-      placeholder = secretPlaceholderForRecord record;
-      path =
-        if record.dataFile == null
-        then null
-        else toString record.dataFile;
-      agenixFile =
-        if record.dataAgenixFile == null
-        then null
-        else toString record.dataAgenixFile;
-    })
-    secretRecordFiles;
-
-  secretReplacementsJson = pkgs.writeText "cloudflare-octodns-secret-records.json" (builtins.toJSON secretReplacements);
-
-  substituteDnsSecrets = pkgs.writeText "cloudflare-octodns-substitute-secrets.py" ''
-    import json
-    import os
-    import pathlib
-    import subprocess
-    import sys
-
-    config_dir = pathlib.Path(sys.argv[1])
-    source_zones_dir = pathlib.Path(sys.argv[2])
-    runtime_zones_dir = pathlib.Path(sys.argv[3])
-    requested_zone_files = {
-        f"{zone[:-1] if zone.endswith('.') else zone}.yaml"
-        for zone in sys.argv[4:]
-        if zone and not zone.startswith("-")
-    }
-    source_zone_paths = {
-        str(source_zones_dir),
-        str(source_zones_dir.resolve()),
-    }
-    replacements = json.loads(pathlib.Path("${secretReplacementsJson}").read_text())
-    secret_dir = os.environ.get("CANIX_DNS_SECRET_DIR")
-    age_identities = [
-        identity
-        for identity in os.environ.get("CANIX_DNS_AGE_IDENTITIES", "").split(":")
-        if identity
-    ]
-
-    def read_secret(replacement):
-        runtime_path = replacement.get("path")
-        if runtime_path is not None:
-            path = pathlib.Path(runtime_path)
-            if path.exists():
-                return path.read_text().strip()
-            if secret_dir is not None:
-                path = pathlib.Path(secret_dir) / pathlib.Path(runtime_path).name
-                if path.exists():
-                    return path.read_text().strip()
-
-        agenix_file = replacement.get("agenixFile")
-        if agenix_file is not None:
-            path = pathlib.Path(agenix_file)
-            if not path.exists():
-                print(f"missing DNS agenix source file: {path}", file=sys.stderr)
-                sys.exit(1)
-            readable_identities = [
-                identity
-                for identity in age_identities
-                if pathlib.Path(identity).is_file() and os.access(identity, os.R_OK)
-            ]
-            if readable_identities:
-                cmd = ["${pkgs.rage}/bin/rage", "--decrypt"]
-                for identity in readable_identities:
-                    cmd.extend(["--identity", identity])
-                cmd.append(str(path))
-                result = subprocess.run(cmd, check=False, text=True, capture_output=True)
-                if result.returncode == 0:
-                    return result.stdout.strip()
-                print(result.stderr, file=sys.stderr, end="")
-                print(f"failed to decrypt DNS agenix source file: {path}", file=sys.stderr)
-                sys.exit(result.returncode)
-
-        missing = runtime_path or agenix_file
-        print(f"missing DNS secret file: {missing}", file=sys.stderr)
-        if agenix_file is not None and not age_identities:
-            print("set CANIX_DNS_AGE_IDENTITIES to colon-separated age/ssh identity paths to decrypt the agenix source locally", file=sys.stderr)
-        sys.exit(1)
-
-    for path in config_dir.rglob("*.yaml"):
-        text = path.read_text()
-        for source_zone_path in source_zone_paths:
-            text = text.replace(source_zone_path, str(runtime_zones_dir))
-        should_substitute_secrets = (
-            not requested_zone_files
-            or path.parent.name != "zones"
-            or path.name in requested_zone_files
-        )
-        if not should_substitute_secrets:
-            path.write_text(text)
-            continue
-        for replacement in replacements:
-            if replacement["placeholder"] not in text:
-                continue
-            value = json.dumps(read_secret(replacement))[1:-1]
-            text = text.replace(replacement["placeholder"], value)
-        path.write_text(text)
-  '';
+  agenixSecretRecords = builtins.map agenixRecordFor secretRecordFiles;
 
   proxiedRecordErrors =
     builtins.map
@@ -617,82 +519,27 @@
     then dnsConfig
     else throw (concatStringsSep "\n" validationErrors);
 
-  rawOctodnsConfig = dnsGenerate.cloudflareConfig {
+  substitutionScript = inputs.nixos-dns.utils.cloudflare.mkSubstitutionScript pkgs {
+    records = agenixSecretRecords;
+    extraEnvIdentities = config.services.canixDns.agenix.identityPaths;
+  };
+
+  octodnsSync = inputs.nixos-dns.utils.cloudflare.mkSyncWrapper pkgs {
+    inherit substitutionScript;
+    inherit (cfg) cloudflareToken;
+    extraEnvIdentities = config.services.canixDns.agenix.identityPaths;
+  };
+
+  octodnsConfig = dnsGenerate.cloudflareConfig {
     dnsConfig = validatedDnsConfig;
     inherit token;
     zones = cloudflareZones;
+    agenix = {
+      inherit (cfg) cloudflareToken;
+      records = agenixSecretRecords;
+      inherit (config.services.canixDns.agenix) identityPaths;
+    };
   };
-
-  defaultAgeIdentities = concatStringsSep ":" (builtins.map toString ((config.age.identityPaths or []) ++ ["$HOME/.ssh/id_ssh_ed25519"]));
-
-  octodnsPkg = pkgs.octodns.withProviders (_: [pkgs.octodns-providers.cloudflare]);
-  octodnsSync = pkgs.writeShellScript "cloudflare-octodns-sync" ''
-    set -eu
-    if [ "$#" -lt 1 ]; then
-      echo "usage: cloudflare-octodns-sync <config-dir> [octodns-sync args...]" >&2
-      exit 2
-    fi
-    source_config="$1"
-    shift
-
-    workdir="$(${pkgs.coreutils}/bin/mktemp -d)"
-    trap '${pkgs.coreutils}/bin/rm -rf "$workdir"' EXIT
-    ${pkgs.coreutils}/bin/cp -RL "$source_config"/. "$workdir/config"
-    ${pkgs.coreutils}/bin/chmod -R u+w "$workdir/config"
-    export CANIX_DNS_AGE_IDENTITIES="''${CANIX_DNS_AGE_IDENTITIES:-${defaultAgeIdentities}}"
-    ${pkgs.python3}/bin/python ${substituteDnsSecrets} "$workdir/config" "$source_config/zones" "$workdir/config/zones" "$@"
-
-    decrypt_agenix_file() {
-      encrypted_file="$1"
-      if [ -z "$CANIX_DNS_AGE_IDENTITIES" ]; then
-        return 1
-      fi
-      old_ifs="$IFS"
-      IFS=:
-      for identity in $CANIX_DNS_AGE_IDENTITIES; do
-        IFS="$old_ifs"
-        if [ -r "$identity" ] && ${pkgs.rage}/bin/rage --decrypt --identity "$identity" "$encrypted_file"; then
-          return 0
-        fi
-        IFS=:
-      done
-      IFS="$old_ifs"
-      return 1
-    }
-
-    if [ -z "''${CLOUDFLARE_API_TOKEN:-}" ]; then
-      if [ -n "''${CLOUDFLARE_API_TOKEN_FILE:-}" ] && [ -r "$CLOUDFLARE_API_TOKEN_FILE" ]; then
-        export CLOUDFLARE_API_TOKEN="$(${pkgs.coreutils}/bin/cat "$CLOUDFLARE_API_TOKEN_FILE")"
-      ${lib.optionalString (cfg.cloudflareToken.secretPath != null) ''
-      elif [ -r ${lib.escapeShellArg (toString cfg.cloudflareToken.secretPath)} ]; then
-        export CLOUDFLARE_API_TOKEN="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg (toString cfg.cloudflareToken.secretPath)})"
-    ''}
-      ${lib.optionalString (cfg.cloudflareToken.agenixFile != null) ''
-      elif [ -r ${lib.escapeShellArg (toString cfg.cloudflareToken.agenixFile)} ]; then
-        cloudflare_token="$(decrypt_agenix_file ${lib.escapeShellArg (toString cfg.cloudflareToken.agenixFile)})" || {
-          echo "failed to decrypt Cloudflare token agenix source: ${toString cfg.cloudflareToken.agenixFile}" >&2
-          echo "set CANIX_DNS_AGE_IDENTITIES to colon-separated age/ssh identity paths to decrypt agenix sources locally" >&2
-          exit 1
-        }
-        export CLOUDFLARE_API_TOKEN="$cloudflare_token"
-    ''}
-      else
-        echo "CLOUDFLARE_API_TOKEN is unset and no readable Cloudflare token file is available" >&2
-        echo "set CANIX_DNS_AGE_IDENTITIES to colon-separated age/ssh identity paths to decrypt agenix sources locally" >&2
-        exit 1
-      fi
-    fi
-
-    exec ${octodnsPkg}/bin/octodns-sync --config-file "$workdir/config/config.yaml" "$@"
-  '';
-
-  octodnsConfig = pkgs.runCommand "cloudflare-octodns" {} ''
-    ${pkgs.coreutils}/bin/mkdir -p "$out"
-    ${pkgs.coreutils}/bin/cp -R --no-preserve=mode ${rawOctodnsConfig}/. "$out"
-    ${pkgs.coreutils}/bin/chmod -R u+w "$out"
-    ${pkgs.coreutils}/bin/rm -f "$out/octodns-sync-cloudflare"
-    ${pkgs.coreutils}/bin/install -m 0755 ${octodnsSync} "$out/octodns-sync-cloudflare"
-  '';
 
   reconcilerEnabled = cfg.enable && cfg.cloudflareToken.secretPath != null;
 
@@ -712,6 +559,10 @@
     };
   };
 in {
+  imports = [
+    inputs.nixos-dns.nixosModules.dns-secrets
+  ];
+
   options.canix-toolbelt.dns = {
     enable = mkEnableOption "declarative DNS zones via NixOS-DNS";
 
@@ -779,6 +630,12 @@ in {
     canix-toolbelt.dns = {
       dnsConfig = validatedDnsConfig;
       inherit octodnsConfig;
+    };
+
+    services.canixDns.agenix = lib.mkIf cfg.enable {
+      enable = cfg.cloudflareToken.secretPath != null || cfg.cloudflareToken.agenixFile != null || secretRecordFiles != [];
+      inherit (cfg) cloudflareToken;
+      records = agenixSecretRecords;
     };
 
     users.groups = lib.mkIf reconcilerEnabled {
