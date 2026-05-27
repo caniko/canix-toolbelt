@@ -45,9 +45,11 @@
       };
 
       perSystem = {pkgs, ...}: {
-        checks = {
-          forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
-        };
+        checks =
+          {
+            forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+          }
+          // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
         formatter = pkgs.alejandra;
       };

@@ -473,7 +473,7 @@
     else {
       type = "file";
       path = toString cfg.cloudflareToken.secretPath;
-      envName = cfg.cloudflareToken.envName;
+      inherit (cfg.cloudflareToken) envName;
     };
 
   cloudflareZones =
