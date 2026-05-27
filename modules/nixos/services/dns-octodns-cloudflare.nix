@@ -6,6 +6,8 @@
   ...
 }: let
   cfg = config.canix-toolbelt.dns;
+  nixosDns = inputs.nixos-dns;
+  cloudflareUtils = nixosDns.utils.cloudflare;
 
   inherit
     (lib)
@@ -26,31 +28,10 @@
     types
     ;
 
-  dnsGenerate = inputs.nixos-dns.utils.generate pkgs;
+  dnsGenerate = nixosDns.utils.generate pkgs;
 
-  recordTypes = [
-    "A"
-    "AAAA"
-    "ALIAS"
-    "CAA"
-    "CNAME"
-    "DNAME"
-    "MX"
-    "NS"
-    "SOA"
-    "SRV"
-    "SSHFP"
-    "TLSA"
-    "TXT"
-    "URI"
-  ];
-
-  proxiableRecordTypes = [
-    "A"
-    "AAAA"
-    "ALIAS"
-    "CNAME"
-  ];
+  recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
+  proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
 
   normalizeName = name:
     if name == "@"
@@ -64,6 +45,17 @@
     if value == null
     then fallback
     else value;
+  valueWhen = condition: value:
+    if condition
+    then value
+    else null;
+
+  mkNullOption = type: description:
+    mkOption {
+      type = types.nullOr type;
+      default = null;
+      inherit description;
+    };
 
   recordSubmodule = types.submodule {
     options = {
@@ -118,107 +110,23 @@
         description = "Cloudflare proxied flag. Valid only for A, AAAA, ALIAS, and CNAME records.";
       };
 
-      comment = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional provider or generated-zone comment.";
-      };
-
-      preference = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "MX record preference.";
-      };
-
-      exchange = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "MX record exchange host. Defaults to data when omitted.";
-      };
-
-      priority = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "SRV or URI record priority.";
-      };
-
-      weight = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "SRV or URI record weight.";
-      };
-
-      port = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "SRV record port.";
-      };
-
-      target = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "SRV or URI target. Defaults to data when omitted.";
-      };
-
-      flags = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "CAA record flags.";
-      };
-
-      tag = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "CAA record tag.";
-      };
-
-      value = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "CAA record value. Defaults to data when omitted.";
-      };
-
-      usage = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "TLSA certificate usage.";
-      };
-
-      selector = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "TLSA selector.";
-      };
-
-      matchingType = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "TLSA matching type.";
-      };
-
-      certificateAssociationData = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "TLSA certificate association data.";
-      };
-
-      algorithm = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "SSHFP algorithm.";
-      };
-
-      fingerprintType = mkOption {
-        type = types.nullOr types.int;
-        default = null;
-        description = "SSHFP fingerprint type.";
-      };
-
-      fingerprint = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "SSHFP fingerprint.";
-      };
+      comment = mkNullOption types.str "Optional provider or generated-zone comment.";
+      preference = mkNullOption types.int "MX record preference.";
+      exchange = mkNullOption types.str "MX record exchange host. Defaults to data when omitted.";
+      priority = mkNullOption types.int "SRV or URI record priority.";
+      weight = mkNullOption types.int "SRV or URI record weight.";
+      port = mkNullOption types.int "SRV record port.";
+      target = mkNullOption types.str "SRV or URI target. Defaults to data when omitted.";
+      flags = mkNullOption types.int "CAA record flags.";
+      tag = mkNullOption types.str "CAA record tag.";
+      value = mkNullOption types.str "CAA record value. Defaults to data when omitted.";
+      usage = mkNullOption types.int "TLSA certificate usage.";
+      selector = mkNullOption types.int "TLSA selector.";
+      matchingType = mkNullOption types.int "TLSA matching type.";
+      certificateAssociationData = mkNullOption types.str "TLSA certificate association data.";
+      algorithm = mkNullOption types.int "SSHFP algorithm.";
+      fingerprintType = mkNullOption types.int "SSHFP fingerprint type.";
+      fingerprint = mkNullOption types.str "SSHFP fingerprint.";
     };
   };
 
@@ -345,20 +253,9 @@
 
   metadataForRecord = zone: record:
     dropNulls {
-      ttl =
-        if record.ttlAuto
-        then null
-        else if record.ttl != null
-        then record.ttl
-        else zone.defaultTtl;
-      ttlAuto =
-        if record.ttlAuto
-        then true
-        else null;
-      proxied =
-        if elem (normalizeType record.type) proxiableRecordTypes
-        then record.proxied
-        else null;
+      ttl = valueWhen (!record.ttlAuto) (valueOr zone.defaultTtl record.ttl);
+      ttlAuto = valueWhen record.ttlAuto true;
+      proxied = valueWhen (elem (normalizeType record.type) proxiableRecordTypes) record.proxied;
       inherit (record) comment;
     };
 
@@ -370,54 +267,44 @@
 
   valueForRecord = record:
     if record.dataFile != null || record.dataAgenixFile != null
-    then inputs.nixos-dns.utils.cloudflare.secretPlaceholderForRecord (agenixRecordFor record)
+    then cloudflareUtils.secretPlaceholderForRecord (agenixRecordFor record)
     else record.data;
 
   dataForRecord = record: let
     type = normalizeType record.type;
     data = valueForRecord record;
+    structured = {
+      MX = {
+        inherit (record) preference;
+        exchange = valueOr data record.exchange;
+      };
+      SRV = {
+        inherit (record) priority weight port;
+        target = valueOr data record.target;
+      };
+      URI = {
+        inherit (record) priority weight;
+        target = valueOr data record.target;
+      };
+      CAA = {
+        inherit (record) flags tag;
+        value = valueOr data record.value;
+      };
+      TLSA = {
+        inherit (record) usage selector matchingType;
+        certificateAssociationData = valueOr data record.certificateAssociationData;
+      };
+      SSHFP = {
+        inherit (record) algorithm;
+        type = record.fingerprintType;
+        fingerprint = valueOr data record.fingerprint;
+      };
+    };
   in
-    if type == "MX"
-    then {
-      inherit (record) preference;
-      exchange = valueOr data record.exchange;
-    }
-    else if type == "SRV"
-    then {
-      inherit (record) priority;
-      inherit (record) weight;
-      inherit (record) port;
-      target = valueOr data record.target;
-    }
-    else if type == "URI"
-    then {
-      inherit (record) priority;
-      inherit (record) weight;
-      target = valueOr data record.target;
-    }
-    else if type == "CAA"
-    then {
-      inherit (record) flags;
-      inherit (record) tag;
-      value = valueOr data record.value;
-    }
-    else if type == "TLSA" && builtins.isAttrs data
+    if (type == "TLSA" || type == "SSHFP") && builtins.isAttrs data
     then data
-    else if type == "TLSA"
-    then {
-      inherit (record) usage;
-      inherit (record) selector;
-      inherit (record) matchingType;
-      certificateAssociationData = valueOr data record.certificateAssociationData;
-    }
-    else if type == "SSHFP" && builtins.isAttrs data
-    then data
-    else if type == "SSHFP"
-    then {
-      inherit (record) algorithm;
-      type = record.fingerprintType;
-      fingerprint = valueOr data record.fingerprint;
-    }
+    else if builtins.hasAttr type structured
+    then structured.${type}
     else data;
 
   normalizeRecord = zone: record:
@@ -519,13 +406,11 @@
     then dnsConfig
     else throw (concatStringsSep "\n" validationErrors);
 
-  substitutionScript = inputs.nixos-dns.utils.cloudflare.mkSubstitutionScript pkgs {
-    records = agenixSecretRecords;
-    extraEnvIdentities = config.services.canixDns.agenix.identityPaths;
-  };
-
-  octodnsSync = inputs.nixos-dns.utils.cloudflare.mkSyncWrapper pkgs {
-    inherit substitutionScript;
+  octodnsSync = cloudflareUtils.mkSyncWrapper pkgs {
+    substitutionScript = cloudflareUtils.mkSubstitutionScript pkgs {
+      records = agenixSecretRecords;
+      extraEnvIdentities = config.services.canixDns.agenix.identityPaths;
+    };
     inherit (cfg) cloudflareToken;
     extraEnvIdentities = config.services.canixDns.agenix.identityPaths;
   };
@@ -560,7 +445,7 @@
   };
 in {
   imports = [
-    inputs.nixos-dns.nixosModules.dns-secrets
+    nixosDns.nixosModules.dns-secrets
   ];
 
   options.canix-toolbelt.dns = {
