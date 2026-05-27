@@ -7,14 +7,14 @@
     hostToggles = {
       foo = {
         description = "Foo profile";
-        default = true;
+        enable = true;
         deviceTypes = ["laptop"];
         specialisations.foo-off.enable = false;
       };
 
       bar = {
         description = "Bar profile";
-        default = false;
+        enable = false;
         specialisations.bar-on.enable = true;
       };
     };
@@ -30,7 +30,7 @@
           deviceType = "server";
           hostToggles.bad = {
             description = "Bad profile";
-            default = true;
+            enable = true;
             deviceTypes = [ "laptop" ];
             specialisations.bad-off.enable = false;
           };
@@ -46,7 +46,7 @@
         deviceType = "server";
         hostToggles.bad = {
           description = "Bad profile";
-          default = true;
+          enable = true;
           deviceTypes = ["laptop"];
           specialisations.bad-off.enable = false;
         };

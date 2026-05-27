@@ -13,9 +13,9 @@
         description = "Human-readable description of the toggle.";
       };
 
-      default = mkOption {
+      enable = mkOption {
         type = types.bool;
-        description = "Default value for the generated profile.";
+        description = "Parent-generation value for the resulting profile. Specialisations override via their own `enable`.";
       };
 
       deviceTypes = mkOption {
@@ -63,7 +63,8 @@
   }: {
     canix-toolbelt.profiles = lib.mapAttrs (profileName: toggle:
       assert assertToggle {inherit hostName profileName toggle deviceType;}; {
-        inherit (toggle) description default;
+        inherit (toggle) description;
+        default = toggle.enable;
         specialisations = toggle.specialisations or {};
       })
     hostToggles;
