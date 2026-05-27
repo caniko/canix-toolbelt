@@ -1,5 +1,6 @@
 {lib, ...}: let
   inherit (lib) mkOption types;
+  deviceTypes = import ../../../lib/deviceTypes.nix;
 
   hostUserSubmodule = types.submodule {
     freeformType = types.attrsOf types.anything;
@@ -105,10 +106,9 @@
       };
 
       deviceType = mkOption {
-        type = types.nullOr types.str;
-        default = null;
+        type = types.enum deviceTypes;
         example = "server";
-        description = "Device type for nix-topology (server, laptop, desktop, etc.).";
+        description = "Device class. Drives per-host modules and gating in nexus.toggleSubmodule.deviceTypes.";
       };
 
       dataRoot = mkOption {

@@ -1,6 +1,7 @@
 {lib}: {
   agenixPaths = import ./agenixPaths.nix;
   caddy = import ./caddy.nix {inherit lib;};
+  deviceTypes = import ./deviceTypes.nix;
   dns = import ./dns.nix;
   facterDisks = import ./facterDisks.nix;
   gpu = import ./gpu.nix;

@@ -5,6 +5,7 @@
 # that host. Host-agnostic: no host names, no consumer paths.
 {lib}: let
   inherit (lib) mkOption types;
+  deviceTypes = import ./deviceTypes.nix;
 
   toggleSubmodule = _: {
     options = {
@@ -19,7 +20,7 @@
       };
 
       deviceTypes = mkOption {
-        type = types.listOf types.str;
+        type = types.listOf (types.enum deviceTypes);
         default = [];
         description = "Allowed device types for this toggle. Empty means any.";
       };
