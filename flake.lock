@@ -218,13 +218,13 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1779861929,
+        "lastModified": 1779866259,
         "narHash": "sha256-PTpABSnWDrTznzIOViHHBMmDj5xHPKZv5Jn9fqAdkvQ=",
         "ref": "feat/agenix-rekey",
-        "rev": "f9ecf201e38376948fec66cd80fe1bf22a51edaf",
-        "revCount": 39,
+        "rev": "039a55b00d7a7f2aedd61570263623429a1904e2",
+        "revCount": 38,
         "type": "git",
-        "url": "file:///data/nvme0/can/Projects/nixos-dns"
+        "url": "https://codeberg.org/caniko/NixOS-DNS"
       },
       "original": {
         "ref": "feat/agenix-rekey",
