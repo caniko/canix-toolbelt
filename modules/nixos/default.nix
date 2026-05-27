@@ -30,6 +30,7 @@
   atticd-preset = ./services/atticd-preset.nix;
   caddy-base = ./services/caddy-base.nix;
   caddy-service-registry = ./services/caddy-service-registry.nix;
+  dev-oom-guard = ./services/dev-oom-guard.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
   foundry-vtt = ./services/foundry-vtt.nix;
   host-registry = ./registry/hosts.nix;
