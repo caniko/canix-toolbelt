@@ -3,7 +3,7 @@
   # List-returning helpers are meant to be spliced with `++`; single-record
   # helpers are meant to be inserted inline in a records list.
 
-  # Generate proxied/non-proxied apex CNAMEs for a list of subdomain names.
+  # Generate proxied/non-proxied CNAMEs to the zone apex for a list of subdomain names.
   # Used to compress the "name -> zone-apex" boilerplate in zone records.
   apexCname = {
     zone,
@@ -92,7 +92,10 @@
     pagesHost,
   }: {
     inherit name;
-    type = "CNAME";
+    type =
+      if name == "@"
+      then "ALIAS"
+      else "CNAME";
     data = pagesHost;
     proxied = true;
     ttlAuto = true;

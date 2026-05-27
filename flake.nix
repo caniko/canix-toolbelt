@@ -48,6 +48,7 @@
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+            dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 

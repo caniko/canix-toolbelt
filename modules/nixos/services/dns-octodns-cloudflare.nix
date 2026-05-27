@@ -373,7 +373,13 @@
     })
     effectiveZones;
 
-  allEffectiveRecords = concatMap (zoneName: effectiveRecordsForZone zoneName cfg.zones.${zoneName}) (attrNames effectiveZones);
+  allEffectiveRecords =
+    concatMap
+    (zoneName:
+      builtins.map
+      (record: record // {_zoneName = zoneName;})
+      (effectiveRecordsForZone zoneName cfg.zones.${zoneName}))
+    (attrNames effectiveZones);
 
   secretRecordFiles = filter (record: record.dataFile != null || record.dataAgenixFile != null) allEffectiveRecords;
 
@@ -399,7 +405,12 @@
     (record: "DNS record comments must be at most 100 characters (${record.name} ${record.type})")
     (filter (record: record.comment != null && builtins.stringLength record.comment > 100) allEffectiveRecords);
 
-  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors;
+  apexCnameErrors =
+    builtins.map
+    (record: "Apex (@) CNAME is invalid per RFC 1034 §3.6.2 (${record._zoneName}: ${record.name} ${record.type}). Use type = \"ALIAS\" for Cloudflare CNAME-flattening at the zone apex.")
+    (filter (record: normalizeName record.name == "" && normalizeType record.type == "CNAME") allEffectiveRecords);
+
+  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors;
 
   validatedDnsConfig =
     if validationErrors == []
