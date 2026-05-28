@@ -12,6 +12,9 @@ Two output families:
   watchdog).
 - **`flakeModules.*`** — `flake-parts` modules for `treefmt-nix`, git-hooks,
   and a generic ripgrep-based structure/boundary check.
+- **`lib.mk*Site` helpers** — reusable website plumbing for tools that publish
+  Zola sites, mdBook docs, combined static trees, and Codeberg Pages deploy
+  apps without carrying per-project copies.
 
 ## Usage
 
@@ -79,6 +82,86 @@ Two output families:
         };
       };
     };
+}
+```
+
+### Site helpers
+
+The site helpers target the Codeberg Pages workflow used by caniko tools, but
+the build outputs are plain static directories and can be reused by any static
+host. The deploy helper reads the git remote name from an environment variable
+(`DEPLOY_REMOTE` by default), so CI owns token injection and remote URLs.
+
+`lib.mkZolaSite` builds a Zola source tree. `dataFiles` copies generated or
+external files into the site tree before `zola build`; `theme = { name, src; }`
+injects an AdiDoks-style theme under `themes/<name>`.
+
+```nix
+packages.${system}.website = canix-toolbelt.lib.mkZolaSite {
+  inherit pkgs;
+  src = ./website;
+  dataFiles."data/capability-matrix.toml" = ./docs/capability-matrix.toml;
+  theme = {
+    name = "adidoks";
+    src = inputs.adidoks;
+  };
+};
+```
+
+`lib.mkMdBookDocs` builds an mdBook source tree as-is. Keep themes and book
+settings in `book.toml`; the helper does not impose an mdBook theme.
+
+```nix
+packages.${system}.docs = canix-toolbelt.lib.mkMdBookDocs {
+  inherit pkgs;
+  src = ./docs;
+};
+```
+
+`lib.mkCombinedSite` copies a website to the root and docs under `/docs/`.
+Pass `domains = null` to omit `.domains`, or a non-empty list to emit it for
+Codeberg Pages. Codeberg treats the first line as canonical, so order matters.
+
+```nix
+packages.${system}.site = canix-toolbelt.lib.mkCombinedSite {
+  inherit pkgs;
+  website = config.packages.website;
+  docs = config.packages.docs;
+  domains = ["example.org" "www.example.org"];
+};
+```
+
+`lib.mkDeployPagesApp` returns a `writeShellApplication` app that force-updates
+the Pages branch from a built static site package. It never embeds a token or
+remote URL; CI should create a git remote and set `DEPLOY_REMOTE` to that remote
+name before running it.
+
+```nix
+apps.${system}.deploy-pages = {
+  type = "app";
+  program = "${
+    canix-toolbelt.lib.mkDeployPagesApp {
+      inherit pkgs;
+      sitePackage = config.packages.site;
+    }
+  }/bin/deploy-pages";
+};
+```
+
+Consumers using `flake-parts` can import `flakeModules.pages-deploy`, a thin
+wrapper over `mkDeployPagesApp` that registers `apps.deploy-pages`.
+
+```nix
+{
+  imports = [inputs.canix-toolbelt.flakeModules.pages-deploy];
+
+  perSystem = {config, ...}: {
+    canix-toolbelt.pages-deploy = {
+      enable = true;
+      sitePackage = config.packages.site;
+      branch = "pages";
+    };
+  };
 }
 ```
 

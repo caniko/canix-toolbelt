@@ -38,6 +38,7 @@
           formatters = ./flake-modules/formatters.nix;
           git-hooks = ./flake-modules/git-hooks.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
+          pages-deploy = ./flake-modules/pages-deploy.nix;
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
           topology = ./flake-modules/topology.nix;
@@ -49,6 +50,7 @@
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
+            site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
