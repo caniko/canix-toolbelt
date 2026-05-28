@@ -231,6 +231,38 @@
             )
 
 
+    def verify_editor_oom_policy():
+        bad = []
+        for unit in list_running_editor_scopes():
+            result = subprocess.run(
+                [
+                    SYSTEMCTL,
+                    "--user",
+                    "show",
+                    "--property=OOMPolicy",
+                    "--value",
+                    unit,
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"cannot read OOMPolicy for {unit}: {result.stderr.strip()}"
+                )
+            value = result.stdout.strip()
+            if value != "continue":
+                bad.append(f"{unit} (OOMPolicy={value})")
+        if bad:
+            raise RuntimeError(
+                "editor scope OOMPolicy must be continue, else a single "
+                "kernel OOM-kill on a biased descendant tears down the "
+                "whole editor scope: " + ", ".join(bad)
+            )
+
+
     def set_own_adj_with_helper(helper):
         try:
             write_adj("self", -1000)
@@ -273,6 +305,11 @@
 
         try:
             verify_editor_cgroups()
+        except Exception as e:
+            startup_problem(cfg.get("allowDegraded", False), str(e))
+
+        try:
+            verify_editor_oom_policy()
         except Exception as e:
             startup_problem(cfg.get("allowDegraded", False), str(e))
 
