@@ -4,6 +4,9 @@
 # or settings changed via the admin UI. Remove the account from Nix to stop
 # seeding it; deletion must be done in the UI/API.
 #
+# Per-account disabledPermissions can seed restricted principals, such as
+# send-only service identities with email-receive disabled.
+#
 # Stalwart's management API is reached over its HTTP listener (default
 # 127.0.0.1:8080 in upstream defaults, often 127.0.0.1:8580 in our deployments).
 # Auth is HTTP Basic with the admin principal.
@@ -38,13 +41,19 @@
         default = null;
         description = "Optional mailbox quota in bytes.";
       };
+      disabledPermissions = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Stalwart permission identifiers to disable on this principal (create-time only). e.g. [\"email-receive\"] for send-only.";
+        example = ["email-receive"];
+      };
     };
   };
 
   accountManifest = pkgs.writeText "stalwart-seed-accounts.json" (
     builtins.toJSON (mapAttrs' (n: a:
       nameValuePair n {
-        inherit (a) emails description quota;
+        inherit (a) emails description quota disabledPermissions;
         passwordPath = toString a.passwordFile;
       })
     cfg.accounts)
@@ -67,6 +76,7 @@
         emails=$(jq -c --arg n "$name" '.[$n].emails' ${accountManifest})
         desc=$(jq -r --arg n "$name" '.[$n].description // empty' ${accountManifest})
         quota=$(jq -r --arg n "$name" '.[$n].quota // empty' ${accountManifest})
+        disabled_permissions=$(jq -c --arg n "$name" '.[$n].disabledPermissions' ${accountManifest})
         pw_path=$(jq -r --arg n "$name" '.[$n].passwordPath' ${accountManifest})
         password=$(cat "$pw_path")
 
@@ -89,9 +99,11 @@
           --arg pw "$password" \
           --arg q "$quota" \
           --argjson em "$emails" \
+          --argjson dp "$disabled_permissions" \
           '{type:"individual", name:$n, emails:$em, secrets:[$pw]}
             + (if $d  != "" then {description:$d}        else {} end)
-            + (if $q  != "" then {quota:($q|tonumber)}   else {} end)')
+            + (if $q  != "" then {quota:($q|tonumber)}   else {} end)
+            + (if ($dp|length) > 0 then {disabledPermissions:$dp} else {} end)')
 
         echo "[stalwart-seed] creating $name" >&2
         curl -fsS -X POST \
