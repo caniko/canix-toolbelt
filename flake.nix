@@ -17,6 +17,11 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Home-manager module helpers (canix-toolbelt.homeModules.chromium-gpu)
+    # build their wrappers with wrapper-manager. Pinned to match consumers;
+    # wrapper-manager has no nixpkgs input of its own (it takes `pkgs` at the
+    # call site), so there is nothing to `follows`.
+    wrapper-manager.url = "github:viperML/wrapper-manager/51ad0422b925d830bf4af36979fed51209f79c0a";
   };
 
   outputs = inputs @ {
@@ -34,6 +39,7 @@
       flake = {
         lib = import ./lib {inherit (nixpkgs) lib;};
         nixosModules = import ./modules/nixos;
+        homeModules = import ./modules/home {inherit (inputs) wrapper-manager;};
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
           caddy-helpers = ./flake-modules/caddy-helpers.nix;
