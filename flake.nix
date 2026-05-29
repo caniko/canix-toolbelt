@@ -5,7 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     treefmt-nix.url = "github:numtide/treefmt-nix";
-    # TODO: swap to upstream github:Janik-Haag/NixOS-DNS after Phase 07 PR #2 merges.
+    # Keep tracking the Codeberg fork while canix-toolbelt owns canix's DNS
+    # secret/rekey layer. Upstream can take the generic schema/backend core
+    # (#26 + Phase 04), but this input should only move after that backend
+    # lands and the fork-side secret authority is explicitly reconciled.
     nixos-dns = {
       url = "git+https://codeberg.org/caniko/NixOS-DNS?ref=feat/agenix-rekey";
       inputs.nixpkgs.follows = "nixpkgs";
