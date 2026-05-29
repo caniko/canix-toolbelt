@@ -3,9 +3,26 @@
     hostname,
     port,
     host ? "localhost",
+    upstreamScheme ? "http",
+    tlsServerName ? null,
     injectAnalytics ? false,
     goatcounterUrl ? null,
-  }: {
+  }: let
+    proxyHandler =
+      {
+        handler = "reverse_proxy";
+        upstreams = [{dial = "${host}:${toString port}";}];
+      }
+      // lib.optionalAttrs (upstreamScheme == "https") {
+        transport = {
+          protocol = "http";
+          tls.server_name =
+            if tlsServerName != null
+            then tlsServerName
+            else hostname;
+        };
+      };
+  in {
     match = [{host = [hostname];}];
     handle =
       (lib.optional injectAnalytics {
@@ -20,12 +37,7 @@
           }
         ];
       })
-      ++ [
-        {
-          handler = "reverse_proxy";
-          upstreams = [{dial = "${host}:${toString port}";}];
-        }
-      ];
+      ++ [proxyHandler];
   };
 
   mkStaticFileRoute = {

@@ -7,14 +7,23 @@
   cfg = config.canix-toolbelt.services.caddy;
   serviceCfg = config.canix-toolbelt.services;
 
-  reverseProxyRoute = svc:
+  reverseProxyRoute = svc: let
+    isLocal =
+      if svc.local != null
+      then svc.local
+      else svc.targetHost == config.networking.hostName;
+    dialHost =
+      if isLocal
+      then "127.0.0.1"
+      else config.canix-toolbelt.hosts.${svc.targetHost}.lanIp;
+  in
     caddyLib.mkReverseProxyRoute {
-      inherit (svc) hostname;
+      inherit (svc) hostname upstreamScheme tlsServerName;
       port =
         if svc.proxied
         then 80
         else svc.port;
-      host = config.canix-toolbelt.hosts.${svc.targetHost}.lanIp;
+      host = dialHost;
       inherit (cfg) goatcounterUrl;
       injectAnalytics = cfg.goatcounterUrl != null;
     };

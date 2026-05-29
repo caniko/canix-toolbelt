@@ -19,6 +19,34 @@
         type = types.port;
         description = "Port the service listens on";
       };
+      upstreamScheme = mkOption {
+        type = types.enum ["http" "https"];
+        default = "http";
+        description = ''
+          Transport scheme Caddy uses to dial the upstream. "https" makes Caddy
+          re-encrypt to a TLS-terminating backend (e.g. kanidm on 127.0.0.1:8443),
+          emitting reverse_proxy transport.protocol="http" with a tls block.
+        '';
+      };
+      tlsServerName = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          SNI / tls.server_name sent to an upstreamScheme="https" backend.
+          Defaults to the public hostname when null.
+        '';
+      };
+      local = mkOption {
+        type = types.nullOr types.bool;
+        default = null;
+        description = ''
+          Override loopback dialing. When null (default) it is computed: a
+          service whose targetHost equals this Caddy host's networking.hostName
+          dials 127.0.0.1 instead of the host lanIp, matching hand-written
+          loopback routes (and avoiding localhost→IPv6 mismatches). Set
+          true/false to force.
+        '';
+      };
       targetHost = mkOption {
         type = types.str;
         description = "Hostname where the service runs (key from canix-toolbelt.hosts)";
