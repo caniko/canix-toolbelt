@@ -22,6 +22,14 @@
     # wrapper-manager has no nixpkgs input of its own (it takes `pkgs` at the
     # call site), so there is nothing to `follows`.
     wrapper-manager.url = "github:viperML/wrapper-manager/51ad0422b925d830bf4af36979fed51209f79c0a";
+    # Upstream goose flake (Home Manager module + Goose Desktop package).
+    # Tracks the fork integration branch carrying caniko's not-yet-merged nix
+    # PRs (aaif-goose/goose#9517 + #9522); repoint to aaif-goose/goose once
+    # they land.
+    goose = {
+      url = "github:caniko/goose/nix/flake-integration";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
@@ -37,9 +45,17 @@
       ];
 
       flake = {
-        lib = import ./lib {inherit (nixpkgs) lib;};
+        lib =
+          (import ./lib {inherit (nixpkgs) lib;})
+          // {
+            # ACP/agent provider preset package sets for programs.goose; pass
+            # the host `pkgs`. Lets hosts wire e.g.
+            #   acp.providers.claude.packages =
+            #     canix-toolbelt.lib.goose.acpPackages pkgs).claude;
+            goose.acpPackages = import ./modules/home/ai/goose/presets.nix;
+          };
         nixosModules = import ./modules/nixos;
-        homeModules = import ./modules/home {inherit (inputs) wrapper-manager;};
+        homeModules = import ./modules/home {inherit (inputs) wrapper-manager goose;};
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
           caddy-helpers = ./flake-modules/caddy-helpers.nix;
