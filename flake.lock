@@ -233,11 +233,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1780133037,
-        "narHash": "sha256-K/FpDur0TCUW+NetWtrsg5cm28RyepWYM7vXRvhc9vs=",
+        "lastModified": 1780133732,
+        "narHash": "sha256-wCcFN7OM56okgfpH6vWfYhCod9kgLqmEV+E4gYyQ+DQ=",
         "owner": "caniko",
         "repo": "goose",
-        "rev": "1c10e0b47cf7144ce501e4383e5dc422093d55a7",
+        "rev": "d860965bcf1d80fd8471fcd12127807730a8c0e0",
         "type": "github"
       },
       "original": {
