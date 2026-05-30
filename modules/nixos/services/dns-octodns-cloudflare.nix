@@ -6,8 +6,8 @@
   ...
 }: let
   cfg = config.canix-toolbelt.dns;
-  nixosDns = inputs.nixos-dns;
-  cloudflareUtils = nixosDns.utils.cloudflare;
+  dnsManager = inputs.dns-manager;
+  cloudflareUtils = dnsManager.utils.cloudflare;
 
   inherit
     (lib)
@@ -28,7 +28,7 @@
     types
     ;
 
-  dnsGenerate = nixosDns.utils.generate pkgs;
+  dnsGenerate = dnsManager.utils.generate pkgs;
 
   recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
@@ -606,7 +606,7 @@
   };
 in {
   options.canix-toolbelt.dns = {
-    enable = mkEnableOption "declarative DNS zones via NixOS-DNS";
+    enable = mkEnableOption "declarative DNS zones via dns-manager";
 
     zones = mkOption {
       type = types.attrsOf zoneSubmodule;
@@ -679,7 +679,7 @@ in {
     dnsConfig = mkOption {
       type = types.raw;
       readOnly = true;
-      description = "NixOS-DNS input generated from canix-toolbelt.dns.zones.";
+      description = "dns-manager input generated from canix-toolbelt.dns.zones.";
     };
 
     octodnsConfig = mkOption {
