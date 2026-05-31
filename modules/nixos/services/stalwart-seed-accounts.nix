@@ -116,6 +116,12 @@
         pw_path=$(jq -r --arg n "$name" '.[$n].passwordPath' ${accountManifest})
         password=$(cat "$pw_path")
 
+        # The principal NAME is the SASL login (Stalwart resolves AUTH usernames
+        # strictly by principal name via NameToId, never by email alias). Use the
+        # lowercased primary email as the name so services authenticate with the
+        # full address (e.g. noreply@example.com), which is what mail clients send.
+        login=$(printf '%s' "$emails" | jq -r '.[0] | ascii_downcase')
+
         # Stalwart's GET /api/principal/<name> returns HTTP 200 even when the
         # principal is missing — signalling absence in the JSON body as
         # {"error":"notFound"} — so the HTTP status alone cannot decide
@@ -124,23 +130,23 @@
         # errors like 5xx still surface via the status check below.)
         resp=$(curl -sS -w $'\n%{http_code}' \
           -H "Authorization: Basic $auth" \
-          "$endpoint/api/principal/$name" || printf '\n000')
+          "$endpoint/api/principal/$login" || printf '\n000')
         status=$(printf '%s' "$resp" | tail -n1)
         rbody=$(printf '%s' "$resp" | sed '$d')
 
         if [ "$status" != "200" ] && [ "$status" != "404" ]; then
-          echo "[stalwart-seed] unexpected status $status for $name; aborting" >&2
+          echo "[stalwart-seed] unexpected status $status for $login; aborting" >&2
           exit 1
         fi
 
         # Present iff the body carries a "data" object (not an error).
         if printf '%s' "$rbody" | jq -e '.data != null and (.error // empty) == ""' >/dev/null 2>&1; then
-          echo "[stalwart-seed] $name exists, skipping" >&2
+          echo "[stalwart-seed] $login exists, skipping" >&2
           continue
         fi
 
         body=$(jq -n \
-          --arg n "$name" \
+          --arg n "$login" \
           --arg d "$desc" \
           --arg pw "$password" \
           --arg q "$quota" \
@@ -151,7 +157,7 @@
             + (if $q  != "" then {quota:($q|tonumber)}   else {} end)
             + (if ($dp|length) > 0 then {disabledPermissions:$dp} else {} end)')
 
-        echo "[stalwart-seed] creating $name" >&2
+        echo "[stalwart-seed] creating $login" >&2
         curl -fsS -X POST \
           -H "Authorization: Basic $auth" \
           -H "Content-Type: application/json" \
