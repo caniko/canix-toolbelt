@@ -59,6 +59,15 @@
     cfg.accounts)
   );
 
+  # Stalwart rejects creating an individual whose email is on a domain that has
+  # no domain principal ({"error":"notFound","item":"<domain>"}), and never
+  # auto-creates it. Derive the domain set from every account email (plus any
+  # explicit extraDomains) and seed those domain principals BEFORE the accounts.
+  emailDomain = email: lib.last (lib.splitString "@" email);
+  accountDomains = lib.concatMap (a: map emailDomain a.emails) (lib.attrValues cfg.accounts);
+  allDomains = lib.unique (accountDomains ++ cfg.extraDomains);
+  domainManifest = pkgs.writeText "stalwart-seed-domains.json" (builtins.toJSON allDomains);
+
   seedScript = pkgs.writeShellApplication {
     name = "stalwart-seed-accounts";
     runtimeInputs = with pkgs; [curl jq coreutils];
@@ -70,6 +79,33 @@
       admin_pw=$(cat ${lib.escapeShellArg cfg.adminPasswordFile})
       auth=$(printf '%s:%s' "$admin_user" "$admin_pw" | base64 -w0)
 
+      # Domain principals first — Stalwart needs them before any account on the
+      # domain. Same create-if-missing + body-parse existence check as accounts.
+      mapfile -t domains < <(jq -r '.[]' ${domainManifest})
+      for dom in "''${domains[@]}"; do
+        resp=$(curl -sS -w $'\n%{http_code}' \
+          -H "Authorization: Basic $auth" \
+          "$endpoint/api/principal/$dom" || printf '\n000')
+        status=$(printf '%s' "$resp" | tail -n1)
+        rbody=$(printf '%s' "$resp" | sed '$d')
+
+        if [ "$status" != "200" ] && [ "$status" != "404" ]; then
+          echo "[stalwart-seed] unexpected status $status for domain $dom; aborting" >&2
+          exit 1
+        fi
+        if printf '%s' "$rbody" | jq -e '.data != null and (.error // empty) == ""' >/dev/null 2>&1; then
+          echo "[stalwart-seed] domain $dom exists, skipping" >&2
+          continue
+        fi
+
+        echo "[stalwart-seed] creating domain $dom" >&2
+        curl -fsS -X POST \
+          -H "Authorization: Basic $auth" \
+          -H "Content-Type: application/json" \
+          --data "$(jq -n --arg n "$dom" '{type:"domain", name:$n}')" \
+          "$endpoint/api/principal" >/dev/null
+      done
+
       mapfile -t accounts < <(jq -r 'keys[]' ${accountManifest})
 
       for name in "''${accounts[@]}"; do
@@ -80,17 +116,27 @@
         pw_path=$(jq -r --arg n "$name" '.[$n].passwordPath' ${accountManifest})
         password=$(cat "$pw_path")
 
-        status=$(curl -sS -o /dev/null -w '%{http_code}' \
+        # Stalwart's GET /api/principal/<name> returns HTTP 200 even when the
+        # principal is missing — signalling absence in the JSON body as
+        # {"error":"notFound"} — so the HTTP status alone cannot decide
+        # existence. Fetch the body and inspect it: a present principal returns
+        # {"data":{...}}; a missing one returns {"error":"notFound",...}. (HTTP
+        # errors like 5xx still surface via the status check below.)
+        resp=$(curl -sS -w $'\n%{http_code}' \
           -H "Authorization: Basic $auth" \
-          "$endpoint/api/principal/$name" || echo "000")
+          "$endpoint/api/principal/$name" || printf '\n000')
+        status=$(printf '%s' "$resp" | tail -n1)
+        rbody=$(printf '%s' "$resp" | sed '$d')
 
-        if [ "$status" = "200" ]; then
-          echo "[stalwart-seed] $name exists, skipping" >&2
-          continue
-        fi
-        if [ "$status" != "404" ]; then
+        if [ "$status" != "200" ] && [ "$status" != "404" ]; then
           echo "[stalwart-seed] unexpected status $status for $name; aborting" >&2
           exit 1
+        fi
+
+        # Present iff the body carries a "data" object (not an error).
+        if printf '%s' "$rbody" | jq -e '.data != null and (.error // empty) == ""' >/dev/null 2>&1; then
+          echo "[stalwart-seed] $name exists, skipping" >&2
+          continue
         fi
 
         body=$(jq -n \
@@ -142,6 +188,18 @@ in {
       description = ''
         Accounts to seed. The attribute name is the principal login name.
         Existing accounts (matched by name) are left alone — this never overwrites.
+      '';
+    };
+
+    extraDomains = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["tartanoglu.com"];
+      description = ''
+        Additional mail domains to seed as Stalwart domain principals, on top of
+        the domains derived from every account email. Stalwart rejects creating
+        an account whose email is on a domain with no domain principal, so all
+        such domains are created (create-if-missing) before the accounts.
       '';
     };
 
