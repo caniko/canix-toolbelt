@@ -7,7 +7,6 @@
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
-  cloudflareUtils = dnsManager.utils.cloudflare;
 
   inherit
     (lib)
@@ -28,12 +27,15 @@
     types
     ;
 
-  dnsGenerate = dnsManager.utils.generate pkgs;
+  dnsGenerate = dnsManager.lib.generate pkgs;
 
   recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
 
-  inherit (cloudflareUtils) normalizeName;
+  normalizeName = name:
+    if name == "@"
+    then ""
+    else name;
   normalizeType = type: lib.toUpper type;
   recordKey = record: "${normalizeName record.name}|${normalizeType record.type}";
 
@@ -564,7 +566,7 @@
 
   octodnsSync = mkOctodnsSync {};
 
-  mkOctodnsConfig = dnsGenerate.cloudflareConfig {
+  mkOctodnsConfig = dnsGenerate.cloudflare {
     dnsConfig = validatedDnsConfig;
     inherit token;
     zones = cloudflareZones;

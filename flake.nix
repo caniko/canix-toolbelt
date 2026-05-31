@@ -11,7 +11,6 @@
       url = "git+ssh://git@codeberg.org/caniko/dns-manager.git";
       inputs = {
         nixpkgs.follows = "nixpkgs";
-        flake-parts.follows = "flake-parts";
         treefmt-nix.follows = "treefmt-nix";
       };
     };
