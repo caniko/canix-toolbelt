@@ -145,6 +145,11 @@
           continue
         fi
 
+        # roles:["user"] is REQUIRED: the management-API create path does NOT
+        # auto-attach the built-in user role, so without it the principal has no
+        # Authenticate/EmailSend permission and SMTP-AUTH returns 550 "not
+        # authorized" (verified on Stalwart 0.15.5). The role grants the standard
+        # user permission set; disabledPermissions still trims it (send-only).
         body=$(jq -n \
           --arg n "$login" \
           --arg d "$desc" \
@@ -152,7 +157,7 @@
           --arg q "$quota" \
           --argjson em "$emails" \
           --argjson dp "$disabled_permissions" \
-          '{type:"individual", name:$n, emails:$em, secrets:[$pw]}
+          '{type:"individual", name:$n, emails:$em, secrets:[$pw], roles:["user"]}
             + (if $d  != "" then {description:$d}        else {} end)
             + (if $q  != "" then {quota:($q|tonumber)}   else {} end)
             + (if ($dp|length) > 0 then {disabledPermissions:$dp} else {} end)')
