@@ -147,8 +147,13 @@ in {
 
     serviceAfter = mkOption {
       type = types.listOf types.str;
-      default = ["stalwart-mail.service"];
-      description = "Units the seed waits for before running.";
+      default = ["stalwart.service"];
+      description = ''
+        Units the seed waits for (after + requires) before running. Defaults to
+        the nixpkgs Stalwart daemon unit `stalwart.service`. NOTE: a hard
+        requires on a non-existent unit makes systemd silently refuse the start
+        job, so this must name the real daemon unit on the host.
+      '';
     };
   };
 
