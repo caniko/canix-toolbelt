@@ -77,12 +77,20 @@
     tag = cfg.imageTag;
     contents = cfg.imageContents ++ cfg.imageExtraContents;
     extraCommands = ''
-      mkdir -p usr/bin
+      mkdir -p etc root usr/bin
+      cat > etc/passwd <<'EOF'
+      root:x:0:0:root:/root:/bin/bash
+      EOF
+      cat > etc/group <<'EOF'
+      root:x:0:
+      EOF
       ln -s /bin/env usr/bin/env
     '';
     config = {
       Env = [
         "PATH=/bin:/usr/bin"
+        "USER=root"
+        "HOME=/root"
         "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
       ];
@@ -96,7 +104,13 @@
     tag = cfg.hostNixImageTag;
     contents = cfg.hostNixImageContents ++ cfg.hostNixImageExtraContents;
     extraCommands = ''
-      mkdir -p usr/bin
+      mkdir -p etc root usr/bin
+      cat > etc/passwd <<'EOF'
+      root:x:0:0:root:/root:/bin/bash
+      EOF
+      cat > etc/group <<'EOF'
+      root:x:0:
+      EOF
       ln -s /bin/env usr/bin/env
     '';
     config = {
@@ -105,6 +119,7 @@
         "NIX_REMOTE=daemon"
         "NIX_PAGER=cat"
         "USER=root"
+        "HOME=/root"
         "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
         "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
       ];
