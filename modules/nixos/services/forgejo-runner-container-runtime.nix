@@ -45,6 +45,33 @@
     ]
     ++ map (name: "${actionRuntime}/bin/${name}") cfg.actionRuntimeExecutables;
 
+  sudoShim = pkgs.writeShellScriptBin "sudo" ''
+    set -eu
+
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -E|-H|-n|-S|--preserve-env|--preserve-env=*)
+          shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        -u|-g)
+          shift
+          if [ "$#" -gt 0 ]; then
+            shift
+          fi
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+
+    exec "$@"
+  '';
+
   runnerImage = pkgs.dockerTools.buildLayeredImage {
     name = cfg.imageName;
     tag = cfg.imageTag;
@@ -183,6 +210,7 @@ in {
       type = types.listOf types.package;
       default = with pkgs; [
         dockerTools.caCertificates
+        sudoShim
         bashInteractive
         coreutils
         gitMinimal
@@ -205,6 +233,7 @@ in {
       type = types.listOf types.package;
       default = with pkgs; [
         dockerTools.caCertificates
+        sudoShim
         nix
         bashInteractive
         coreutils
