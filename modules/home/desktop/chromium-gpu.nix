@@ -110,22 +110,24 @@
     wrapperName = wrapperArgs.wrapperName or (lib.getName basePackage);
     enableAngleVulkan = wrapperArgs.enableAngleVulkan or true;
     skipPrograms = wrapperArgs.skipPrograms or [];
-    wrapped =
-      (wrapper-manager.lib {
-        inherit pkgs;
-        modules = [
-          {
-            wrappers.${wrapperName} = {
-              inherit basePackage;
-              prependFlags = chromiumFlags {inherit enableAngleVulkan;};
-              env = chromiumEnv;
-              programs = lib.genAttrs skipPrograms (_: {});
-            };
-          }
-        ];
-      }).config.wrappers.${
-        wrapperName
-      }.wrapped;
+    inherit
+      ((wrapper-manager.lib {
+          inherit pkgs;
+          modules = [
+            {
+              wrappers.${wrapperName} = {
+                inherit basePackage;
+                prependFlags = chromiumFlags {inherit enableAngleVulkan;};
+                env = chromiumEnv;
+                programs = lib.genAttrs skipPrograms (_: {});
+              };
+            }
+          ];
+        }).config.wrappers.${
+          wrapperName
+        })
+      wrapped
+      ;
   in
     wrapped
     // {
