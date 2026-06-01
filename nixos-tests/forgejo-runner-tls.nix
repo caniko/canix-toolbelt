@@ -137,7 +137,12 @@ pkgs.testers.nixosTest {
 
     server.wait_for_unit("forgejo.service")
     server.wait_for_open_port(3000)
-    server.wait_for_unit("forgejo-runner-image-load.service")
+    server.wait_until_succeeds(
+        'test "$(systemctl show -P ActiveState forgejo-runner-image-load.service)" = inactive && '
+        + 'test "$(systemctl show -P Result forgejo-runner-image-load.service)" = success'
+    )
+    server.succeed("podman image exists localhost/canix-runner:local")
+    server.succeed("podman image exists localhost/canix-nix-runner:local")
     server.succeed("curl --fail http://localhost:3000/")
     server.succeed(
         "mkdir -p /tmp/local-https && "

@@ -86,6 +86,9 @@
     };
   };
 
+  localRunnerImage = "localhost/${cfg.imageName}:${cfg.imageTag}";
+  localHostNixRunnerImage = "localhost/${cfg.hostNixImageName}:${cfg.hostNixImageTag}";
+
   runtimeOptions =
     [
       "-e PATH=${jobContainerPath}"
@@ -116,10 +119,38 @@
       "-e NIX_SSL_CERT_FILE=/canix-forgejo-action-certs/ca-bundle.crt"
     ];
 
-  runnerServiceNames =
+  runnerUnitNames =
     map
-    (instance: "forgejo-runner@${escapeSystemdPath instance.name}.service")
+    (instance: "forgejo-runner@${escapeSystemdPath instance.name}")
     (lib.attrValues runnerCfg.instances);
+
+  runnerServiceNames = map (name: "${name}.service") runnerUnitNames;
+
+  ensureRunnerImages = pkgs.writeShellScript "forgejo-runner-image-load" ''
+    set -eu
+
+    podman=${lib.escapeShellArg "${config.virtualisation.podman.package}/bin/podman"}
+
+    ensure_image() {
+      image="$1"
+      archive="$2"
+
+      if "$podman" image exists "$image"; then
+        echo "Forgejo runner image already present: $image"
+      else
+        echo "Loading Forgejo runner image: $image"
+        "$podman" load -i "$archive"
+      fi
+
+      if ! "$podman" image exists "$image"; then
+        echo "Forgejo runner image '$image' is still missing after loading '$archive'" >&2
+        exit 1
+      fi
+    }
+
+    ensure_image ${lib.escapeShellArg localRunnerImage} ${lib.escapeShellArg "${runnerImage}"}
+    ensure_image ${lib.escapeShellArg localHostNixRunnerImage} ${lib.escapeShellArg "${hostNixRunnerImage}"}
+  '';
 in {
   options.canix-toolbelt.services.forgejoRunner.containerRuntime = {
     enable = lib.mkEnableOption "reusable Forgejo runner container runtime";
@@ -291,8 +322,8 @@ in {
 
   config = mkIf cfg.enable {
     canix-toolbelt.services.forgejoRunner.containerRuntime = {
-      imageRef = "docker://localhost/${cfg.imageName}:${cfg.imageTag}";
-      hostNixImageRef = "docker://localhost/${cfg.hostNixImageName}:${cfg.hostNixImageTag}";
+      imageRef = "docker://${localRunnerImage}";
+      hostNixImageRef = "docker://${localHostNixRunnerImage}";
       containerOptions = concatStringsSep " " runtimeOptions;
       hostNixContainerOptions = concatStringsSep " " hostNixRuntimeOptions;
       validVolumes =
@@ -310,30 +341,43 @@ in {
         ++ cfg.hostNixExtraValidVolumes;
     };
 
-    systemd.services.forgejo-runner-image-load =
+    systemd.services =
       {
-        description = "Load canix forgejo-runner OCI image into podman";
-        wantedBy = ["multi-user.target"];
-        restartTriggers = [runnerImage hostNixRunnerImage];
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = "${pkgs.writeShellScript "forgejo-runner-image-load" ''
-            set -eu
-            ${config.virtualisation.podman.package}/bin/podman load -i ${runnerImage}
-            ${config.virtualisation.podman.package}/bin/podman load -i ${hostNixRunnerImage}
-          ''}";
-        };
+        forgejo-runner-image-load =
+          {
+            description = "Ensure canix forgejo-runner OCI images exist in podman";
+            wantedBy = ["multi-user.target"];
+            restartTriggers = [runnerImage hostNixRunnerImage];
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = false;
+              ExecStart = "${ensureRunnerImages}";
+            };
+          }
+          // optionalAttrs config.virtualisation.podman.enable {
+            requires = ["podman.service"];
+            after = ["podman.service"];
+            before = runnerServiceNames;
+          }
+          // optionalAttrs config.virtualisation.docker.enable {
+            requires = ["docker.service"];
+            after = ["docker.service"];
+            before = runnerServiceNames;
+          };
       }
-      // optionalAttrs config.virtualisation.podman.enable {
-        requires = ["podman.service"];
-        after = ["podman.service"];
-        before = runnerServiceNames;
-      }
-      // optionalAttrs config.virtualisation.docker.enable {
-        requires = ["docker.service"];
-        after = ["docker.service"];
-        before = runnerServiceNames;
+      // lib.genAttrs runnerUnitNames (_: {
+        requires = ["forgejo-runner-image-load.service"];
+        after = ["forgejo-runner-image-load.service"];
+      });
+
+    systemd.timers.forgejo-runner-image-load = {
+      description = "Periodically ensure canix forgejo-runner OCI images exist";
+      wantedBy = ["timers.target"];
+      timerConfig = {
+        OnBootSec = "2min";
+        OnUnitActiveSec = "5min";
+        Unit = "forgejo-runner-image-load.service";
       };
+    };
   };
 }
