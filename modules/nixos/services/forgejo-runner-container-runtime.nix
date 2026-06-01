@@ -266,6 +266,7 @@ in {
         gitMinimal
         gawk
         gnugrep
+        gnupg
         gnused
         nodejs_24
         curl
