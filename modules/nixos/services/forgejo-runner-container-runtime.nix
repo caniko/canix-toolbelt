@@ -161,8 +161,12 @@
     ensure_image() {
       image="$1"
       archive="$2"
+      marker_dir="''${STATE_DIRECTORY:-/var/lib/forgejo-runner-image-load}"
+      marker="$marker_dir/$(printf '%s' "$image" | tr '/:' '__').archive"
 
-      if "$podman" image exists "$image"; then
+      mkdir -p "$marker_dir"
+
+      if "$podman" image exists "$image" && [ -f "$marker" ] && [ "$(cat "$marker")" = "$archive" ]; then
         echo "Forgejo runner image already present: $image"
       else
         echo "Loading Forgejo runner image: $image"
@@ -173,6 +177,9 @@
         echo "Forgejo runner image '$image' is still missing after loading '$archive'" >&2
         exit 1
       fi
+
+      printf '%s\n' "$archive" > "$marker.tmp"
+      mv "$marker.tmp" "$marker"
     }
 
     ensure_image ${lib.escapeShellArg localRunnerImage} ${lib.escapeShellArg "${runnerImage}"}
@@ -214,6 +221,7 @@ in {
         bashInteractive
         coreutils
         gitMinimal
+        gnugrep
         nodejs_24
         curl
         gnutar
@@ -238,6 +246,7 @@ in {
         bashInteractive
         coreutils
         gitMinimal
+        gnugrep
         nodejs_24
         curl
         gnutar
@@ -262,6 +271,7 @@ in {
         dockerTools.caCertificates
         gawk
         gitMinimal
+        gnugrep
         gnused
         gnutar
         gzip
@@ -278,6 +288,7 @@ in {
         "curl"
         "env"
         "git"
+        "grep"
         "gzip"
         "node"
         "sh"
@@ -380,6 +391,7 @@ in {
             serviceConfig = {
               Type = "oneshot";
               RemainAfterExit = false;
+              StateDirectory = "forgejo-runner-image-load";
               ExecStart = "${ensureRunnerImages}";
             };
           }

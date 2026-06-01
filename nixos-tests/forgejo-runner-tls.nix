@@ -145,6 +145,8 @@ pkgs.testers.nixosTest {
     server.succeed("podman image exists localhost/canix-nix-runner:local")
     server.succeed("podman run --rm localhost/canix-runner:local sudo sh -c 'test \"$(id -u)\" = 0'")
     server.succeed("podman run --rm localhost/canix-nix-runner:local sudo sh -c 'test \"$(id -u)\" = 0'")
+    server.succeed("podman run --rm localhost/canix-runner:local sh -c \"printf 'abc\\\\n' | grep -Eq '^abc$'\"")
+    server.succeed("podman run --rm localhost/canix-nix-runner:local sh -c \"printf 'abc\\\\n' | grep -Eq '^abc$'\"")
     server.succeed("curl --fail http://localhost:3000/")
     server.succeed(
         "mkdir -p /tmp/local-https && "
