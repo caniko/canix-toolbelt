@@ -221,12 +221,15 @@ in {
         bashInteractive
         coreutils
         gitMinimal
+        gawk
         gnugrep
+        gnused
         nodejs_24
         curl
         gnutar
         gzip
         which
+        xz
       ];
       description = "Packages baked into the base runner image.";
     };
@@ -246,12 +249,15 @@ in {
         bashInteractive
         coreutils
         gitMinimal
+        gawk
         gnugrep
+        gnused
         nodejs_24
         curl
         gnutar
         gzip
         which
+        xz
       ];
       description = "Packages baked into the trusted host-nix runner image.";
     };
@@ -277,6 +283,7 @@ in {
         gzip
         nodejs_24
         which
+        xz
       ];
       description = "Packages exposed to workflow job containers for JavaScript actions.";
     };
@@ -284,6 +291,7 @@ in {
     actionRuntimeExecutables = mkOption {
       type = types.listOf types.str;
       default = [
+        "awk"
         "bash"
         "curl"
         "env"
@@ -291,10 +299,12 @@ in {
         "grep"
         "gzip"
         "node"
+        "sed"
         "sh"
         "tar"
         "tail"
         "which"
+        "xz"
       ];
       description = "Action-runtime executables mounted into job containers under /usr/local/bin.";
     };

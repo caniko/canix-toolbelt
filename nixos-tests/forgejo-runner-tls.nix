@@ -147,6 +147,12 @@ pkgs.testers.nixosTest {
     server.succeed("podman run --rm localhost/canix-nix-runner:local sudo sh -c 'test \"$(id -u)\" = 0'")
     server.succeed("podman run --rm localhost/canix-runner:local sh -c \"printf 'abc\\\\n' | grep -Eq '^abc$'\"")
     server.succeed("podman run --rm localhost/canix-nix-runner:local sh -c \"printf 'abc\\\\n' | grep -Eq '^abc$'\"")
+    server.succeed("podman run --rm localhost/canix-runner:local sh -c \"printf 'a:b\\\\n' | awk -F: '{print \\$2}' | grep -Eq '^b$'\"")
+    server.succeed("podman run --rm localhost/canix-nix-runner:local sh -c \"printf 'a:b\\\\n' | awk -F: '{print \\$2}' | grep -Eq '^b$'\"")
+    server.succeed("podman run --rm localhost/canix-runner:local sh -c \"printf 'before\\\\n' | sed 's/before/after/' | grep -Eq '^after$'\"")
+    server.succeed("podman run --rm localhost/canix-nix-runner:local sh -c \"printf 'before\\\\n' | sed 's/before/after/' | grep -Eq '^after$'\"")
+    server.succeed("podman run --rm localhost/canix-runner:local sh -c \"printf ok | xz -c | xz -dc | grep -Eq '^ok$'\"")
+    server.succeed("podman run --rm localhost/canix-nix-runner:local sh -c \"printf ok | xz -c | xz -dc | grep -Eq '^ok$'\"")
     server.succeed("curl --fail http://localhost:3000/")
     server.succeed(
         "mkdir -p /tmp/local-https && "
