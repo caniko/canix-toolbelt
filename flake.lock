@@ -270,6 +270,26 @@
         "type": "github"
       }
     },
+    "home-manager": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1780370888,
+        "narHash": "sha256-PRJj9RKTEf/sITycujP1c/BrvLJKMYXzcpwTsXNulXQ=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "a7a415883195ffbd4dabec8f098f201e6eaaadf8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1777395829,
@@ -363,6 +383,7 @@
         "flake-parts": "flake-parts",
         "git-hooks": "git-hooks_2",
         "goose": "goose",
+        "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_2",
         "treefmt-nix": "treefmt-nix",
         "wrapper-manager": "wrapper-manager"

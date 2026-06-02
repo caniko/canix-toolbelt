@@ -5,6 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     treefmt-nix.url = "github:numtide/treefmt-nix";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # dns-manager owns reusable DNS schema/rendering/backend code. Toolbelt
     # keeps only host/service-registry integration and the canix DNS wrapper.
     dns-manager = {
@@ -43,6 +47,7 @@
 
       imports = [
         ./flake-modules/dev-stack.nix
+        ./modules/home/ai/goose/checks/core.nix
       ];
 
       flake = {
@@ -54,6 +59,7 @@
             #   acp.providers.claude.packages =
             #     canix-toolbelt.lib.goose.acpPackages pkgs).claude;
             goose.acpPackages = import ./modules/home/ai/goose/presets.nix;
+            gooseCheckFixtures = import ./modules/home/ai/goose/checks/lib.nix;
           };
         nixosModules = import ./modules/nixos;
         homeModules = import ./modules/home {inherit (inputs) wrapper-manager goose;};
