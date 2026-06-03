@@ -39,12 +39,18 @@
 
   isIntel = renderingGpu == "intel";
 
-  # VA-API *decode* vendor: the iGPU when offloading decode (battery/travel),
-  # otherwise the rendering GPU. Rendering still follows DRI_PRIME / the host
-  # registry; only the decode device + driver move.
+  # VA-API *decode* vendor. This drives only the decode feature flags + libva
+  # env (NOT the rendering/ANGLE backend, which is GL on every host). When
+  # offloading decode (battery/travel) it is the iGPU. Otherwise, on a hybrid
+  # host the session renders *and* decodes on the iGPU (e.g. a PRIME
+  # render-offload laptop whose dGPU is parked), so follow the iGPU vendor
+  # rather than the dGPU that `renderingGpu` resolves to; single-GPU hosts fall
+  # back to the rendering GPU.
   decodeActive = igpuCfg.decodeActive or false;
   decodeVendor =
     if decodeActive
+    then igpuCfg.type
+    else if igpuCfg.enable && igpuCfg.type != null
     then igpuCfg.type
     else renderingGpu;
   isAmd = decodeVendor == "amd";
@@ -67,12 +73,22 @@
   chromiumFlags = {enableAngleVulkan ? true}:
     [
       "--password-store=gnome-libsecret"
+      # Force native Wayland Ozone instead of Xwayland. `auto` self-detects:
+      # Wayland when WAYLAND_DISPLAY is set (every consuming host runs a Wayland
+      # compositor), X11 otherwise. Under Xwayland, ANGLE-Vulkan fails to find
+      # an EGL config on hybrid GPUs and the whole GPU process dies ("No
+      # suitable EGL configs found"); native Wayland avoids that entirely.
+      "--ozone-platform-hint=auto"
       "--ignore-gpu-blocklist"
       "--disable-gpu-driver-bug-workaround"
       "--enable-unsafe-webgpu"
+      # ANGLE on its GL backend. ANGLE-Vulkan is deliberately NOT used: under
+      # Wayland the Vulkan path can't back the compositor surface (Chromium
+      # logs "not compatible with Vulkan" and falls back to GL anyway), and on
+      # multi-GPU hosts without a MESA_VK_DEVICE_SELECT pin it cannot choose a
+      # device, killing the GPU process.
       "--use-gl=angle"
     ]
-    ++ lib.optional (enableAngleVulkan && !isIntel) "--use-angle=vulkan"
     # Pin VA-API decode to the iGPU render node; Chromium otherwise hardcodes
     # /dev/dri/renderD128. Paired with LIBVA_DRIVER_NAME in chromiumEnv.
     ++ lib.optional decodeActive "--render-node-override=${igpuCfg.renderNode}"
@@ -88,12 +104,6 @@
             "VaapiVideoDecoder"
             "VaapiVideoDecodeLinuxGL"
             "VaapiIgnoreDriverChecks"
-          ]
-          # AMD: Vulkan feature flags required for Mesa VA-API path
-          ++ lib.optionals isAmd [
-            "Vulkan"
-            "DefaultANGLEVulkan"
-            "VulkanFromANGLE"
           ]
           # NVIDIA: VA-API bridge via nvidia-vaapi-driver
           ++ lib.optional isNvidia "VaapiOnNvidiaGPUs"
