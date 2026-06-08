@@ -5,8 +5,10 @@
 #   "<name>" = { consumers = [ "atlas" ]; runner = "atlas"; }
 #
 # becomes `age.secrets.attic-<name>-token` on every host listed in
-# `consumers`. On the host named by `runner`, a stable tokens directory is
-# materialised for forgejo-runner containers to bind-mount.
+# `consumers`. On the host named by `runner`, plaintext token files are
+# materialised directly into a stable directory for forgejo-runner containers
+# to bind-mount. These are real files, not symlinks, so container mounts do not
+# depend on agenix targets outside the mounted directory.
 {
   config,
   lib,
@@ -45,9 +47,9 @@ in {
       default = tokensDir;
       readOnly = true;
       description = ''
-        Read-only directory exposed on a runner host containing one file per
-        registered project (`<name>` -> token plaintext). Forgejo-runner
-        container instances should bind-mount this into jobs as
+        Read-only directory exposed on a runner host containing one materialised
+        token file per registered project (`<name>` -> token plaintext).
+        Forgejo-runner container instances should bind-mount this into jobs as
         `$ATTIC_TOKENS_DIR`.
       '';
     };
@@ -96,7 +98,12 @@ in {
       // lib.mapAttrs' (
         name: _:
           lib.nameValuePair "${cfg.tokensDir}/${name}" {
-            "L+".argument = config.age.secrets."attic-${name}-token".path;
+            "C+" = {
+              argument = config.age.secrets."attic-${name}-token".path;
+              mode = cfg.tokenFileMode;
+              user = cfg.tokensDirOwner;
+              group = cfg.tokensDirGroup;
+            };
           }
       )
       runnerProjects
