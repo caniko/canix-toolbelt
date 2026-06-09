@@ -86,10 +86,7 @@ in
                   '';
                 }
               ]
-              ++ (foldlAttrs (
-                assertions: _: connection:
-                assertions ++ connection.assertions
-              ) [ ] config.settings.server.connections);
+              ;
             };
 
             options = {
@@ -338,7 +335,6 @@ in
 
   config = mkIf (cfg.instances != { }) {
     assertions = foldlAttrs (assertions: _: instance: assertions ++ instance.assertions) [ ] cfg.instances;
-    warnings = foldlAttrs (warnings: _: instance: warnings ++ instance.warnings) [ ] cfg.instances;
 
     systemd.services =
       let
