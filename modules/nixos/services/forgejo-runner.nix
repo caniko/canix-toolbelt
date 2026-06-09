@@ -10,6 +10,7 @@ let
   inherit (lib)
     foldlAttrs
     literalExpression
+    mkDefault
     mkEnableOption
     mkIf
     mkOption
