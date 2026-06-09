@@ -170,7 +170,8 @@ in
                     };
                   };
                   config = lib.mapAttrsRecursive (
-                    path: value: "file:$CREDENTIALS_DIRECTORY/${lib.join "__" path}"
+                    path: value:
+                    "file:/run/credentials/forgejo-runner-${name}.service/${lib.join "__" path}"
                   ) config.secrets;
                 };
               };
