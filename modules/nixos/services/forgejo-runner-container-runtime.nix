@@ -201,6 +201,11 @@
 
     ensure_image ${lib.escapeShellArg localRunnerImage} ${lib.escapeShellArg "${runnerImage}"}
     ensure_image ${lib.escapeShellArg localHostNixRunnerImage} ${lib.escapeShellArg "${hostNixRunnerImage}"}
+
+    systemctl=${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"}
+    for svc in ${toString runnerServiceNames}; do
+      "$systemctl" start --no-block "$svc" 2>/dev/null || true
+    done
   '';
 in {
   options.canix-toolbelt.services.forgejoRunner.containerRuntime = {
@@ -421,10 +426,6 @@ in {
               RemainAfterExit = false;
               StateDirectory = "forgejo-runner-image-load";
               ExecStart = "${ensureRunnerImages}";
-              ExecStartPost =
-                map
-                (name: "${pkgs.systemd}/bin/systemctl start --no-block ${name}")
-                runnerServiceNames;
             };
           }
           // optionalAttrs config.virtualisation.podman.enable {
