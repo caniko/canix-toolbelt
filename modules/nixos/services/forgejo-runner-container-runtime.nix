@@ -204,6 +204,7 @@
 
     systemctl=${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"}
     for svc in ${toString runnerServiceNames}; do
+      "$systemctl" reset-failed "$svc" 2>/dev/null || true
       "$systemctl" start --no-block "$svc" 2>/dev/null || true
     done
   '';
@@ -442,10 +443,6 @@ in {
       // lib.genAttrs runnerUnitNames (_: {
         requires = ["forgejo-runner-image-load.service"];
         after = ["forgejo-runner-image-load.service"];
-        serviceConfig.ExecCondition = [
-          "${podman} image exists ${lib.escapeShellArg localRunnerImage}"
-          "${podman} image exists ${lib.escapeShellArg localHostNixRunnerImage}"
-        ];
       });
 
     systemd.timers.forgejo-runner-image-load = {
