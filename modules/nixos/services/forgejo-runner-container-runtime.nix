@@ -421,6 +421,11 @@ in {
               RemainAfterExit = false;
               StateDirectory = "forgejo-runner-image-load";
               ExecStart = "${ensureRunnerImages}";
+              ExecStartPost = lib.mkAfter (
+                lib.concatMap
+                (name: "${pkgs.systemd}/bin/systemctl start --no-block ${name}.service")
+                runnerServiceNames
+              );
             };
           }
           // optionalAttrs config.virtualisation.podman.enable {
