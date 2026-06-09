@@ -72,7 +72,7 @@ in
           }:
           {
             imports = [
-              ../../misc/assertions.nix
+              ../misc/assertions.nix
             ];
 
             config = {
