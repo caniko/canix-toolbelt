@@ -448,9 +448,11 @@ in {
       wantedBy = ["timers.target"];
       timerConfig = {
         OnBootSec = "2min";
-        OnUnitActiveSec = "5min";
-        OnUnitInactiveSec = "1min";
+        OnCalendar = "minutely";
         Unit = "forgejo-runner-image-load.service";
+        RandomizedDelaySec = "30";
+        FixedRandomDelay = true;
+        Persistent = true;
       };
     };
   };
