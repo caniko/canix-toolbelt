@@ -168,6 +168,8 @@
 
   runnerServiceNames = map (name: "${name}.service") runnerUnitNames;
 
+  podman = "${config.virtualisation.podman.package}/bin/podman";
+
   ensureRunnerImages = pkgs.writeShellScript "forgejo-runner-image-load" ''
     set -eu
 
@@ -435,6 +437,10 @@ in {
       // lib.genAttrs runnerUnitNames (_: {
         requires = ["forgejo-runner-image-load.service"];
         after = ["forgejo-runner-image-load.service"];
+        serviceConfig.ExecCondition = [
+          "${podman} image exists ${lib.escapeShellArg localRunnerImage}"
+          "${podman} image exists ${lib.escapeShellArg localHostNixRunnerImage}"
+        ];
       });
 
     systemd.timers.forgejo-runner-image-load = {
@@ -443,6 +449,7 @@ in {
       timerConfig = {
         OnBootSec = "2min";
         OnUnitActiveSec = "5min";
+        OnUnitInactiveSec = "1min";
         Unit = "forgejo-runner-image-load.service";
       };
     };

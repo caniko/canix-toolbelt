@@ -1,0 +1,42 @@
+[site]
+title = "canix-toolbelt"
+description = "Reusable, host-agnostic Nix building blocks extracted from"
+base_url = "/"
+footer_note = "Generated from repository metadata by the plinth-project FOSS sweep."
+
+[[nav]]
+label = "Overview"
+href = "#overview"
+
+[[nav]]
+label = "Source"
+href = "git@codeberg.org:caniko/canix-toolbelt.git"
+
+[[footer_links]]
+label = "Source"
+href = "git@codeberg.org:caniko/canix-toolbelt.git"
+
+[[pages]]
+slug = "index"
+title = "canix-toolbelt"
+description = "Reusable, host-agnostic Nix building blocks extracted from"
+
+[[pages.sections]]
+type = "hero"
+title = "canix-toolbelt"
+tagline = "Reusable, host-agnostic Nix building blocks extracted from"
+subtitle = "Reusable, host-agnostic Nix building blocks extracted from"
+
+[[pages.sections.ctas]]
+label = "View source"
+href = "git@codeberg.org:caniko/canix-toolbelt.git"
+primary = true
+
+[[pages.sections]]
+type = "feature_grid"
+id = "overview"
+
+[[pages.sections.features]]
+title = "Nix"
+description = "Project technology detected from repository manifests."
+

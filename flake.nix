@@ -35,6 +35,10 @@
       url = "github:caniko/goose/nix/flake-integration";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    plinth = {
+      url = "git+https://codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
@@ -77,7 +81,17 @@
         };
       };
 
-      perSystem = {pkgs, ...}: {
+      perSystem = {
+        pkgs,
+        system,
+        ...
+      }: let
+        website = inputs.plinth.lib.${system}.mkProjectSite {
+          pname = "canix-toolbelt-website";
+          domain = "canix-toolbelt.tartanoglu.com";
+          configPath = ./website/plinth-project.toml;
+        };
+      in {
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
@@ -86,6 +100,11 @@
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
+        packages.website = website;
+        packages.site = website;
+        apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
+          domain = "canix-toolbelt.tartanoglu.com";
+        };
         formatter = pkgs.alejandra;
       };
     };
