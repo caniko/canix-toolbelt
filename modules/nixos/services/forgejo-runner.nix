@@ -71,6 +71,18 @@ in
             ...
           }:
           {
+            options.assertions = mkOption {
+              type = types.listOf types.unspecified;
+              default = [ ];
+              internal = true;
+              description = "NixOS assertion expressions for this instance.";
+            };
+            options.warnings = mkOption {
+              type = types.listOf types.unspecified;
+              default = [ ];
+              internal = true;
+              description = "NixOS warning expressions for this instance.";
+            };
             config = {
               settings.runner.name = mkDefault name;
               assertions = [
