@@ -9,7 +9,7 @@
   inherit (utils) escapeSystemdPath;
 
   cfg = config.canix-toolbelt.services.forgejoRunner.containerRuntime;
-  runnerCfg = config.services.forgejo.runner;
+  runnerCfg = config.services.forgejo-runner;
 
   jobContainerPath = concatStringsSep ":" [
     "/usr/local/bin"
@@ -163,8 +163,8 @@
 
   runnerUnitNames =
     map
-    (instance: "forgejo-runner@${escapeSystemdPath instance.name}")
-    (lib.attrValues runnerCfg.instances);
+    (name: "forgejo-runner-${escapeSystemdPath name}")
+    (lib.attrNames (lib.filterAttrs (_: instance: instance.enable) runnerCfg.instances));
 
   runnerServiceNames = map (name: "${name}.service") runnerUnitNames;
 
