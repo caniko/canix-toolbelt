@@ -1,209 +1,288 @@
-# ─────────────────────────────────────────────────────────────────────
-# Vendored from NixOS/nixpkgs#496325 ("nixos/forgejo.runner: initialize module")
-#   Upstream:    https://github.com/NixOS/nixpkgs/pull/496325
-#   Synced SHA:  4c4eb93db80d19ad1039027ae1b5fa4fc4915fc2
-#   Sync date:   2026-05-25
-#
-# Intentional local deltas vs the synced SHA:
-#   - (none — fully synced)
-#
-# Re-sync workflow: see canix/docs/planning/forgejo-runner-tls-fix/.
-# ─────────────────────────────────────────────────────────────────────
 {
   config,
   lib,
   pkgs,
+  utils,
   ...
-}: let
-  inherit
-    (lib)
-    any
-    concatStringsSep
-    escapeShellArg
-    hasInfix
-    hasSuffix
+}:
+
+let
+  inherit (lib)
+    foldlAttrs
     literalExpression
-    mapAttrs'
     mkEnableOption
     mkIf
     mkOption
     mkPackageOption
+    mkRemovedOptionModule
+    mkRenamedOptionModule
     nameValuePair
     optionalAttrs
     optionals
-    teams
     types
     ;
 
-  cfg = config.services.forgejo.runner;
-
-  settingsFormat = pkgs.formats.yaml {};
-
-  instanceLabels = instance:
-    (lib.defaultTo [] instance.labels)
-    ++ lib.concatMap (connection: lib.defaultTo [] (connection.labels or [])) (
-      lib.attrValues (instance.settings.server.connections or {})
-    );
-
-  hasDockerScheme = labels: any (label: hasInfix ":docker:" label) labels;
-  hasHostScheme = labels: any (label: hasSuffix ":host" label) labels;
+  cfg = config.services.forgejo-runner;
+  settingsFormat = pkgs.formats.yaml { };
+  secretsType =
+    let
+      pathType = types.pathWith {
+        inStore = false;
+        absolute = true;
+      };
+      base = types.oneOf [
+        pathType
+        (types.attrsOf base)
+      ];
+    in
+    base
+    // {
+      description = "nested attribute set of ${pathType.description}";
+    };
 
   hasDocker = config.virtualisation.docker.enable;
   hasPodman = config.virtualisation.podman.enable;
+  hasContainerRuntime = hasDocker || hasPodman;
+  labels =
+    instance:
+    instance.settings.runner.labels
+    ++ (lib.flatten (
+      lib.mapAttrsToList (_: value: value.labels or [ ]) instance.settings.server.connections
+    ));
+in
+{
+  meta.maintainers = pkgs.forgejo-runner.meta.maintainers;
 
-  labelsOption = mkOption {
-    type = types.nullOr (types.listOf types.str);
-    default = null;
-    example = literalExpression ''
-      [
-        # provide a debian base with nodejs for actions
-        "debian-latest:docker://node:18-bullseye"
-        # fake the ubuntu name, because node provides no ubuntu builds
-        "ubuntu-latest:docker://node:18-bullseye"
-        # provide native execution on the host
-        #"native:host"
-      ]
-    '';
-    description = ''
-      Labels used to map jobs to their runtime environment. Changing these
-      labels currently requires a new registration token.
-
-      Many common actions require bash, git and nodejs, as well as a filesystem
-      that follows the filesystem hierarchy standard.
-    '';
-  };
-  urlOption = mkOption {
-    type = types.nullOr types.str;
-    default = null;
-    example = "https://forge.example.com";
-    description = ''
-      Base URL of your Forgejo instance.
-
-      Can also be specified in `settings.servier.connections`
-    '';
-  };
-in {
-  meta.maintainers = teams.forgejo.members;
-
-  options.services.forgejo.runner = with types; {
-    package = mkPackageOption pkgs "forgejo-runner" {};
+  options.services.forgejo-runner = {
+    package = mkPackageOption pkgs "forgejo-runner" { };
 
     instances = mkOption {
-      default = {};
+      default = { };
       description = ''
-        Forgejo Actions Runner instances.
+        Forgejo Runner instances.
       '';
-      type = attrsOf (
-        submodule (
+      type = types.attrsOf (
+        types.submodule (
           {
+            options,
             config,
             name,
             ...
-          }: {
+          }:
+          {
+            imports = [
+              ../../misc/assertions.nix
+            ];
+
+            config = {
+              settings.runner.name = mkDefault name;
+              assertions = [
+                {
+                  assertion = config.isDocker -> hasContainerRuntime;
+                  message = ''
+                    The instance `${name}' has at least one label of
+                    type `:docker:' configured, but no compatible container runtime enabled.
+
+                    You need to enable either
+                    `config.virtualisation.docker.enable' or
+                    `config.virtualisation.podman.enable'.
+                  '';
+                }
+              ]
+              ++ (foldlAttrs (
+                assertions: _: connection:
+                assertions ++ connection.assertions
+              ) [ ] config.settings.server.connections);
+            };
+
             options = {
-              labels = labelsOption;
-              enable = mkEnableOption "Forgejo Actions Runner instance";
-
-              name = mkOption {
-                type = types.str;
-                example = literalExpression "config.networking.hostName";
-                description = ''
-                  The name identifying the runner instance towards the Forgejo instance.
-                '';
-                default = name;
-              };
-
-              url = urlOption;
-
-              user = mkOption {
-                type = types.str;
-                description = "The dynamic username of the runner service.";
-                default = "forgejo-runner-${config.name}";
-                defaultText = literalExpression "forgejo-runner-\${name}";
-              };
-
-              registrationTokenFile = mkOption {
-                type = types.nullOr (types.either types.str types.path);
-                default = null;
-                description = ''
-                  Path to a file containing only the token that will be used to register
-                  on start with the the configured Forgejo instance.
-
-                  **Deprecated** Replaced by `settings.server.connections`
-
-                  <https://forgejo.org/docs/latest/admin/actions/registration/>
-                '';
-              };
-
-              credentials = mkOption {
-                type = types.attrsOf types.path;
-                default = {};
-                example = {
-                  WORKER1_TOKEN = "/run/keys/worker1";
-                };
-                description = ''
-                  Environment variables with absolute paths to credentials files to load
-                  on runner startup.
-
-                  Use with Forgejo v15+ pre-registered server connections:
-
-                  `settings.server.connections.<connection>.token_url = "file:$CREDENTIALS_DIRECTORY/WORKER1_TOKEN"`
-                '';
-              };
+              enable = mkEnableOption "Forgejo Runner instance";
 
               settings = mkOption {
+                default = { };
                 description = ''
-                  Configuration for `forgejo-runner daemon`.
-                  See <https://code.forgejo.org/forgejo/runner/src/branch/main/internal/pkg/config/config.example.yaml> for an example configuration.
-                '';
+                  Free-form settings written directly to the `config.yaml` file.
+                  Refer to [`config.example.yaml`] or run {command}`forgejo-runner generation-config` for supported values.
 
+                  [`config.example.yaml`]: https://code.forgejo.org/forgejo/runner/src/branch/main/internal/pkg/config/config.example.yaml
+                '';
                 type = types.submodule {
                   freeformType = settingsFormat.type;
+                  options = {
+                    runner.labels = mkOption {
+                      type = types.listOf types.str;
+                      default = [ ];
+                      description = ''
+                        Labels used to map jobs to their runtime environment.
 
-                  options.server.connections = mkOption {
-                    type = types.attrsOf (
-                      types.submodule {
-                        freeformType = settingsFormat.type;
-                        options = {
-                          url = urlOption;
-                          labels = labelsOption;
-                          token_url = mkOption {
-                            type = types.either types.str types.path;
-                            description = ''
-                              Path to the Forgejo v15+ pre-registered runner token.
-                              Supports a single placeholder: `$CREDENTIALS_DIRECTORY`
+                        If you specify a label of type `:docker:`, the resulting runner service
+                        will be automatically added to the Podman or Docker group.
 
-                              Can be combined with `instances.<instance>.credentails`
+                        See <https://forgejo.org/docs/latest/admin/actions/configuration/#choosing-labels>.
+                      '';
+                      example = literalExpression ''
+                        [
+                          "ubuntu-latest:docker://node:current"
+                        ]
+                      '';
+                    };
 
-                              <https://forgejo.org/docs/latest/admin/actions/registration/>
-                            '';
+                    server.connections = mkOption {
+                      type = types.attrsOf (types.submodule (
+                        { config, ... }:
+                        {
+                          freeformType = settingsFormat.type;
+                          options = {
+                            url = mkOption {
+                              type = types.nullOr types.str;
+                              default = null;
+                            };
+                            uuid = mkOption {
+                              type = types.nullOr types.str;
+                              default = null;
+                            };
+                            token = mkOption {
+                              type = types.nullOr types.str;
+                              default = null;
+                            };
+                            token_url = mkOption {
+                              type = types.nullOr types.str;
+                              default = null;
+                            };
+                            labels = mkOption {
+                              type = types.listOf types.str;
+                              default = [ ];
+                            };
                           };
-                        };
-                      }
-                    );
-                    default = {};
-                    description = ''
-                      Forgejo v15+ pre-registered server connections.
-
-                      See <https://forgejo.org/docs/latest/admin/actions/registration>
-                    '';
-                    example = literalExpression ''
-                      {
-                        worker1 = {
-                          url = "https://forgejo.mine";
-                          uuid = "4708f0f2-4185-49b4-8552-bc7261ec26aa";
-                          token_url = "file:$CREDENTIALS_DIRECTORY/WORKER1_TOKEN";
-                          labels = [
-                            "debian:docker://docker.io/library/node:lts"
-                            "local/x86_64-linux:host"
-                          ];
-                        };
-                      };
-                    '';
+                        }
+                      ));
+                      default = { };
+                      internal = true;
+                      description = ''
+                        Connection settings generated from {option}`connections`.
+                      '';
+                    };
                   };
+                  config = lib.mapAttrsRecursive (
+                    path: value: "file:$CREDENTIALS_DIRECTORY/${lib.join "__" path}"
+                  ) config.secrets;
                 };
+              };
 
-                default = {};
+              connections = mkOption {
+                type = types.attrsOf (types.submodule (
+                  { name, ... }:
+                  {
+                    options = {
+                      url = mkOption {
+                        type = types.str;
+                        example = "https://example.com/";
+                        description = ''
+                          Base URL of your Forgejo instance.
+                        '';
+                      };
+                      uuid = mkOption {
+                        type = types.str;
+                        example = "c9e50be9-a7c3-4aee-ba35-624c4ff8c519";
+                        description = ''
+                          UUID of this runner.
+
+                          See <https://forgejo.org/docs/latest/admin/actions/registration/>.
+                        '';
+                      };
+                      token = mkOption {
+                        type = types.nullOr types.str;
+                        default = null;
+                        example = "6634bb58be0db23cc013a2e72dd1828ae0257cf";
+                        description = ''
+                          Token of this runner.
+
+                          See <https://forgejo.org/docs/latest/admin/actions/registration/>.
+                        '';
+                      };
+                      tokenFile = mkOption {
+                        type = types.nullOr types.path;
+                        default = null;
+                        description = ''
+                          File containing the runner token.
+                          The file content is read via systemd {manpage}`LoadCredential=` and referenced
+                          as {option}`settings.server.connections.<name>.token_url`.
+
+                          ::: {.note}
+                          The file must contain the token on a single line, without any wrapper
+                          such as `TOKEN=`.
+                          :::
+                        '';
+                      };
+                      labels = mkOption {
+                        type = types.listOf types.str;
+                        default = [ ];
+                        description = ''
+                          Instance-specific labels for this connection.
+
+                          See <https://forgejo.org/docs/latest/admin/actions/configuration/#choosing-labels>.
+                        '';
+                      };
+                      fetchInterval = mkOption {
+                        type = types.nullOr types.str;
+                        default = null;
+                        example = "30s";
+                        description = ''
+                          How often this connection fetches new jobs from the Forgejo instance.
+                        '';
+                      };
+                    };
+                    config.settings.server.connections.${name} = {
+                      inherit (config) url uuid;
+                      token_url =
+                        if config.tokenFile != null
+                        then "file:$CREDENTIALS_DIRECTORY/${lib.escapeSystemdPath (builtins.toString config.tokenFile)}"
+                        else null;
+                      token =
+                        if config.token != null
+                        then config.token
+                        else null;
+                      labels = config.labels;
+                    } // lib.optionalAttrs (config.fetchInterval != null) {
+                      fetch_interval = config.fetchInterval;
+                    };
+                  }
+                ));
+                default = { };
+                description = ''
+                  One or more connections to Forgejo, each with a UUID and Token pair.
+
+                  See <https://forgejo.org/docs/latest/admin/actions/registration/>.
+                '';
+                example = literalExpression ''
+                  {
+                    default = {
+                      url = "https://example.com/";
+                      uuid = "c9e50be9-a7c3-4aee-ba35-624c4ff8c519";
+                      tokenFile = "/run/keys/forgejo-runner_token";
+                    };
+                  }
+                '';
+              };
+
+              secrets = mkOption {
+                type = secretsType;
+                default = { };
+                description = ''
+                  This follows the same structure as {option}`settings`
+                  but the value of each key is a path instead of a string, list or bool.
+
+                  The specified secret path is then read by systemd via {manpage}`LoadCredential=`
+                  and templated into {option}`settings` for you.
+                '';
+                example = literalExpression ''
+                  {
+                    server.connections.example = {
+                      token_url = "/run/keys/forgejo-runner_token";
+                    };
+                    cache.secret_url = "/run/keys/forgejo-runner_cache-secret";
+                  }
+                '';
               };
 
               hostPackages = mkOption {
@@ -213,27 +292,45 @@ in {
                   coreutils
                   curl
                   gawk
-                  gitMinimal
                   gnused
                   nodejs
                   wget
                 ];
                 defaultText = literalExpression ''
                   with pkgs; [
-                    bash
-                    coreutils
-                    curl
-                    gawk
-                    gitMinimal
-                    gnused
-                    nodejs
-                    wget
+                    bash coreutils curl gawk gnused nodejs wget
                   ]
                 '';
                 description = ''
-                  List of packages that are available to actions, when the runner is configured
-                  with a host execution label.
+                  List of packages available to workflows when the runner is
+                  configured with a label of type `:host`.
                 '';
+              };
+
+              isDocker = mkOption {
+                internal = true;
+                readOnly = true;
+                type = types.bool;
+                default = lib.any (label: lib.hasInfix ":docker:" label) (labels config);
+                description = "Whether this instance has docker-type labels.";
+              };
+
+              isHost = mkOption {
+                internal = true;
+                readOnly = true;
+                type = types.bool;
+                default = lib.any (label: lib.hasSuffix ":host" label) (labels config);
+                description = "Whether this instance has host-type labels.";
+              };
+
+              configFile = mkOption {
+                internal = true;
+                readOnly = true;
+                type = types.path;
+                default = settingsFormat.generate "config.yaml" (
+                  lib.filterAttrsRecursive (n: _: n != "assertions" && n != "warnings") config.settings
+                );
+                description = "Generated config.yaml file for the runner daemon.";
               };
             };
           }
@@ -242,189 +339,52 @@ in {
     };
   };
 
-  config = mkIf (cfg.instances != {}) {
-    assertions =
-      lib.foldlAttrs (
-        acc_inst: _: instance: let
-          userNameLength = builtins.stringLength instance.user;
-        in
-          (lib.foldlAttrs (
-              acc_conn: name: connection:
-                acc_conn
-                ++ [
-                  {
-                    assertion = connection.url != null;
-                    message = "forgejo.runner.instances.${instance.name}.settings.server.connections.${name} requires `url` to be set.";
-                  }
-                  {
-                    assertion = !(connection ? token);
-                    message = "forgejo.runner.instances.${instance.name}.settings.server.connections.${name}.token cannot be used, use token_url instead.";
-                  }
-                  {
-                    assertion = connection ? uuid;
-                    message = "forgejo.runner.instances.${instance.name}.settings.server.connections.${name}.uuid is required.";
-                  }
-                ]
-            )
-            acc_inst
-            instance.settings.server.connections)
-          ++ [
-            {
-              assertion =
-                instance.settings.server.connections
-                != {}
-                -> instance.registrationTokenFile == null && instance.url == null && instance.labels == null;
-              message = "forgejo.runner.instances.${instance.name} cannot contain both url/registrationTokenFile and settings.server.connections";
-            }
-            {
-              assertion = instance.registrationTokenFile != null -> instance.url != null;
-              message = "forgejo.runner.instances.${instance.name}.registrationTokenFile requires `url` to be set.";
-            }
-            {
-              assertion = instance.labels != null -> instance.registrationTokenFile != null;
-              message = "forgejo.runner.instances.${instance.name}.labels requires `registrationTokenFile` to be set.";
-            }
-            {
-              assertion = hasDockerScheme (instanceLabels instance) -> hasDocker || hasPodman;
-              message = "forgejo.runner.instances.${instance.name} label configuration requires either docker or podman.";
-            }
-            {
-              assertion = userNameLength <= 31;
-              message = ''forgejo.runner.instances.${instance.name}.user = "${instance.user}" has a length of ${toString userNameLength} which exceeds 31 character limit from systemd+glibc. Shorten instance name or explicitly define `instances.<name>.user`.'';
-            }
-          ]
-      ) []
-      cfg.instances;
+  config = mkIf (cfg.instances != { }) {
+    assertions = foldlAttrs (assertions: _: instance: assertions ++ instance.assertions) [ ] cfg.instances;
+    warnings = foldlAttrs (warnings: _: instance: warnings ++ instance.warnings) [ ] cfg.instances;
 
-    systemd.services = let
-      mkRunnerInstance = _: instance: let
-        allLabels = instanceLabels instance;
-        wantsContainer = hasDockerScheme allLabels;
-        wantsHost = hasHostScheme allLabels;
-        wantsDocker = wantsContainer && hasDocker;
-        wantsPodman = wantsContainer && hasPodman;
-        configFile = settingsFormat.generate "forgejo-runner-${instance.name}.yaml" instance.settings;
+    systemd.services =
+      let
+        mkRunnerService =
+          name: instance:
+          let
+            wantsHost = instance.isHost;
+            wantsDocker = instance.isDocker && hasDocker;
+            wantsPodman = instance.isDocker && hasPodman;
+          in
+          nameValuePair "forgejo-runner-${utils.escapeSystemdPath name}" {
+            inherit (instance) enable;
+            description = "Forgejo Runner (${name})";
+            wants = [ "network-online.target" ];
+            after =
+              [ "network-online.target" ]
+              ++ optionals wantsDocker [ "docker.service" ]
+              ++ optionals wantsPodman [ "podman.service" ];
+            wantedBy = [ "multi-user.target" ];
+            environment = {
+              HOME = "/var/lib/forgejo-runner/${name}";
+            } // optionalAttrs wantsPodman {
+              DOCKER_HOST = "unix:///run/podman/podman.sock";
+            };
+            path = optionals wantsHost instance.hostPackages ++ [ pkgs.gitMinimal ];
+
+            serviceConfig = {
+              DynamicUser = true;
+              StateDirectory = "forgejo-runner/${name}";
+              WorkingDirectory = "-/var/lib/forgejo-runner/${name}";
+              ExecPaths = optionals wantsHost [ "/var/lib/forgejo-runner/${name}" ];
+              ExecStart = "${lib.getExe cfg.package} daemon --config ${instance.configFile}";
+              Restart = "on-failure";
+              RestartSec = 10;
+              LoadCredential = lib.mapAttrsToListRecursive (
+                path: value: "${lib.join "__" path}:${value}"
+              ) instance.secrets;
+              SupplementaryGroups =
+                optionals wantsDocker [ "docker" ]
+                ++ optionals wantsPodman [ "podman" ];
+            };
+          };
       in
-        nameValuePair "forgejo-runner@${instance.name}" {
-          overrideStrategy = "asDropin";
-          inherit (instance) enable;
-          wants =
-            [
-              "network-online.target"
-            ]
-            ++ optionals wantsDocker ["docker.service"]
-            ++ optionals wantsPodman ["podman.service"];
-          after =
-            [
-              "network-online.target"
-            ]
-            ++ optionals wantsDocker ["docker.service"]
-            ++ optionals wantsPodman ["podman.service"];
-          wantedBy = ["multi-user.target"];
-
-          environment = optionalAttrs wantsPodman {
-            DOCKER_HOST = "unix:///run/podman/podman.sock";
-          };
-
-          path = [pkgs.coreutils] ++ lib.optionals wantsHost instance.hostPackages;
-
-          serviceConfig = {
-            User = instance.user;
-            MemoryDenyWriteExecute = !wantsHost;
-
-            LoadCredential =
-              lib.optionals (instance.registrationTokenFile != null) [
-                "REGISTRATION_TOKEN:${instance.registrationTokenFile}"
-              ]
-              ++ lib.mapAttrsToList (name: value: "${name}:${value}") instance.credentials;
-
-            SupplementaryGroups = optionals wantsDocker ["docker"] ++ optionals wantsPodman ["podman"];
-            ExecPaths = lib.optionals wantsHost ["/var/lib/forgejo-runner/${instance.name}"];
-
-            ExecStartPre = lib.optionals (instance.registrationTokenFile != null) [
-              (lib.getExe (
-                pkgs.writeShellApplication {
-                  name = "forgejo-register-runner-${instance.name}";
-                  text = ''
-                    INSTANCE_DIR="$STATE_DIRECTORY"
-                    mkdir -vp "$INSTANCE_DIR"
-                    cd "$INSTANCE_DIR"
-
-                    LABELS_FILE="$INSTANCE_DIR/.labels.sha256"
-                    LABELS_WANTED="$(echo ${escapeShellArg (concatStringsSep "\n" instance.labels)} | sort)"
-                    LABELS_WANTED_HASH="$(printf '%s' "$LABELS_WANTED" | sha256sum | cut -d' ' -f1)"
-                    LABELS_CURRENT_HASH="$(cat "$LABELS_FILE" 2>/dev/null || true)"
-
-                    if [ ! -e "$INSTANCE_DIR/.runner" ] || [ "$LABELS_WANTED_HASH" != "$LABELS_CURRENT_HASH" ]; then
-                      rm -vf "$INSTANCE_DIR/.runner" || true
-
-                      ${cfg.package}/bin/forgejo-runner register \
-                        --no-interactive \
-                        --instance ${escapeShellArg instance.url} \
-                        --token "$(cat "$CREDENTIALS_DIRECTORY/REGISTRATION_TOKEN")" \
-                        --name ${escapeShellArg instance.name} \
-                        --labels ${escapeShellArg (concatStringsSep "," instance.labels)} \
-                        --config ${configFile}
-
-                      printf '%s' "$LABELS_WANTED_HASH" > "$LABELS_FILE"
-                    fi
-                  '';
-                }
-              ))
-            ];
-
-            ExecStart = lib.mkForce "${cfg.package}/bin/forgejo-runner daemon --config ${configFile}";
-          };
-        };
-    in
-      {
-        "forgejo-runner@" = {
-          description = "Forgejo Actions Runner (%I)";
-
-          environment = {
-            HOME = "/var/lib/forgejo-runner/%i";
-          };
-
-          serviceConfig = {
-            DynamicUser = true;
-            User = "forgejo-runner-%i";
-            StateDirectory = "forgejo-runner/%i";
-            WorkingDirectory = "/var/lib/forgejo-runner/%i";
-
-            Restart = "on-failure";
-            RestartSec = 2;
-
-            AmbientCapabilities = "";
-            CapabilityBoundingSet = "";
-            LockPersonality = true;
-            NoNewPrivileges = true;
-            PrivateDevices = true;
-            PrivateTmp = true;
-            ProcSubset = "pid";
-            ProtectClock = true;
-            ProtectControlGroups = true;
-            ProtectHome = true;
-            ProtectHostname = true;
-            ProtectKernelLogs = true;
-            ProtectKernelModules = true;
-            ProtectKernelTunables = true;
-            ProtectProc = "invisible";
-            ProtectSystem = "strict";
-            RemoveIPC = true;
-            RestrictAddressFamilies = [
-              "AF_INET"
-              "AF_INET6"
-              "AF_UNIX"
-            ];
-            RestrictNamespaces = true;
-            RestrictRealtime = true;
-            RestrictSUIDSGID = true;
-            SystemCallArchitectures = "native";
-            SystemCallFilter = ["@system-service"];
-            UMask = "0077";
-          };
-        };
-      }
-      // mapAttrs' mkRunnerInstance cfg.instances;
+      lib.mapAttrs' mkRunnerService (lib.filterAttrs (_: instance: instance.enable) cfg.instances);
   };
 }
