@@ -71,10 +71,6 @@ in
             ...
           }:
           {
-            imports = [
-              ../misc/assertions.nix
-            ];
-
             config = {
               settings.runner.name = mkDefault name;
               assertions = [
