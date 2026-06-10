@@ -72,20 +72,27 @@
     exec "$@"
   '';
 
+  # libgit2 (used by nix's fetchers) and git both refuse to open repositories
+  # owned by a different uid ("dubious ownership"); bind-mounted sources and
+  # store paths inside job containers routinely trip this. CI containers are
+  # single-purpose, so trust every path.
+  imageBaseFiles = ''
+    mkdir -p etc root usr/bin
+    cat > etc/passwd <<'EOF'
+    root:x:0:0:root:/root:/bin/bash
+    EOF
+    cat > etc/group <<'EOF'
+    root:x:0:
+    EOF
+    printf '[safe]\n\tdirectory = *\n' > etc/gitconfig
+    ln -s /bin/env usr/bin/env
+  '';
+
   runnerImage = pkgs.dockerTools.buildLayeredImage {
     name = cfg.imageName;
     tag = cfg.imageTag;
     contents = cfg.imageContents ++ cfg.imageExtraContents;
-    extraCommands = ''
-      mkdir -p etc root usr/bin
-      cat > etc/passwd <<'EOF'
-      root:x:0:0:root:/root:/bin/bash
-      EOF
-      cat > etc/group <<'EOF'
-      root:x:0:
-      EOF
-      ln -s /bin/env usr/bin/env
-    '';
+    extraCommands = imageBaseFiles;
     config = {
       Env = [
         "PATH=/bin:/usr/bin"
@@ -104,14 +111,11 @@
     tag = cfg.hostNixImageTag;
     contents = cfg.hostNixImageContents ++ cfg.hostNixImageExtraContents;
     extraCommands = ''
-      mkdir -p etc root usr/bin
-      cat > etc/passwd <<'EOF'
-      root:x:0:0:root:/root:/bin/bash
+      ${imageBaseFiles}
+      mkdir -p etc/nix
+      cat > etc/nix/nix.conf <<'EOF'
+      experimental-features = nix-command flakes
       EOF
-      cat > etc/group <<'EOF'
-      root:x:0:
-      EOF
-      ln -s /bin/env usr/bin/env
     '';
     config = {
       Env = [
@@ -167,8 +171,6 @@
     (lib.attrNames (lib.filterAttrs (_: instance: instance.enable) runnerCfg.instances));
 
   runnerServiceNames = map (name: "${name}.service") runnerUnitNames;
-
-  podman = "${config.virtualisation.podman.package}/bin/podman";
 
   ensureRunnerImages = pkgs.writeShellScript "forgejo-runner-image-load" ''
     set -eu

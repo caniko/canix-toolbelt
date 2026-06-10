@@ -58,6 +58,18 @@ in {
       default = true;
       description = "Configure split DNS for the wg-home VPN domain via the VPN DNS server.";
     };
+
+    dynamicEndpointRefreshSeconds = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 10;
+      description = "Seconds between dynamic endpoint refresh attempts for the wg-home server peer.";
+    };
+
+    dynamicEndpointRefreshRestartSeconds = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 60;
+      description = "Seconds to wait before restarting the wg-home dynamic endpoint refresh service after a failed refresh.";
+    };
   };
 
   config = lib.mkIf (hostWgHomeIp != null) {
@@ -103,7 +115,7 @@ in {
             publicKey = wgServerPublicKey;
             allowedIPs = ["10.123.0.0/24"];
             endpoint = "${wgHome.endpointHost}:${toString wgHome.port}";
-            dynamicEndpointRefreshSeconds = 10;
+            inherit (cfg) dynamicEndpointRefreshSeconds dynamicEndpointRefreshRestartSeconds;
             persistentKeepalive = 25;
           }
         ];

@@ -7,6 +7,7 @@
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
+  secretManagerPkg = inputs.secret-manager.packages.${pkgs.system}.default;
 
   inherit
     (lib)
@@ -468,7 +469,7 @@
       trap '${pkgs.coreutils}/bin/rm -rf "$workdir"' EXIT
       ${pkgs.coreutils}/bin/cp -RL "$source_config"/. "$workdir/config"
       ${pkgs.coreutils}/bin/chmod -R u+w "$workdir/config"
-      export RAGE_BIN=${pkgs.rage}/bin/rage
+      export SECRET_MANAGER_BIN=${secretManagerPkg}/bin/secret-manager
       export CANIX_DNS_AGE_IDENTITIES="''${CANIX_DNS_AGE_IDENTITIES:-${defaultAgeIdentities}}"
       ${lib.optionalString cacheEnabled ''
         export CANIX_DNS_DECRYPT_CACHE_DIR="${validatedCacheDir}"
@@ -479,9 +480,6 @@
 
       decrypt_agenix_file() {
         encrypted_file="$1"
-        if [ -z "$CANIX_DNS_AGE_IDENTITIES" ]; then
-          return 1
-        fi
         ${lib.optionalString cacheEnabled ''
         cache_dir="${validatedCacheDir}"
         ${pkgs.coreutils}/bin/mkdir -p "$cache_dir"
@@ -506,12 +504,21 @@
           return 0
         fi
       ''}
-        old_ifs="$IFS"
-        IFS=:
-        for identity in $CANIX_DNS_AGE_IDENTITIES; do
+        # Build --identity flags from CANIX_DNS_AGE_IDENTITIES
+        if [ -n "$CANIX_DNS_AGE_IDENTITIES" ]; then
+          old_ifs="$IFS"
+          IFS=:
+          set -- $CANIX_DNS_AGE_IDENTITIES
           IFS="$old_ifs"
-          if [ -r "$identity" ] && plaintext="$(${pkgs.rage}/bin/rage --decrypt --identity "$identity" "$encrypted_file")"; then
-            ${lib.optionalString cacheEnabled ''
+          identity_args=""
+          for identity in "$@"; do
+            identity_args="$identity_args --identity $identity"
+          done
+          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt $identity_args "$encrypted_file")" || return 1
+        else
+          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt "$encrypted_file")" || return 1
+        fi
+        ${lib.optionalString cacheEnabled ''
         tmp="$(${pkgs.coreutils}/bin/mktemp "$cache_dir/.tmp.XXXXXX")" || return 1
         cleanup_tmp() {
           ${pkgs.coreutils}/bin/rm -f "$tmp"
@@ -529,13 +536,8 @@
           return 1
         fi
       ''}
-            printf '%s' "$plaintext"
-            return 0
-          fi
-          IFS=:
-        done
-        IFS="$old_ifs"
-        return 1
+        printf '%s' "$plaintext"
+        return 0
       }
 
       if [ -z "''${CLOUDFLARE_API_TOKEN:-}" ]; then

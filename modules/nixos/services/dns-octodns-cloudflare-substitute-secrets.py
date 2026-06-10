@@ -111,13 +111,17 @@ def read_secret(replacement):
         cached_secret = read_cached_secret(path)
         if cached_secret is not None:
             return cached_secret.strip()
+        secret_manager_bin = os.environ.get("SECRET_MANAGER_BIN")
+        if not secret_manager_bin:
+            print("SECRET_MANAGER_BIN is not set", file=sys.stderr)
+            sys.exit(1)
         readable_identities = [
             identity
             for identity in age_identities
             if pathlib.Path(identity).is_file() and os.access(identity, os.R_OK)
         ]
         if readable_identities:
-            cmd = [os.environ["RAGE_BIN"], "--decrypt"]
+            cmd = [secret_manager_bin, "decrypt"]
             for identity in readable_identities:
                 cmd.extend(["--identity", identity])
             cmd.append(str(path))
