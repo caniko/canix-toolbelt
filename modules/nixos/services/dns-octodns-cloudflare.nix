@@ -7,7 +7,7 @@
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
-  secretManagerPkg = inputs.secret-manager.packages.${pkgs.system}.default;
+  secretManagerPkg = inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
   inherit
     (lib)
