@@ -83,6 +83,12 @@ in {
         description = "Whether to enable services.rauthy.provision.";
       };
 
+      package = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = "Optional rauthy-provision package override.";
+      };
+
       groups = mkOption {
         type = attrs;
         default = {};
@@ -178,6 +184,9 @@ in {
       provision = mkIf cfg.provision.enable ({
           enable = true;
           endpoint = "http://${cfg.listenAddress}:${toString cfg.httpPort}";
+        }
+        // optionalAttrs (cfg.provision.package != null) {
+          package = cfg.provision.package;
         }
         // (
           if cfg.provision.stateFile != null
