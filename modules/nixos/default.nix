@@ -36,6 +36,7 @@
   host-registry = ./registry/hosts.nix;
   impure-files = ./registry/impure-files.nix;
   initrd-ssh = ./services/initrd-ssh.nix;
+  kanidm-preset = ./services/kanidm-preset.nix;
   power-cycle-relay = ./services/power-cycle-relay.nix;
   pypi-server = ./services/pypi-server.nix;
   rauthy-preset = ./services/rauthy-preset.nix;
