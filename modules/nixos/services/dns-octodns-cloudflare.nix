@@ -3,11 +3,11 @@
   inputs,
   lib,
   pkgs,
+  crossbowBuildPkgs ? pkgs,
   ...
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
-  dnsGenerationPkgs = inputs.nixpkgs.legacyPackages.${config.nixpkgs.buildPlatform.system};
   secretManagerPkg = inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
   inherit
@@ -29,7 +29,7 @@
     types
     ;
 
-  dnsGenerate = dnsManager.lib.generate dnsGenerationPkgs;
+  dnsGenerate = dnsManager.lib.generate crossbowBuildPkgs;
 
   recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
