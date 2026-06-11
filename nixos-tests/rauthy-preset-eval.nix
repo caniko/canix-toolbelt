@@ -67,6 +67,46 @@
       }
     ];
   };
+  stateFileEval = lib.evalModules {
+    specialArgs = {inherit pkgs;};
+    modules = [
+      ({lib, ...}: {
+        options.services.rauthy = lib.mkOption {
+          type = lib.types.submodule {
+            freeformType = lib.types.attrsOf lib.types.anything;
+            options.provision = lib.mkOption {
+              type = lib.types.submodule {
+                freeformType = lib.types.attrsOf lib.types.anything;
+              };
+              default = {};
+              description = "Test stub for services.rauthy.provision.";
+            };
+          };
+          default = {};
+          description = "Test stub for services.rauthy.";
+        };
+        options.networking.hosts = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.listOf lib.types.str);
+          default = {};
+          description = "Test stub for networking.hosts.";
+        };
+      })
+      ../modules/nixos/services/rauthy-preset.nix
+      {
+        canix-toolbelt.services.rauthyPreset = {
+          enable = true;
+          hostname = "id.example.com";
+          environmentFile = "/run/secrets/rauthy-env";
+          adminEmail = "admin@example.com";
+          webauthn = {
+            rpId = "example.com";
+            rpName = "Example";
+          };
+          provision.stateFile = pkgs.writeText "rauthy-state.json" "{}";
+        };
+      }
+    ];
+  };
 in
   pkgs.runCommand "rauthy-preset-eval" {} ''
     test ${lib.escapeShellArg eval.config.services.rauthy.settings.server.pub_url} = id.example.com
@@ -79,5 +119,12 @@ in
     test ${lib.escapeShellArg (builtins.head eval.config.networking.hosts."127.0.0.1")} = mail.example.com
     scopes=${lib.escapeShellArg (builtins.toJSON eval.config.services.rauthy.provision.scopes)}
     printf '%s' "$scopes" | grep -q 'claimsAtRoot'
+    test -f ${stateFileEval.config.services.rauthy.provision.stateFile}
+    state_file_keys=${lib.escapeShellArg (builtins.toJSON (builtins.attrNames stateFileEval.config.services.rauthy.provision))}
+    printf '%s' "$state_file_keys" | grep -q 'stateFile'
+    if printf '%s' "$state_file_keys" | grep -q 'groups'; then
+      echo "stateFile mode must not forward declarative groups from the preset" >&2
+      exit 1
+    fi
     touch $out
   ''

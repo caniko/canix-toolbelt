@@ -89,6 +89,12 @@ in {
         description = "Rauthy groups passed to services.rauthy.provision.groups.";
       };
 
+      stateFile = mkOption {
+        type = types.nullOr pathOrString;
+        default = null;
+        description = "Optional pre-rendered rauthy-provision JSON state file.";
+      };
+
       userAttributes = mkOption {
         type = attrs;
         default = {};
@@ -169,33 +175,42 @@ in {
 
   config = mkIf cfg.enable {
     services.rauthy = let
-      provision = mkIf cfg.provision.enable {
-        enable = true;
-        endpoint = "http://${cfg.listenAddress}:${toString cfg.httpPort}";
-        groups = cfg.provision.groups;
-        userAttributes = cfg.provision.userAttributes;
-        scopes = cfg.provision.scopes;
-        providers = cfg.provision.providers;
-        clients = cfg.provision.clients;
-        users = cfg.provision.users;
-
-        generatedApiKey = mkIf cfg.provision.generatedApiKey.enable {
+      provision = mkIf cfg.provision.enable ({
           enable = true;
-          configFile = rauthyConfigFile;
-          environmentFile =
-            if cfg.provision.generatedApiKey.environmentFile != null
-            then cfg.provision.generatedApiKey.environmentFile
-            else cfg.environmentFile;
-          file = cfg.provision.generatedApiKey.file;
-          generatedSecretsFile = cfg.provision.generatedApiKey.generatedSecretsFile;
-          generatedSecretsTtl = cfg.provision.generatedApiKey.generatedSecretsTtl;
-        };
+          endpoint = "http://${cfg.listenAddress}:${toString cfg.httpPort}";
+        }
+        // (
+          if cfg.provision.stateFile != null
+          then {
+            stateFile = cfg.provision.stateFile;
+          }
+          else {
+            groups = cfg.provision.groups;
+            userAttributes = cfg.provision.userAttributes;
+            scopes = cfg.provision.scopes;
+            providers = cfg.provision.providers;
+            clients = cfg.provision.clients;
+            users = cfg.provision.users;
+          }
+        )
+        // {
+          generatedApiKey = mkIf cfg.provision.generatedApiKey.enable {
+            enable = true;
+            configFile = rauthyConfigFile;
+            environmentFile =
+              if cfg.provision.generatedApiKey.environmentFile != null
+              then cfg.provision.generatedApiKey.environmentFile
+              else cfg.environmentFile;
+            file = cfg.provision.generatedApiKey.file;
+            generatedSecretsFile = cfg.provision.generatedApiKey.generatedSecretsFile;
+            generatedSecretsTtl = cfg.provision.generatedApiKey.generatedSecretsTtl;
+          };
 
-        transientApiKey = mkIf cfg.provision.transientApiKey.enable {
-          enable = true;
-          ttl = cfg.provision.transientApiKey.ttl;
-        };
-      };
+          transientApiKey = mkIf cfg.provision.transientApiKey.enable {
+            enable = true;
+            ttl = cfg.provision.transientApiKey.ttl;
+          };
+        });
     in
       {
         inherit provision;
