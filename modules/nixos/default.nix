@@ -38,6 +38,7 @@
   initrd-ssh = ./services/initrd-ssh.nix;
   power-cycle-relay = ./services/power-cycle-relay.nix;
   pypi-server = ./services/pypi-server.nix;
+  rauthy-preset = ./services/rauthy-preset.nix;
   rbac = ./registry/rbac.nix;
   samba = ./services/samba.nix;
   service-registry = ./registry/services.nix;
