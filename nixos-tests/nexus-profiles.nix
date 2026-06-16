@@ -1,5 +1,8 @@
 {pkgs, ...}: let
-  toolbeltLib = import ../lib {inherit (pkgs) lib;};
+  inherit (pkgs) lib;
+  inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
+
+  toolbeltLib = import ../lib {inherit lib;};
 
   goodModule = toolbeltLib.nexus.mkProfilesForHost {
     hostName = "client";
@@ -90,19 +93,23 @@ in {
     '';
   };
 
-  nexus-device-types-assertion =
-    pkgs.runCommand "nexus-device-types-assertion" {
-      assertionFailed =
-        if badEvalResult.success
-        then throw "expected nexus deviceTypes assertion to fail, but eval succeeded"
-        else "1";
-      emptyInputHandled =
-        if emptyModule == {canix-toolbelt.profiles = {};}
-        then "1"
-        else throw "expected empty hostToggles to produce an empty profiles module";
-    } ''
-      mkdir -p "$out"
-      printf '%s\n' "deviceTypes assertion failed as expected" > "$out/result"
-      printf '%s\n' ${badEval} > "$out/bad-eval-path"
+  nexus-device-types-assertion = mkEvalCheck {
+    name = "nexus-device-types-assertion";
+    resultMessage = "deviceTypes assertion failed as expected";
+    assertions = [
+      {
+        name = "device-types-assertion-failed";
+        assertion = !badEvalResult.success;
+        message = "expected nexus deviceTypes assertion to fail, but eval succeeded";
+      }
+      {
+        name = "empty-input-handled";
+        assertion = emptyModule == {canix-toolbelt.profiles = {};};
+        message = "expected empty hostToggles to produce an empty profiles module";
+      }
+    ];
+    runtimeScript = ''
+      printf '%s\n' ${lib.escapeShellArg (toString badEval)} > "$out/bad-eval-path"
     '';
+  };
 }

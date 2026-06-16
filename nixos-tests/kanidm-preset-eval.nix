@@ -1,5 +1,6 @@
 {pkgs, ...}: let
   inherit (pkgs) lib;
+  inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
   eval = lib.evalModules {
     specialArgs = {inherit pkgs;};
@@ -64,22 +65,79 @@
       }
     ];
   };
+
+  kanidm = eval.config.services.kanidm;
+  provision = kanidm.provision;
+  credentials = eval.config.services."kanidm-credentials";
+  hosts = eval.config.networking.hosts;
+  firewallPorts = eval.config.networking.firewall.allowedTCPPorts;
 in
-  pkgs.runCommand "kanidm-preset-eval" {} ''
-    set -eux
-    test ${lib.escapeShellArg eval.config.services.kanidm.server.settings.domain} = auth.example.com
-    test ${lib.escapeShellArg eval.config.services.kanidm.server.settings.bindaddress} = 127.0.0.1:8443
-    test ${lib.escapeShellArg eval.config.services.kanidm.server.settings.ldapbindaddress} = '[::]:3636'
-    test ${lib.escapeShellArg eval.config.services.kanidm.server.settings.tls_chain} = /run/certs/auth/fullchain.pem
-    test ${lib.escapeShellArg eval.config.services.kanidm.provision.instanceUrl} = https://auth.example.com
-    test -z ${lib.escapeShellArg (toString eval.config.services.kanidm.provision.autoRemove)}
-    test -f ${eval.config.services.kanidm.provision.extraJsonFile}
-    test ${lib.escapeShellArg eval.config.services.kanidm-credentials.instanceUrl} = https://auth.example.com:8443
-    test ${lib.escapeShellArg eval.config.services.kanidm-credentials.ldapUrl} = ldaps://auth.example.com:3636
-    test ${lib.escapeShellArg eval.config.services.kanidm-credentials.posixAccounts.alice.passwordFile} = /run/secrets/alice-posix
-    test ${lib.escapeShellArg eval.config.services.kanidm-credentials.serviceAccount.name} = ldap-search
-    test ${lib.escapeShellArg (builtins.head eval.config.networking.hosts."127.0.0.1")} = auth.example.com
-    ports=${lib.escapeShellArg (builtins.toJSON eval.config.networking.firewall.allowedTCPPorts)}
-    printf '%s' "$ports" | grep -q 3636
-    touch $out
-  ''
+  mkEvalCheck {
+    name = "kanidm-preset-eval";
+    resultMessage = "kanidm preset evaluated expected module defaults";
+    assertions = [
+      {
+        name = "server-domain";
+        assertion = kanidm.server.settings.domain == "auth.example.com";
+        message = "expected Kanidm domain to match the preset domain";
+      }
+      {
+        name = "server-bind-address";
+        assertion = kanidm.server.settings.bindaddress == "127.0.0.1:8443";
+        message = "expected Kanidm HTTPS bind address to use loopback and the default HTTPS port";
+      }
+      {
+        name = "ldap-bind-address";
+        assertion = kanidm.server.settings.ldapbindaddress == "[::]:3636";
+        message = "expected Kanidm LDAP bind address to use the preset default";
+      }
+      {
+        name = "tls-chain";
+        assertion = kanidm.server.settings.tls_chain == "/run/certs/auth/fullchain.pem";
+        message = "expected Kanidm TLS chain path to be forwarded";
+      }
+      {
+        name = "provision-instance-url";
+        assertion = provision.instanceUrl == "https://auth.example.com";
+        message = "expected provision instanceUrl to default to the public domain";
+      }
+      {
+        name = "provision-auto-remove";
+        assertion = provision.autoRemove == false;
+        message = "expected provision autoRemove to default to false";
+      }
+      {
+        name = "credentials-instance-url";
+        assertion = credentials.instanceUrl == "https://auth.example.com:8443";
+        message = "expected credentials instanceUrl to include the HTTPS port";
+      }
+      {
+        name = "credentials-ldap-url";
+        assertion = credentials.ldapUrl == "ldaps://auth.example.com:3636";
+        message = "expected credentials ldapUrl to use the LDAP default port";
+      }
+      {
+        name = "posix-password-file";
+        assertion = credentials.posixAccounts.alice.passwordFile == "/run/secrets/alice-posix";
+        message = "expected POSIX account password file to be forwarded";
+      }
+      {
+        name = "service-account-name";
+        assertion = credentials.serviceAccount.name == "ldap-search";
+        message = "expected service account name to be forwarded";
+      }
+      {
+        name = "loopback-host";
+        assertion = builtins.hasAttr "127.0.0.1" hosts && builtins.head hosts."127.0.0.1" == "auth.example.com";
+        message = "expected loopback host entry for the public Kanidm domain";
+      }
+      {
+        name = "ldap-firewall-port";
+        assertion = builtins.elem 3636 firewallPorts;
+        message = "expected LDAP firewall port 3636 to be opened";
+      }
+    ];
+    runtimeScript = ''
+      test -f ${lib.escapeShellArg (toString provision.extraJsonFile)}
+    '';
+  }

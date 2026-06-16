@@ -3,6 +3,8 @@
   pkgs,
   ...
 }: let
+  inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
+
   moduleResult = inputs.nixpkgs.lib.nixosSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
     specialArgs = {
@@ -38,16 +40,19 @@
     builtins.tryEval
     (builtins.deepSeq moduleResult.config.canix-toolbelt.dns.dnsConfig true);
 in
-  pkgs.runCommand "dns-apex-cname-assertion" {
-    assertionMessageFound =
-      if hasExpectedAssertion
-      then "1"
-      else throw "expected DNS apex CNAME assertion message to mention RFC 1034 and recommend ALIAS";
-    dnsConfigFailed =
-      if dnsConfigEval.success
-      then throw "expected DNS apex CNAME validation to fail when forcing dnsConfig"
-      else "1";
-  } ''
-    mkdir -p "$out"
-    printf '%s\n' "apex CNAME assertion failed as expected" > "$out/result"
-  ''
+  mkEvalCheck {
+    name = "dns-apex-cname-assertion";
+    resultMessage = "apex CNAME assertion failed as expected";
+    assertions = [
+      {
+        name = "assertion-message-found";
+        assertion = hasExpectedAssertion;
+        message = "expected DNS apex CNAME assertion message to mention RFC 1034 and recommend ALIAS";
+      }
+      {
+        name = "dns-config-failed";
+        assertion = !dnsConfigEval.success;
+        message = "expected DNS apex CNAME validation to fail when forcing dnsConfig";
+      }
+    ];
+  }

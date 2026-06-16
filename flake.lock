@@ -2,6 +2,21 @@
   "nodes": {
     "crane": {
       "locked": {
+        "lastModified": 1772080396,
+        "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "8525580bc0316c39dbfa18bd09a1331e98c9e463",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "crane_2": {
+      "locked": {
         "lastModified": 1777335812,
         "narHash": "sha256-bEg5xoAxAwsyfnGhkEX7RJViTIBIYPd8ISg4O1c0HFc=",
         "owner": "ipetkov",
@@ -15,7 +30,7 @@
         "type": "github"
       }
     },
-    "crane_2": {
+    "crane_3": {
       "locked": {
         "lastModified": 1772080396,
         "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
@@ -30,7 +45,7 @@
         "type": "github"
       }
     },
-    "crane_3": {
+    "crane_4": {
       "locked": {
         "lastModified": 1777335812,
         "narHash": "sha256-bEg5xoAxAwsyfnGhkEX7RJViTIBIYPd8ISg4O1c0HFc=",
@@ -45,7 +60,7 @@
         "type": "github"
       }
     },
-    "crane_4": {
+    "crane_5": {
       "locked": {
         "lastModified": 1772080396,
         "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
@@ -73,9 +88,11 @@
           "flake-utils"
         ],
         "git-hooks": "git-hooks",
+        "nix-manager-core": "nix-manager-core",
         "nixpkgs": [
           "nixpkgs"
         ],
+        "plinth": "plinth",
         "rs-harbor": "rs-harbor",
         "rust-overlay": [
           "dns-manager",
@@ -87,11 +104,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780218564,
-        "narHash": "sha256-gQHhREHFSAMpu+5tMtH9NjzpIZszkhhrnDr2PbSmJkg=",
+        "lastModified": 1781166117,
+        "narHash": "sha256-puNBjDTEUmxeY0PtG+E74yQZvOv4GNM8mBtZXuXrUEA=",
         "ref": "refs/heads/main",
-        "rev": "611093522047136a1889cf7d30504f80f516cb62",
-        "revCount": 1,
+        "rev": "c4abb508275cb1f105363953047bf22f015c0292",
+        "revCount": 4,
         "type": "git",
         "url": "ssh://git@codeberg.org/caniko/dns-manager.git"
       },
@@ -137,11 +154,11 @@
         "nixpkgs-lib": "nixpkgs-lib"
       },
       "locked": {
-        "lastModified": 1777898446,
-        "narHash": "sha256-tTEOTTjMHd8Vffn4hehLTPgOXXxJ27xfkf4DoyZgD7s=",
+        "lastModified": 1778716662,
+        "narHash": "sha256-m1Yf0wZ8j1OHjTc2UwHwyQRSnNeSgLJOd7q5Y45hzi4=",
         "owner": "hercules-ci",
         "repo": "flake-parts",
-        "rev": "5d82aa3d6b5da25dbfec1a995750a70a03b8c659",
+        "rev": "f7c1a2d347e4c52d5fb8d10cb4d94b5884e546fb",
         "type": "github"
       },
       "original": {
@@ -290,11 +307,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1776796298,
-        "narHash": "sha256-PcRvlWayisPSjd0UcRQbhG8Oqw78AcPE6x872cPRHN8=",
+        "lastModified": 1778507602,
+        "narHash": "sha256-kTwur1wV+01SdqskVMSo6JMEpg71ps3HpbFY2GsflKs=",
         "owner": "cachix",
         "repo": "git-hooks.nix",
-        "rev": "3cfd774b0a530725a077e17354fbdb87ea1c4aad",
+        "rev": "61ab0e80d9c7ab14c256b5b453d8b3fb0189ba0a",
         "type": "github"
       },
       "original": {
@@ -352,7 +369,7 @@
         "nixpkgs": [
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_2"
+        "rust-overlay": "rust-overlay_3"
       },
       "locked": {
         "lastModified": 1780133732,
@@ -376,11 +393,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780370888,
-        "narHash": "sha256-PRJj9RKTEf/sITycujP1c/BrvLJKMYXzcpwTsXNulXQ=",
+        "lastModified": 1781186737,
+        "narHash": "sha256-mwd5aBkUPEdo/mhuJEiNdEmsqX7EOxm7QcQnvNqJqME=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "a7a415883195ffbd4dabec8f098f201e6eaaadf8",
+        "rev": "bb68a1a2e773050d64b18f5b23811c8f212c46c8",
         "type": "github"
       },
       "original": {
@@ -390,6 +407,51 @@
       }
     },
     "nix-manager-core": {
+      "inputs": {
+        "crane": [
+          "dns-manager",
+          "crane"
+        ],
+        "flake-utils": [
+          "dns-manager",
+          "flake-utils"
+        ],
+        "git-hooks": [
+          "dns-manager",
+          "git-hooks"
+        ],
+        "nixpkgs": [
+          "dns-manager",
+          "nixpkgs"
+        ],
+        "rs-harbor": [
+          "dns-manager",
+          "rs-harbor"
+        ],
+        "rust-overlay": [
+          "dns-manager",
+          "rust-overlay"
+        ],
+        "treefmt-nix": [
+          "dns-manager",
+          "treefmt-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781080972,
+        "narHash": "sha256-2ed02JwgDlyD1MBSq/ysXkDCtqICkSLkJCf5Q7KJG4o=",
+        "ref": "refs/heads/main",
+        "rev": "ece4b6b5c1fadc5c4af489b3bab258f92837f126",
+        "revCount": 5,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/nix-manager-core"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://codeberg.org/caniko/nix-manager-core"
+      }
+    },
+    "nix-manager-core_2": {
       "inputs": {
         "crane": [
           "secret-manager",
@@ -421,11 +483,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781080972,
-        "narHash": "sha256-2ed02JwgDlyD1MBSq/ysXkDCtqICkSLkJCf5Q7KJG4o=",
+        "lastModified": 1781158702,
+        "narHash": "sha256-jpaSu3OjSf96nuzBP1uNrHFxIFi21HkojsQPB/5MFMk=",
         "ref": "refs/heads/main",
-        "rev": "ece4b6b5c1fadc5c4af489b3bab258f92837f126",
-        "revCount": 5,
+        "rev": "08875765c76fd075349ab19cbbbe748f079ba479",
+        "revCount": 11,
         "type": "git",
         "url": "https://codeberg.org/caniko/nix-manager-core"
       },
@@ -467,11 +529,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1777578337,
-        "narHash": "sha256-Ad49moKWeXtKBJNy2ebiTQUEgdLyvGmTeykAQ9xM+Z4=",
+        "lastModified": 1780749050,
+        "narHash": "sha256-3av0pIjlOWQ6rDbNOmpUSvbNnJkGORQKKjb4LtCZsIY=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "15f4ee454b1dce334612fa6843b3e05cf546efab",
+        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
         "type": "github"
       },
       "original": {
@@ -563,12 +625,16 @@
     },
     "plinth": {
       "inputs": {
-        "crane": "crane_2",
-        "flake-utils": "flake-utils_4",
+        "crane": "crane",
+        "flake-utils": [
+          "dns-manager",
+          "flake-utils"
+        ],
         "nixpkgs": [
+          "dns-manager",
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_3"
+        "rust-overlay": "rust-overlay"
       },
       "locked": {
         "lastModified": 1780921919,
@@ -587,7 +653,31 @@
     },
     "plinth_2": {
       "inputs": {
-        "crane": "crane_4",
+        "crane": "crane_3",
+        "flake-utils": "flake-utils_4",
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_4"
+      },
+      "locked": {
+        "lastModified": 1780921919,
+        "narHash": "sha256-qWNGqKWmGecXS7PaDHS3TS++XX3IdWnf4HRscDYfD0E=",
+        "ref": "refs/heads/trunk",
+        "rev": "8c4855f9ee40543277b15d1dbf0298f0a90c34d7",
+        "revCount": 43,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      },
+      "original": {
+        "ref": "refs/heads/trunk",
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      }
+    },
+    "plinth_3": {
+      "inputs": {
+        "crane": "crane_5",
         "flake-utils": [
           "secret-manager",
           "rs-harbor",
@@ -598,7 +688,7 @@
           "rs-harbor",
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_4"
+        "rust-overlay": "rust-overlay_5"
       },
       "locked": {
         "lastModified": 1780921919,
@@ -623,7 +713,7 @@
         "goose": "goose",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_2",
-        "plinth": "plinth",
+        "plinth": "plinth_2",
         "secret-manager": "secret-manager",
         "treefmt-nix": "treefmt-nix",
         "wrapper-manager": "wrapper-manager"
@@ -631,11 +721,11 @@
     },
     "rs-harbor": {
       "inputs": {
-        "crane": "crane",
+        "crane": "crane_2",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
         "osxcross": "osxcross",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay_2"
       },
       "locked": {
         "lastModified": 1780175438,
@@ -653,12 +743,12 @@
     },
     "rs-harbor_2": {
       "inputs": {
-        "crane": "crane_3",
+        "crane": "crane_4",
         "flake-utils": "flake-utils_5",
         "nixpkgs": "nixpkgs_3",
         "osxcross": "osxcross_2",
-        "plinth": "plinth_2",
-        "rust-overlay": "rust-overlay_5"
+        "plinth": "plinth_3",
+        "rust-overlay": "rust-overlay_6"
       },
       "locked": {
         "lastModified": 1780988052,
@@ -675,6 +765,28 @@
       }
     },
     "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "dns-manager",
+          "plinth",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1772247314,
+        "narHash": "sha256-x6IFQ9bL7YYfW2m2z8D3Em2YtAA3HE8kiCFwai2fwrw=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "a1ab5e89ab12e1a37c0b264af6386a7472d68a15",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
           "dns-manager",
@@ -696,7 +808,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_2": {
+    "rust-overlay_3": {
       "inputs": {
         "nixpkgs": [
           "goose",
@@ -717,7 +829,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_3": {
+    "rust-overlay_4": {
       "inputs": {
         "nixpkgs": [
           "plinth",
@@ -738,7 +850,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_4": {
+    "rust-overlay_5": {
       "inputs": {
         "nixpkgs": [
           "secret-manager",
@@ -761,7 +873,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_5": {
+    "rust-overlay_6": {
       "inputs": {
         "nixpkgs": [
           "secret-manager",
@@ -798,7 +910,7 @@
         "git-hooks": [
           "git-hooks"
         ],
-        "nix-manager-core": "nix-manager-core",
+        "nix-manager-core": "nix-manager-core_2",
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -813,11 +925,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781081360,
-        "narHash": "sha256-wpP8FiZ5fuElOSr7s3Hwl/xaj+C36hOz/J0ajStnCFo=",
+        "lastModified": 1781162909,
+        "narHash": "sha256-E9hueDDj5jRrth/Uh5MK4QQIiLv5Io3CROaOMU/mb8c=",
         "ref": "refs/heads/trunk",
-        "rev": "026d90a818f40a1767776b8dc4283bb6d634b3c6",
-        "revCount": 2,
+        "rev": "543c0203ac39ff5558f7039b2736ce65efffa5aa",
+        "revCount": 16,
         "type": "git",
         "url": "https://codeberg.org/caniko/secret-manager.git"
       },
@@ -921,11 +1033,11 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1775636079,
-        "narHash": "sha256-pc20NRoMdiar8oPQceQT47UUZMBTiMdUuWrYu2obUP0=",
+        "lastModified": 1780220602,
+        "narHash": "sha256-eynAfOmbmxJnkp7YewvCEbShNnnYJ9gLLqkzsYtBPeM=",
         "owner": "numtide",
         "repo": "treefmt-nix",
-        "rev": "790751ff7fd3801feeaf96d7dc416a8d581265ba",
+        "rev": "db947814a175b7ca6ded66e21383d938df01c227",
         "type": "github"
       },
       "original": {

@@ -1,5 +1,6 @@
 {pkgs, ...}: let
   inherit (pkgs) lib;
+  inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
   eval = lib.evalModules {
     specialArgs = {inherit pkgs;};
@@ -107,24 +108,73 @@
       }
     ];
   };
+
+  rauthy = eval.config.services.rauthy;
+  provision = rauthy.provision;
+  hosts = eval.config.networking.hosts;
+  stateFileProvision = stateFileEval.config.services.rauthy.provision;
 in
-  pkgs.runCommand "rauthy-preset-eval" {} ''
-    test ${lib.escapeShellArg eval.config.services.rauthy.settings.server.pub_url} = id.example.com
-    test ${lib.escapeShellArg (toString eval.config.services.rauthy.settings.server.port_http)} = 8080
-    test ${lib.escapeShellArg eval.config.services.rauthy.settings.webauthn.rp_origin} = https://id.example.com:443
-    test ${lib.escapeShellArg eval.config.services.rauthy.provision.endpoint} = http://127.0.0.1:8080
-    test ${lib.escapeShellArg (toString eval.config.services.rauthy.provision.generatedApiKey.enable)} = 1
-    test ${lib.escapeShellArg (toString eval.config.services.rauthy.provision.transientApiKey.enable)} = 1
-    test ${lib.escapeShellArg eval.config.services.rauthy.provision.generatedApiKey.environmentFile} = /run/secrets/rauthy-env
-    test ${lib.escapeShellArg (builtins.head eval.config.networking.hosts."127.0.0.1")} = mail.example.com
-    scopes=${lib.escapeShellArg (builtins.toJSON eval.config.services.rauthy.provision.scopes)}
-    printf '%s' "$scopes" | grep -q 'claimsAtRoot'
-    test -f ${stateFileEval.config.services.rauthy.provision.stateFile}
-    state_file_keys=${lib.escapeShellArg (builtins.toJSON (builtins.attrNames stateFileEval.config.services.rauthy.provision))}
-    printf '%s' "$state_file_keys" | grep -q 'stateFile'
-    if printf '%s' "$state_file_keys" | grep -q 'groups'; then
-      echo "stateFile mode must not forward declarative groups from the preset" >&2
-      exit 1
-    fi
-    touch $out
-  ''
+  mkEvalCheck {
+    name = "rauthy-preset-eval";
+    resultMessage = "rauthy preset evaluated expected module defaults";
+    assertions = [
+      {
+        name = "public-url";
+        assertion = rauthy.settings.server.pub_url == "id.example.com";
+        message = "expected Rauthy public URL to match the preset hostname";
+      }
+      {
+        name = "http-port";
+        assertion = rauthy.settings.server.port_http == 8080;
+        message = "expected Rauthy HTTP port to use the preset default";
+      }
+      {
+        name = "webauthn-origin";
+        assertion = rauthy.settings.webauthn.rp_origin == "https://id.example.com:443";
+        message = "expected WebAuthn origin to default from the hostname";
+      }
+      {
+        name = "provision-endpoint";
+        assertion = provision.endpoint == "http://127.0.0.1:8080";
+        message = "expected provision endpoint to use the loopback HTTP listener";
+      }
+      {
+        name = "generated-api-key-enabled";
+        assertion = provision.generatedApiKey.enable == true;
+        message = "expected generated API-key provisioning to be enabled";
+      }
+      {
+        name = "transient-api-key-enabled";
+        assertion = provision.transientApiKey.enable == true;
+        message = "expected transient API-key provisioning to be enabled";
+      }
+      {
+        name = "generated-api-key-environment";
+        assertion = provision.generatedApiKey.environmentFile == "/run/secrets/rauthy-env";
+        message = "expected generated API-key unit to inherit the environment file";
+      }
+      {
+        name = "mail-loopback-host";
+        assertion = builtins.hasAttr "127.0.0.1" hosts && builtins.head hosts."127.0.0.1" == "mail.example.com";
+        message = "expected mail loopback hostname to be registered";
+      }
+      {
+        name = "scope-claims-at-root";
+        assertion = provision.scopes.team.claimsAtRoot == true;
+        message = "expected declarative scopes to be forwarded";
+      }
+      {
+        name = "state-file-forwarded";
+        assertion = builtins.hasAttr "stateFile" stateFileProvision;
+        message = "expected stateFile mode to forward the rendered state file";
+      }
+      {
+        name = "state-file-excludes-groups";
+        assertion = !(builtins.hasAttr "groups" stateFileProvision);
+        message = "expected stateFile mode not to forward declarative groups";
+      }
+    ];
+    runtimeScript = ''
+      test -f ${lib.escapeShellArg (toString stateFileProvision.stateFile)}
+    '';
+  }
