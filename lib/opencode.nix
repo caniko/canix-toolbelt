@@ -22,6 +22,11 @@
       }
     ''; rules;
 
+  expandGitRules = rules:
+    builtins.foldl' (
+      acc: cmd: acc // gitPair cmd (builtins.getAttr cmd rules)
+    ) {} (builtins.attrNames rules);
+
   envTwinPrefix = action:
     if action == "allow"
     then "*=*"
@@ -37,10 +42,11 @@
     (lib.filterAttrs (name: _: name != "*" && !lib.hasPrefix "/" name) validatedRules);
 in {
   inherit
+    envTwinPrefix
+    expandGitRules
     gitPair
-    validBashPermissionActions
     invalidBashPermissionActions
     validateBashPermissionActions
-    envTwinPrefix
+    validBashPermissionActions
     withEnvPrefixes;
 }
