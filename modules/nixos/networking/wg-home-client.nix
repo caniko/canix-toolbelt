@@ -24,6 +24,12 @@
     then vpnDnsServer
     else "0.0.0.0";
   wgServerPublicKey = wgServer.wgHomePublicKey or "";
+
+  # Replicate the NixOS WireGuard module's inline escaping for systemd unit
+  # names (nixpkgs/nixos/modules/services/networking/wireguard.nix).
+  # The NixOS module replaces / - space + = with \xHH forms.
+  wgPeerUnitName = lib.replaceStrings [ "/" "-" " " "+" "=" ] [ "-" "\\x2d" "\\x20" "\\x2b" "\\x3d" ] wgServerPublicKey;
+  wgRefreshServiceName = "wireguard-wg-home-peer-${wgPeerUnitName}-refresh";
 in {
   imports = [
     ./wg-home-shared.nix
@@ -120,6 +126,15 @@ in {
           }
         ];
       };
+    };
+
+    # The dynamic endpoint refresh service can race DNS during activation
+    # (e.g., nixos-rebuild switch) when it resolves the VPN endpoint hostname
+    # before systemd-resolved has finished configuring. Order it after
+    # network-online.target so the first refresh attempt does not fail.
+    systemd.services.${wgRefreshServiceName} = {
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
     };
   };
 }

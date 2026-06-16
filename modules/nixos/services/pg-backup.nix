@@ -208,7 +208,9 @@ in {
 
         ensureUsers = [{
           name = "replicator";
-          replication = true;
+          ensureClauses = {
+            replication = true;
+          };
         }];
 
         authentication = lib.mkAfter (
