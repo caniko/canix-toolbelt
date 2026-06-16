@@ -239,7 +239,7 @@ in {
 
     # --- Target-side: directories, WAL receiver, base backups ---
     (mkIf (cfg.role == "target") {
-      targetSettings.replicatorPasswordFile = lib.mkDefault cfg.sourceSettings.replicatorPasswordFile;
+      canix-toolbelt.services.pgBackup.targetSettings.replicatorPasswordFile = lib.mkDefault cfg.sourceSettings.replicatorPasswordFile;
 
       systemd.tmpfiles.rules = [
         "d ${cfg.targetSettings.backupDir}/${sourceId}/wal 0750 postgres postgres -"
