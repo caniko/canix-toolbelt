@@ -190,14 +190,9 @@ in {
       services.postgresql = {
         settings = mkMerge [
           (lib.optionalAttrs (cfg.sourceSettings.listenAddresses != []) {
-            listen_addresses = let
-              existing = config.services.postgresql.settings.listen_addresses or "localhost";
-            in
-              lib.mkForce (
-                if existing == ""
-                then lib.concatStringsSep "," cfg.sourceSettings.listenAddresses
-                else "${existing},${lib.concatStringsSep "," cfg.sourceSettings.listenAddresses}"
-              );
+            listen_addresses = lib.mkDefault (
+              lib.concatStringsSep "," cfg.sourceSettings.listenAddresses
+            );
           })
           {
             wal_level = lib.mkDefault cfg.sourceSettings.walLevel;
