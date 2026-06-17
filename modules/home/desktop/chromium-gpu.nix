@@ -56,8 +56,12 @@
   isAmd = decodeVendor == "amd";
   isNvidia = decodeVendor == "nvidia";
 
+  # Only route GL/Vulkan rendering through DRI_PRIME when the iGPU drives
+  # a display. A headless iGPU cannot create an on-screen GL context; trying
+  # crashes the GPU process (SIGTRAP in Electron/Chromium). Decode VA-API
+  # flags below use renderNode directly and don't need DRI_PRIME.
   chromiumEnv =
-    lib.optionalAttrs igpuCfg.enable {
+    lib.optionalAttrs (igpuCfg.enable && igpuCfg.igpuHasDisplay) {
       DRI_PRIME.value = igpuCfg.driPrimeValue;
     }
     // (

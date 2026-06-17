@@ -1,16 +1,21 @@
 # iGPU offload for hybrid-GPU hosts (home-manager).
 #
-# Two distinct mechanisms, both runtime (nothing here is a package-set choice):
+# Three orthogonal mechanisms:
 #
 #   * `wrap`        — wraps a package's executables with DRI_PRIME so their
 #                     OpenGL/Vulkan *rendering* runs on the integrated GPU.
-#   * decode levers — `renderNode` / `decodeDriver` / `decodeActive` pin
-#                     VA-API hardware video *decode* to the iGPU. DRI_PRIME does
-#                     NOT move decode (it is GL/Vulkan only), so decode needs an
-#                     explicit device + driver; consumers (e.g. an mpv module,
-#                     the chromium-gpu module) read these to wire the actual
-#                     app-specific knobs (mpv --vaapi-device, Chromium
-#                     --render-node-override, LIBVA_DRIVER_NAME).
+#                     When the iGPU has no display (headless, e.g. a desktop
+#                     whose dGPU drives the monitors), wrapping is skipped
+#                     because on-screen GL contexts need a connected CRTC.
+#   * `wrapDecode`  — wraps a package with LIBVA_DRIVER_NAME + render node
+#                     for VA-API hardware video decode on the iGPU. Always
+#                     applies regardless of display status.
+#   * decode levers — `renderNode` / `decodeDriver` / `decodeActive` /
+#                     `enableDecode` pin VA-API decode to the iGPU.
+#                     DRI_PRIME does NOT move decode (it is GL/Vulkan only),
+#                     so decode needs an explicit device + driver; consumers
+#                     (e.g. an mpv module, the chromium-gpu module) read
+#                     these to wire the actual app-specific knobs.
 #
 # Vendor/topology can be supplied either via a normalized `gpu` record
 # (canix-toolbelt.lib.gpu.normalize) passed as a module argument, or by setting
@@ -31,6 +36,9 @@
     then gpu
     else {
       inherit dgpu igpu;
+      deviceType = null;
+      displayGpu = null;
+      igpuHasDisplay = false;
     };
   wrapPkg = pkg: let
     wrapped = pkgs.symlinkJoin {
@@ -54,6 +62,32 @@
       passthru = pkg.passthru or {};
       override = f: wrapPkg (pkg.override f);
     };
+  # Wrap a package with LIBVA_DRIVER_NAME pinned to the iGPU's VA-API
+  # driver. This helps GStreamer, ffmpeg, and other libva consumers
+  # route hardware video decode to the iGPU. Browser-level decode
+  # flags (--render-node-override, etc.) come from chromiumGpu.wrap.
+  wrapPkgDecode = pkg: let
+    wrapped = pkgs.symlinkJoin {
+      name = "${pkg.pname or pkg.name}-igpu-decode";
+      paths = [pkg];
+      nativeBuildInputs = [pkgs.makeWrapper];
+      postBuild = ''
+        for f in $out/bin/*; do
+          if [ -f "$f" ] && [ -x "$f" ]; then
+            wrapProgram "$f" --set LIBVA_DRIVER_NAME "${cfg.decodeDriver}"
+          fi
+        done
+      '';
+    };
+  in
+    wrapped
+    // {
+      pname = pkg.pname or pkg.name;
+      version = pkg.version or "";
+      meta = pkg.meta or {};
+      passthru = pkg.passthru or {};
+      override = f: wrapPkgDecode (pkg.override f);
+    };
 in {
   options.canix-toolbelt.igpu = {
     enable = lib.mkOption {
@@ -62,7 +96,7 @@ in {
       description = "Whether to enable iGPU offloading for desktop apps. Auto-enabled on hybrid GPU hosts.";
     };
     type = lib.mkOption {
-      type = lib.types.nullOr (lib.types.enum ["amd" "nvidia" "intel"]);
+      type = lib.types.nullOr (lib.types.enum ["amd" "intel" "nvidia"]);
       default = gpuInfo.igpu;
       description = "GPU vendor of the iGPU that desktop apps render on";
     };
@@ -93,22 +127,57 @@ in {
         derived from `type`: radeonsi (amd) / iHD (intel) / nvidia.
       '';
     };
+    enableDecode = lib.mkOption {
+      type = lib.types.bool;
+      default = gpuInfo.deviceType != "laptop";
+      description = ''
+        Whether to pin VA-API hardware video decode to the iGPU at all
+        times. True by default on desktops and servers (always-on iGPU
+        decode), false on laptops (only offload decode on battery/travel
+        to save power).
+      '';
+    };
     decodeActive = lib.mkOption {
       type = lib.types.bool;
       readOnly = true;
       description = ''
         Whether desktop media apps should route VA-API hardware video decode
-        to the iGPU right now. True only when the offload is an actual win —
-        i.e. on battery (the `travel` profile), where it keeps the discrete
-        GPU asleep — and a `renderNode` is set. On hosts whose discrete GPU
-        is always powered (no `travel` profile) this stays false and decode
-        remains on the primary GPU.
+        to the iGPU right now. True when decode is beneficial: on battery
+        (the `travel` profile, keeping the discrete GPU asleep) or when
+        `enableDecode` is true (desktops where the iGPU is always available).
+      '';
+    };
+    igpuHasDisplay = lib.mkOption {
+      type = lib.types.bool;
+      readOnly = true;
+      default = gpuInfo.igpuHasDisplay or false;
+      description = ''
+        Whether the integrated GPU drives a display (i.e. it has a connected
+        CRTC). When false, DRI_PRIME wrapping is skipped for display-needing
+        applications to avoid GPU process crashes on headless iGPUs. Decode
+        and compute offload are unaffected.
       '';
     };
     wrap = lib.mkOption {
       type = lib.types.raw;
       readOnly = true;
-      description = "Conditionally wrap a package with DRI_PRIME for iGPU offloading";
+      description = ''
+        Wrap a package with DRI_PRIME for iGPU rendering offload. Skips
+        wrapping when the iGPU has no display (headless iGPU), as on-screen
+        rendering requires a connected CRTC. Use `wrapDecode` for VA-API
+        decode offload (no display needed).
+      '';
+    };
+    wrapDecode = lib.mkOption {
+      type = lib.types.raw;
+      readOnly = true;
+      description = ''
+        Wrap a package with LIBVA_DRIVER_NAME pinned to the iGPU's VA-API
+        driver for hardware video decode. Always applies when decodeDriver
+        is configured, regardless of iGPU display status. Intended for
+        media players and transcoders that don't already route decode
+        through chromium-gpu.
+      '';
     };
   };
 
@@ -121,8 +190,13 @@ in {
     ];
 
     canix-toolbelt.igpu.wrap = pkg:
-      if cfg.enable
+      if cfg.enable && cfg.igpuHasDisplay
       then wrapPkg pkg
+      else pkg;
+
+    canix-toolbelt.igpu.wrapDecode = pkg:
+      if cfg.enable && cfg.renderNode != null && cfg.decodeDriver != null
+      then wrapPkgDecode pkg
       else pkg;
 
     canix-toolbelt.igpu.decodeDriver =
@@ -134,14 +208,11 @@ in {
       then "nvidia"
       else null;
 
-    # Only offload decode when it pays off: on battery (travel), keeping the
-    # dGPU parked. Hosts with no `travel` profile leave this false and decode
-    # stays on their always-on primary GPU.
     canix-toolbelt.igpu.decodeActive =
       cfg.enable
-      && (config.canix-toolbelt.profiles.travel.enable or false)
       && cfg.renderNode != null
-      && cfg.decodeDriver != null;
+      && cfg.decodeDriver != null
+      && (config.canix-toolbelt.profiles.travel.enable or false || cfg.enableDecode);
 
     home.shellAliases = lib.mkIf cfg.enable {
       igpu-run = "DRI_PRIME=${cfg.driPrimeValue}";
