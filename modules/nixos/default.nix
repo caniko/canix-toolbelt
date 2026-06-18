@@ -33,6 +33,7 @@
   dev-oom-guard = ./services/dev-oom-guard.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
   foundry-vtt = ./services/foundry-vtt.nix;
+  garage = ./services/garage.nix;
   host-registry = ./registry/hosts.nix;
   impure-files = ./registry/impure-files.nix;
   initrd-ssh = ./services/initrd-ssh.nix;
