@@ -256,5 +256,10 @@ in {
     networking.hosts = mkIf (cfg.mailLoopbackHostname != null) {
       "127.0.0.1" = [cfg.mailLoopbackHostname];
     };
+
+    systemd.services.rauthy = mkIf (cfg.mailLoopbackHostname != null) {
+      after = ["stalwart.service"];
+      requires = ["stalwart.service"];
+    };
   };
 }
