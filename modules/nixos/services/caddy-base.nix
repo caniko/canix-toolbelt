@@ -139,76 +139,40 @@ in {
       package = lib.mkDefault cfg.package;
       adapter = "''";
       configFile = pkgs.writeText "Caddyfile" (
-        builtins.toJSON {
-          apps.http.servers.main = {
-            listen = [":443"];
+        builtins.toJSON ({
+            apps.http.servers.main = {
+              listen = [":443"];
 
-            inherit (cfg) routes;
-            errors.routes = cfg.blocks;
+              inherit (cfg) routes;
+              errors.routes = cfg.blocks;
 
-            logs = {
-              default_logger_name = defaultLoggerName;
-              logger_names =
-                lib.mapAttrs' (name: value: {
-                  name = value;
-                  value = name;
-                })
-                hostnameMap;
+              logs = {
+                default_logger_name = defaultLoggerName;
+                logger_names =
+                  lib.mapAttrs' (name: value: {
+                    name = value;
+                    value = name;
+                  })
+                  hostnameMap;
+              };
+
+              metrics = {};
             };
 
-            metrics = {};
-          };
+            apps.tls.automation.policies = cfg.tlsPolicies;
 
-          apps.tls.automation.policies = cfg.tlsPolicies;
-        }
-        // lib.optionalAttrs (cfg.authProviders != {}) {
-          apps.security = {
-            oauth2_providers = lib.mapAttrsToList (name: provider:
-              {inherit name; inherit (provider) driver;}
-              // lib.filterAttrs (n: _: n != "driver") provider
-            ) cfg.authProviders;
-
-            authentication_portals = lib.mapAttrs (name: _provider: {
-              inherit name;
-              identity_providers = [name];
-              cookie_domain =
-                let
-                  # Derive cookie domain from the first auth-protected route's hostname.
-                  authHostnames = lib.unique (lib.concatMap (route:
-                    let
-                      hasAuth = builtins.any (h: h.handler or "" == "authenticate") (route.handle or []);
-                    in
-                      lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
-                  ) cfg.routes);
-                in
-                  if authHostnames != []
-                  then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
-                  else "";
-              ui.links = [];
-            }) cfg.authProviders;
-
-            authorization_policies = lib.mapAttrs (name: _provider: {
-              inherit name;
-              crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
-              allow.roles = ["authp/user"];
-              validate.bearer.header = "yes";
-              inject = { headers = { "with" = { claims = "yes"; }; }; };
-            }) cfg.authProviders;
-          };
-        };
-
-          logging.logs =
-            {
-              default = {
-                level = "INFO";
-                encoder.format = "console";
-                writer.output = "stderr";
-                exclude =
-                  (map (hostname: "http.log.access.${hostname}") (builtins.attrNames hostnameMap))
-                  ++ [
-                    "http.log.access.${defaultLoggerName}"
-                  ];
-              };
+            logging.logs =
+              {
+                default = {
+                  level = "INFO";
+                  encoder.format = "console";
+                  writer.output = "stderr";
+                  exclude =
+                    (map (hostname: "http.log.access.${hostname}") (builtins.attrNames hostnameMap))
+                    ++ [
+                      "http.log.access.${defaultLoggerName}"
+                    ];
+                };
 
               other = {
                 level = "INFO";
@@ -285,7 +249,41 @@ in {
                 };
               })
               hostnameMap);
-        }
+          }
+          // lib.optionalAttrs (cfg.authProviders != {}) {
+            apps.security = {
+              oauth2_providers = lib.mapAttrsToList (name: provider:
+                {inherit name; inherit (provider) driver;}
+                // lib.filterAttrs (n: _: n != "driver") provider
+              ) cfg.authProviders;
+
+              authentication_portals = lib.mapAttrs (name: _provider: {
+                inherit name;
+                identity_providers = [name];
+                cookie_domain =
+                  let
+                    authHostnames = lib.unique (lib.concatMap (route:
+                      let
+                        hasAuth = builtins.any (h: h.handler or "" == "authenticate") (route.handle or []);
+                      in
+                        lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
+                    ) cfg.routes);
+                  in
+                    if authHostnames != []
+                    then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
+                    else "";
+                ui.links = [];
+              }) cfg.authProviders;
+
+              authorization_policies = lib.mapAttrs (name: _provider: {
+                inherit name;
+                crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
+                allow.roles = ["authp/user"];
+                validate.bearer.header = "yes";
+                inject = { headers = { "with" = { claims = "yes"; }; }; };
+              }) cfg.authProviders;
+            };
+          })
       );
     };
 
