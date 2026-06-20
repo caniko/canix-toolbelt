@@ -163,10 +163,10 @@ in {
         }
         // lib.optionalAttrs (cfg.authProviders != {}) {
           apps.security = {
-            oauth2_providers = lib.mapAttrsToList (name: provider: {
-              inherit name;
-              inherit (provider) driver;
-            } // lib.filterAttrs (n: _: n != "driver") provider) cfg.authProviders;
+            oauth2_providers = lib.mapAttrsToList (name: provider:
+              {inherit name; inherit (provider) driver;}
+              // lib.filterAttrs (n: _: n != "driver") provider
+            ) cfg.authProviders;
 
             authentication_portals = lib.mapAttrs (name: _provider: {
               inherit name;
@@ -179,7 +179,7 @@ in {
                       hasAuth = builtins.any (h: h.handler or "" == "authenticate") (route.handle or []);
                     in
                       lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
-                  ) cfg.routes;
+                  ) cfg.routes);
                 in
                   if authHostnames != []
                   then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
