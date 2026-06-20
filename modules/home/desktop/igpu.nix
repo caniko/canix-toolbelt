@@ -60,7 +60,9 @@
       version = pkg.version or "";
       meta = pkg.meta or {};
       passthru = pkg.passthru or {};
-      override = f: wrapPkg (pkg.override f);
+      override = lib.setFunctionArgs
+        (args: wrapPkg (pkg.override args))
+        (lib.functionArgs pkg.override);
     };
   # Wrap a package with LIBVA_DRIVER_NAME pinned to the iGPU's VA-API
   # driver. This helps GStreamer, ffmpeg, and other libva consumers
@@ -86,7 +88,9 @@
       version = pkg.version or "";
       meta = pkg.meta or {};
       passthru = pkg.passthru or {};
-      override = f: wrapPkgDecode (pkg.override f);
+      override = lib.setFunctionArgs
+        (args: wrapPkgDecode (pkg.override args))
+        (lib.functionArgs pkg.override);
     };
 in {
   options.canix-toolbelt.igpu = {

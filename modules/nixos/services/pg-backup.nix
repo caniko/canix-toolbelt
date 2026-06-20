@@ -8,17 +8,18 @@
   cfg = config.canix-toolbelt.services.pgBackup;
   sourceId = cfg.source.hostName;
 
-  wrapBin = name: bin: pkgs.writers.writeBash name ''
-    set -euo pipefail
-    password_file="${cfg.targetSettings.replicatorPasswordFile}"
-    if [ -r "$password_file" ]; then
-      export PGPASSWORD="$(cat "$password_file")"
-    else
-      echo "pg-backup: password file $password_file not readable" >&2
-      exit 1
-    fi
-    exec ${cfg.targetSettings.package}/${bin} "$@"
-  '';
+  wrapBin = name: bin:
+    pkgs.writers.writeBash name ''
+      set -euo pipefail
+      password_file="${cfg.targetSettings.replicatorPasswordFile}"
+      if [ -r "$password_file" ]; then
+        export PGPASSWORD="$(cat "$password_file")"
+      else
+        echo "pg-backup: password file $password_file not readable" >&2
+        exit 1
+      fi
+      exec ${cfg.targetSettings.package}/${bin} "$@"
+    '';
 
   pgReceivewalCmd = "${wrapBin "pg-receivewal" "bin/pg_receivewal"} -h ${sourceId} -p ${toString cfg.source.port} -U replicator";
   pgBasebackupCmd = "${wrapBin "pg-basebackup" "bin/pg_basebackup"} -h ${sourceId} -p ${toString cfg.source.port} -U replicator";
@@ -201,12 +202,14 @@ in {
           }
         ];
 
-        ensureUsers = [{
-          name = "replicator";
-          ensureClauses = {
-            replication = true;
-          };
-        }];
+        ensureUsers = [
+          {
+            name = "replicator";
+            ensureClauses = {
+              replication = true;
+            };
+          }
+        ];
 
         authentication = lib.mkAfter (
           lib.concatMapStringsSep "\n" (host: ''
@@ -264,7 +267,7 @@ in {
         '';
         serviceConfig = {
           User = "postgres";
-          ExecStart = "${pgReceivewalCmd} -D ${cfg.targetSettings.backupDir}/${sourceId}/wal --verbose --no-loop --slot=${cfg.targetSettings.receiveWal.slotName}";
+          ExecStart = "${pgReceivewalCmd} -D ${cfg.targetSettings.backupDir}/${sourceId}/wal --verbose --create-slot --slot=${cfg.targetSettings.receiveWal.slotName}";
           Restart = "on-failure";
           RestartSec = "5s";
           PrivateTmp = true;
@@ -294,7 +297,11 @@ in {
           rm -rf "$date_dir"
           mkdir -p "$date_dir"
 
-          max_rate=${if cfg.targetSettings.baseBackup.maxRate != null then "'--max-rate=${cfg.targetSettings.baseBackup.maxRate}'" else "''"}
+          max_rate=${
+            if cfg.targetSettings.baseBackup.maxRate != null
+            then "'--max-rate=${cfg.targetSettings.baseBackup.maxRate}'"
+            else "''"
+          }
           slot=${cfg.targetSettings.baseBackup.slotName}
 
           # Ensure the temporary slot exists for the backup duration
