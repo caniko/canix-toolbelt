@@ -192,7 +192,7 @@ in {
               crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
               allow.roles = ["authp/user"];
               validate.bearer.header = "yes";
-              inject.headers.with.claims = "yes";
+              inject = { headers = { with = { claims = "yes"; }; }; };
             }) cfg.authProviders;
           };
         };
