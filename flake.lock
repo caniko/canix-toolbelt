@@ -75,6 +75,23 @@
         "type": "github"
       }
     },
+    "crush-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781956053,
+        "narHash": "sha256-ofXPppgAd48MBtB0IdfnMSyOJwUrsz7MAjXwk/nmaP8=",
+        "owner": "caniko",
+        "repo": "crush",
+        "rev": "c014745d4f7ee5517a5e910b73e02201a849e789",
+        "type": "github"
+      },
+      "original": {
+        "owner": "caniko",
+        "ref": "feat/api-key-file",
+        "repo": "crush",
+        "type": "github"
+      }
+    },
     "dns-manager": {
       "inputs": {
         "crane": [
@@ -529,11 +546,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1780749050,
-        "narHash": "sha256-3av0pIjlOWQ6rDbNOmpUSvbNnJkGORQKKjb4LtCZsIY=",
+        "lastModified": 1781577229,
+        "narHash": "sha256-lrp67w8AulE9Ks53n27I45ADSzbOCn4H+CNW1Ck8B+8=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
+        "rev": "567a49d1913ce81ac6e9582e3553dd90a955875f",
         "type": "github"
       },
       "original": {
@@ -707,6 +724,7 @@
     },
     "root": {
       "inputs": {
+        "crush-fork": "crush-fork",
         "dns-manager": "dns-manager",
         "flake-parts": "flake-parts",
         "git-hooks": "git-hooks_2",

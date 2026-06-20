@@ -47,6 +47,11 @@
         git-hooks.follows = "git-hooks";
       };
     };
+    # Patched crush fork with api_key_file support for NixOS/agenix deployments.
+    crush-fork = {
+      url = "github:caniko/crush/feat/api-key-file";
+      flake = false;
+    };
   };
 
   outputs = inputs @ {
@@ -112,6 +117,24 @@
 
         packages.website = website;
         packages.site = website;
+        packages.crush = let
+          # Transitive dep charm.land/fantasy requires go >= 1.26.4.
+          go_1_26_4 = pkgs.go.overrideAttrs (old: {
+            version = "1.26.4";
+            src = pkgs.fetchurl {
+              url = "https://go.dev/dl/go1.26.4.linux-amd64.tar.gz";
+              hash = "sha256-EVPT1Q4Kx2S0R63+BcK88I6InUKgLg/gJZvUf2czrX8=";
+            };
+          });
+        in
+        pkgs.buildGoModule.override { go = go_1_26_4; } {
+          pname = "crush";
+          version = "0.77.0-api-key-file";
+          src = inputs.crush-fork;
+          vendorHash = "sha256-a+4k+fjqdWsAUv0ilagd46pYwFaSd1+mJ25Vr47Lsys=";
+          ldflags = [ "-s" "-w" ];
+          doCheck = false;
+        };
         apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
           domain = "canix-toolbelt.tartanoglu.com";
         };
