@@ -5,11 +5,29 @@
 }: let
   inherit (lib) filter mkOption types;
 
+  authSubmodule = types.submodule {
+    options = {
+      enable = lib.mkEnableOption "OIDC authentication via caddy-security";
+
+      provider = mkOption {
+        type = types.enum ["kanidm" "rauthy"];
+        default = "kanidm";
+        description = "OIDC identity provider backend.";
+      };
+    };
+  };
+
   reverseProxyServiceSubmodule = types.submodule {
     options = {
       name = mkOption {
         type = types.str;
         description = "Service identifier";
+      };
+
+      auth = mkOption {
+        type = authSubmodule;
+        default = {enable = false;};
+        description = "OIDC authentication configuration for this service route.";
       };
       hostname = mkOption {
         type = types.str;

@@ -7,26 +7,39 @@
   cfg = config.canix-toolbelt.services.caddy;
   serviceCfg = config.canix-toolbelt.services;
 
-  reverseProxyRoute = svc: let
+  dialAddress = svc: let
     isLocal =
       if svc.local != null
       then svc.local
       else svc.targetHost == config.networking.hostName;
-    dialHost =
-      if isLocal
-      then "127.0.0.1"
-      else config.canix-toolbelt.hosts.${svc.targetHost}.lanIp;
   in
-    caddyLib.mkReverseProxyRoute {
-      inherit (svc) hostname upstreamScheme tlsServerName;
-      port =
-        if svc.proxied
-        then 80
-        else svc.port;
-      host = dialHost;
-      inherit (cfg) goatcounterUrl;
-      injectAnalytics = cfg.goatcounterUrl != null;
-    };
+    if isLocal
+    then "127.0.0.1"
+    else config.canix-toolbelt.hosts.${svc.targetHost}.lanIp;
+
+  reverseProxyRoute = svc:
+    if svc.auth.enable
+    then
+      caddyLib.mkAuthServiceRoute {
+        inherit (svc) hostname upstreamScheme tlsServerName;
+        port =
+          if svc.proxied
+          then 80
+          else svc.port;
+        host = dialAddress svc;
+        portalName = svc.name;
+      }
+    else
+      caddyLib.mkReverseProxyRoute {
+        inherit (svc) hostname upstreamScheme tlsServerName;
+        port =
+          if svc.proxied
+          then 80
+          else svc.port;
+        host = dialAddress svc;
+        inherit (cfg) goatcounterUrl;
+        injectAnalytics = cfg.goatcounterUrl != null;
+      };
 
   staticFileRoute = svc:
     caddyLib.mkStaticFileRoute {
@@ -45,6 +58,10 @@
       )
     )
   );
+
+  hasAuthServices = lib.any (svc: svc.auth.enable) serviceCfg.reverseProxyServices;
+
+  caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
 in {
   imports = [
     ./caddy-base.nix
@@ -60,6 +77,9 @@ in {
     canix-toolbelt.services.caddy = {
       routes = caddyRoutes;
       cidrExemptHosts = nonCloudflareHostnames;
+
+      # Auto-add caddy-security plugin when any service uses auth.
+      plugins = lib.mkIf hasAuthServices (lib.mkBefore [caddySecurityPlugin]);
     };
   };
 }

@@ -1,4 +1,44 @@
 {lib}: {
+  # Build a Caddy route with caddy-security authenticate handler
+  # guarding a reverse proxy to the upstream service. The portalName
+  # must match a key in canix-toolbelt.services.caddy.authProviders.
+  mkAuthServiceRoute = {
+    hostname,
+    port,
+    host ? "localhost",
+    upstreamScheme ? "http",
+    tlsServerName ? null,
+    portalName,
+    cookieDomain ? null,
+  }: let
+    proxyHandler =
+      {
+        handler = "reverse_proxy";
+        upstreams = [{dial = "${host}:${toString port}";}];
+      }
+      // lib.optionalAttrs (upstreamScheme == "https") {
+        transport = {
+          protocol = "http";
+          tls.server_name =
+            if tlsServerName != null
+            then tlsServerName
+            else hostname;
+        };
+      };
+  in {
+    match = [{host = [hostname];}];
+    handle = [
+      {
+        handler = "authenticate";
+        inherit portalName;
+      }
+      {
+        handler = "subroute";
+        routes = [{handle = [proxyHandler];}];
+      }
+    ];
+  };
+
   mkReverseProxyRoute = {
     hostname,
     port,

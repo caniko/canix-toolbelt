@@ -77,6 +77,17 @@ in {
       '';
       description = "Caddy package to run.";
     };
+
+    authProviders = lib.mkOption {
+      type = lib.types.attrsOf lib.types.attrs;
+      default = {};
+      description = ''
+        OIDC provider configs keyed by portal name. Each value is an
+        attrs passed to caddy-security's oauth2_providers entry (driver,
+        client_id, metadata_url, scopes, etc.). Consumed by
+        mkAuthServiceRoute in the service registry.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable (let
@@ -149,6 +160,42 @@ in {
           };
 
           apps.tls.automation.policies = cfg.tlsPolicies;
+        }
+        // lib.optionalAttrs (cfg.authProviders != {}) {
+          apps.security = {
+            oauth2_providers = lib.mapAttrsToList (name: provider: {
+              inherit name;
+              inherit (provider) driver;
+            } // lib.filterAttrs (n: _: n != "driver") provider) cfg.authProviders;
+
+            authentication_portals = lib.mapAttrs (name: _provider: {
+              inherit name;
+              identity_providers = [name];
+              cookie_domain =
+                let
+                  # Derive cookie domain from the first auth-protected route's hostname.
+                  authHostnames = lib.unique (lib.concatMap (route:
+                    let
+                      hasAuth = builtins.any (h: h.handler or "" == "authenticate") (route.handle or []);
+                    in
+                      lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
+                  ) cfg.routes;
+                in
+                  if authHostnames != []
+                  then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
+                  else "";
+              ui.links = [];
+            }) cfg.authProviders;
+
+            authorization_policies = lib.mapAttrs (name: _provider: {
+              inherit name;
+              crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
+              allow.roles = ["authp/user"];
+              validate.bearer.header = "yes";
+              inject.headers.with.claims = "yes";
+            }) cfg.authProviders;
+          };
+        };
 
           logging.logs =
             {
