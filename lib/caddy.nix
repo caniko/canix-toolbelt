@@ -29,7 +29,7 @@
     match = [{host = [hostname];}];
     handle = [
       {
-        handler = "http.handlers.authenticator";
+        handler = "authenticator";
         inherit portalName;
       }
       {
