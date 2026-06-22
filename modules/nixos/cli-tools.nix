@@ -142,6 +142,11 @@
       default = false;
       description = "Whether to install ${entry.description} system-wide.";
     };
+    opencodePermission = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to allow this tool in opencode bash permissions.";
+    };
     package = mkOption {
       type = types.package;
       default = entry.package;
@@ -151,6 +156,7 @@
   }) knownTools;
 
   enabledTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.enable) cfg;
+  opencodeTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.opencodePermission) cfg;
 in {
   options.canix-toolbelt.packages.cliTools = {
     enable = mkEnableOption "system-level CLI tools";
@@ -175,6 +181,6 @@ in {
           name = "${bin} *";
           value = "allow";
         }) bins)
-      ) {} (builtins.attrNames enabledTools);
+      ) {} (builtins.attrNames opencodeTools);
   };
 }
