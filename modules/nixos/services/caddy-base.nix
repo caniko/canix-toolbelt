@@ -252,10 +252,11 @@ in {
           }
           // lib.optionalAttrs (cfg.authProviders != {}) {
             apps.security.config = {
-              identity_providers = lib.mapAttrsToList (name: provider:
-                {inherit name; inherit (provider) driver;}
-                // lib.filterAttrs (n: _: n != "driver") provider
-              ) cfg.authProviders;
+              identity_providers = lib.mapAttrsToList (name: provider: {
+                inherit name;
+                kind = provider.driver;
+                params = lib.filterAttrs (n: _: n != "driver") provider;
+              }) cfg.authProviders;
 
               authentication_portals = lib.mapAttrsToList (name: _provider: {
                 inherit name;
