@@ -60,6 +60,75 @@
       description = "Disk usage analyzer";
       package = pkgs.dust;
     };
+
+    choose = {
+      description = "Modern cut replacement";
+      package = pkgs.choose;
+    };
+    csvlens = {
+      description = "CSV/TSV viewer";
+      package = pkgs.csvlens;
+    };
+    delta = {
+      description = "Syntax-highlighted diff viewer";
+      package = pkgs.delta;
+    };
+    doggo = {
+      description = "Modern DNS lookup tool";
+      package = pkgs.doggo;
+    };
+    duf = {
+      description = "Modern df replacement";
+      package = pkgs.duf;
+    };
+    gdu = {
+      description = "Fast disk usage analyzer";
+      package = pkgs.gdu;
+    };
+    hexyl = {
+      description = "Modern hex viewer";
+      package = pkgs.hexyl;
+    };
+    huniq = {
+      description = "Modern dedup tool";
+      package = pkgs.huniq;
+    };
+    hyperfine = {
+      description = "Command benchmarking tool";
+      package = pkgs.hyperfine;
+    };
+    just = {
+      description = "Modern command runner";
+      package = pkgs.just;
+    };
+    miller = {
+      description = "Structured data processor (CSV/JSON)";
+      package = pkgs.miller;
+    };
+    ouch = {
+      description = "Universal archive tool";
+      package = pkgs.ouch;
+    };
+    procs = {
+      description = "Modern ps replacement";
+      package = pkgs.procs;
+    };
+    sd = {
+      description = "Modern sed replacement";
+      package = pkgs.sd;
+    };
+    trash-cli = {
+      description = "Trash can CLI";
+      package = pkgs.trash-cli;
+    };
+    websocat = {
+      description = "WebSocket client";
+      package = pkgs.websocat;
+    };
+    xh = {
+      description = "Modern HTTP client";
+      package = pkgs.xh;
+    };
   };
 
   toolOptions = builtins.mapAttrs (name: entry: {
