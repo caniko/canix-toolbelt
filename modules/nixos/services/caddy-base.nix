@@ -177,7 +177,7 @@ in {
                   let
                     authHostnames = lib.unique (lib.concatMap (route:
                       let
-                        hasAuth = builtins.any (h: h.handler or "" == "authenticator") (route.handle or []);
+                        hasAuth = builtins.any (h: let hn = h.handler or ""; in hn == "authenticator" || hn == "http.handlers.authenticator") (route.handle or []);
                       in
                         lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
                     ) cfg.routes);
