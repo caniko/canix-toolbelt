@@ -267,7 +267,7 @@ in {
         '';
         serviceConfig = {
           User = "postgres";
-          ExecStart = "${pgReceivewalCmd} -D ${cfg.targetSettings.backupDir}/${sourceId}/wal --verbose --create-slot --slot=${cfg.targetSettings.receiveWal.slotName}";
+          ExecStart = "${pgReceivewalCmd} -D ${cfg.targetSettings.backupDir}/${sourceId}/wal --verbose --create-slot --if-not-exists --slot=${cfg.targetSettings.receiveWal.slotName}";
           Restart = "on-failure";
           RestartSec = "5s";
           PrivateTmp = true;
