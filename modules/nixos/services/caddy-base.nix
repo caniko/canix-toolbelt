@@ -254,7 +254,7 @@ in {
             apps.security.config = {
               identity_providers = lib.mapAttrsToList (name: provider: {
                 inherit name;
-                kind = provider.driver;
+                kind = if provider.driver or "generic" == "generic" then "oauth" else provider.driver;
                 params = lib.filterAttrs (n: _: n != "driver") provider;
               }) cfg.authProviders;
 
