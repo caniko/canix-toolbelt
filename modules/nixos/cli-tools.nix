@@ -143,9 +143,12 @@
       description = "Whether to install ${entry.description} system-wide.";
     };
     opencodePermission = mkOption {
-      type = types.bool;
-      default = true;
-      description = "Whether to allow this tool in opencode bash permissions.";
+      type = types.nullOr (types.enum ["allow" "deny" "ask"]);
+      default = null;
+      description = ''
+        Whether to generate an opencode bash permission rule for this tool.
+        Set to "allow", "ask", or "deny" to emit a permission rule. null means no rule.
+      '';
     };
     package = mkOption {
       type = types.package;
@@ -156,7 +159,7 @@
   }) knownTools;
 
   enabledTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.enable) cfg;
-  opencodeTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.opencodePermission) cfg;
+  opencodeTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.opencodePermission != null) cfg;
 in {
   options.canix-toolbelt.packages.cliTools = {
     enable = mkEnableOption "system-level CLI tools";
@@ -175,11 +178,12 @@ in {
 
     canix-toolbelt.packages.cliTools.opencodeRules =
       builtins.foldl' (acc: name:
-        let entry = builtins.getAttr name knownTools;
+        let tool = opencodeTools.${name};
+            entry = builtins.getAttr name knownTools;
             bins = entry.binPatterns or [name];
         in acc // builtins.listToAttrs (map (bin: {
           name = "${bin} *";
-          value = "allow";
+          value = tool.opencodePermission;
         }) bins)
       ) {} (builtins.attrNames opencodeTools);
   };
