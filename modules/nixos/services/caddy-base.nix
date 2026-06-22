@@ -140,7 +140,8 @@ in {
       adapter = "''";
       configFile = pkgs.writeText "Caddyfile" (
         builtins.toJSON ({
-            apps.http.servers.main = {
+          apps = {
+            http.servers.main = {
               listen = [":443"];
 
               inherit (cfg) routes;
@@ -159,99 +160,10 @@ in {
               metrics = {};
             };
 
-            apps.tls.automation.policies = cfg.tlsPolicies;
-
-            logging.logs =
-              {
-                default = {
-                  level = "INFO";
-                  encoder.format = "console";
-                  writer.output = "stderr";
-                  exclude =
-                    (map (hostname: "http.log.access.${hostname}") (builtins.attrNames hostnameMap))
-                    ++ [
-                      "http.log.access.${defaultLoggerName}"
-                    ];
-                };
-
-              other = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/other.log";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
-                include = ["http.log.access.${defaultLoggerName}"];
-              };
-
-              admin = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/admin.log";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
-                include = ["admin"];
-              };
-
-              tls = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/tls.log";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
-                include = ["tls"];
-              };
-
-              debug = {
-                level = "DEBUG";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/debug.log";
-                  roll = true;
-                  roll_keep = 1;
-                  roll_size_mb = rollSizeMb;
-                };
-              };
-            }
-            // (lib.mapAttrs (name: _value: {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/${name}-access.log";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
-                include = ["http.log.access.${name}"];
-              })
-              hostnameMap)
-            // (lib.mapAttrs' (name: _value: {
-                name = "${name}-error";
-                value = {
-                  level = "ERROR";
-                  encoder.format = "json";
-                  writer = {
-                    output = "file";
-                    filename = "${config.services.caddy.logDir}/${name}-error.log";
-                    roll = true;
-                    roll_size_mb = rollSizeMb;
-                  };
-                  include = ["http.log.access.${name}"];
-                };
-              })
-              hostnameMap);
+            tls.automation.policies = cfg.tlsPolicies;
           }
           // lib.optionalAttrs (cfg.authProviders != {}) {
-            apps.security.config = {
+            security.config = {
               identity_providers = lib.mapAttrsToList (name: provider: {
                 inherit name;
                 kind = if provider.driver or "generic" == "generic" then "oauth" else provider.driver;
@@ -280,17 +192,105 @@ in {
 
               authorization_policies = lib.mapAttrsToList (name: _provider: {
                 inherit name;
-                raw_crypto_key_store_config = ["crypto key verify $CADDY_SECURITY_JWT_KEY"];
                 access_list_rules = [{
-                  comment = "allow authp/user role";
-                  conditions = ["role is authp/user"];
+                  conditions = ["match role authp/user"];
                   action = "allow";
                 }];
                 validate_bearer_header = true;
                 pass_claims_with_headers = true;
               }) cfg.authProviders;
             };
-          })
+          };
+
+          logging.logs =
+            {
+              default = {
+                level = "INFO";
+                encoder.format = "console";
+                writer.output = "stderr";
+                exclude =
+                  (map (hostname: "http.log.access.${hostname}") (builtins.attrNames hostnameMap))
+                  ++ [
+                    "http.log.access.${defaultLoggerName}"
+                  ];
+              };
+
+            other = {
+              level = "INFO";
+              encoder.format = "json";
+              writer = {
+                output = "file";
+                filename = "${config.services.caddy.logDir}/other.log";
+                roll = true;
+                roll_size_mb = rollSizeMb;
+              };
+              include = ["http.log.access.${defaultLoggerName}"];
+            };
+
+            admin = {
+              level = "INFO";
+              encoder.format = "json";
+              writer = {
+                output = "file";
+                filename = "${config.services.caddy.logDir}/admin.log";
+                roll = true;
+                roll_size_mb = rollSizeMb;
+              };
+              include = ["admin"];
+            };
+
+            tls = {
+              level = "INFO";
+              encoder.format = "json";
+              writer = {
+                output = "file";
+                filename = "${config.services.caddy.logDir}/tls.log";
+                roll = true;
+                roll_size_mb = rollSizeMb;
+              };
+              include = ["tls"];
+            };
+
+            debug = {
+              level = "DEBUG";
+              encoder.format = "json";
+              writer = {
+                output = "file";
+                filename = "${config.services.caddy.logDir}/debug.log";
+                roll = true;
+                roll_keep = 1;
+                roll_size_mb = rollSizeMb;
+              };
+            };
+          }
+          // (lib.mapAttrs (name: _value: {
+              level = "INFO";
+              encoder.format = "json";
+              writer = {
+                output = "file";
+                filename = "${config.services.caddy.logDir}/${name}-access.log";
+                roll = true;
+                roll_size_mb = rollSizeMb;
+              };
+              include = ["http.log.access.${name}"];
+            })
+            hostnameMap)
+          // (lib.mapAttrs' (name: _value: {
+              name = "${name}-error";
+              value = {
+                level = "ERROR";
+                encoder.format = "json";
+                writer = {
+                  output = "file";
+                  filename = "${config.services.caddy.logDir}/${name}-error.log";
+                  roll = true;
+                  roll_size_mb = rollSizeMb;
+                };
+                include = ["http.log.access.${name}"];
+              };
+            })
+            hostnameMap);
+        })
       );
     };
 
