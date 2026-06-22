@@ -279,10 +279,14 @@ in {
 
               authorization_policies = lib.mapAttrsToList (name: _provider: {
                 inherit name;
-                crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
-                allow.roles = ["authp/user"];
-                validate.bearer.header = "yes";
-                inject = { headers = { "with" = { claims = "yes"; }; }; };
+                raw_crypto_key_store_config = ["verify key $CADDY_SECURITY_JWT_KEY"];
+                access_list_rules = [{
+                  comment = "allow authp/user role";
+                  conditions = ["role is authp/user"];
+                  action = "allow";
+                }];
+                validate_bearer_header = true;
+                pass_claims_with_headers = true;
               }) cfg.authProviders;
             };
           })
