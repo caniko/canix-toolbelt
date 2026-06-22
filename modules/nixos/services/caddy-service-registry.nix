@@ -27,7 +27,7 @@
           then 80
           else svc.port;
         host = dialAddress svc;
-        portalName = svc.name;
+        portal = svc.name;
       }
     else
       caddyLib.mkReverseProxyRoute {

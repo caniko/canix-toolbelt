@@ -1,6 +1,6 @@
 {lib}: {
   # Build a Caddy route with caddy-security authenticate handler
-  # guarding a reverse proxy to the upstream service. The portalName
+  # guarding a reverse proxy to the upstream service. The portal
   # must match a key in canix-toolbelt.services.caddy.authProviders.
   mkAuthServiceRoute = {
     hostname,
@@ -30,7 +30,7 @@
     handle = [
       {
         handler = "authenticator";
-        portal_name = portalName;
+        portal = portalName;
         route_matcher = "*";
       }
       {
