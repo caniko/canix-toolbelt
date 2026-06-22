@@ -3,6 +3,8 @@
 
   cfg = config.canix-toolbelt.packages.cliTools;
 
+  builtInKeys = ["enable" "opencodeRules"];
+
   knownTools = {
     jq = {
       description = "JSON processor";
@@ -15,6 +17,7 @@
     ripgrep = {
       description = "Fast grep replacement";
       package = pkgs.ripgrep;
+      binPatterns = ["rg"];
     };
     eza = {
       description = "Modern ls replacement";
@@ -104,6 +107,7 @@
     miller = {
       description = "Structured data processor (CSV/JSON)";
       package = pkgs.miller;
+      binPatterns = ["mlr"];
     };
     ouch = {
       description = "Universal archive tool";
@@ -120,6 +124,7 @@
     trash-cli = {
       description = "Trash can CLI";
       package = pkgs.trash-cli;
+      binPatterns = ["trash-put" "trash-list" "trash-restore" "trash-empty" "trash-rm"];
     };
     websocat = {
       description = "WebSocket client";
@@ -145,15 +150,31 @@
     };
   }) knownTools;
 
-  enabledTools = lib.filterAttrs (n: v: n != "enable" && v.enable) cfg;
+  enabledTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.enable) cfg;
 in {
   options.canix-toolbelt.packages.cliTools = {
     enable = mkEnableOption "system-level CLI tools";
+    opencodeRules = mkOption {
+      type = types.attrsOf types.str;
+      readOnly = true;
+      internal = true;
+      description = "Bash permission rules for opencode derived from enabled CLI tools.";
+    };
   } // toolOptions;
 
   config = mkIf cfg.enable {
     environment.systemPackages = builtins.attrValues (
       builtins.mapAttrs (_: t: t.package) enabledTools
     );
+
+    canix-toolbelt.packages.cliTools.opencodeRules =
+      builtins.foldl' (acc: name:
+        let entry = builtins.getAttr name knownTools;
+            bins = entry.binPatterns or [name];
+        in acc // builtins.listToAttrs (map (bin: {
+          name = "${bin} *";
+          value = "allow";
+        }) bins)
+      ) {} (builtins.attrNames enabledTools);
   };
 }
