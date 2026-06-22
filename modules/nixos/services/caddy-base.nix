@@ -251,13 +251,13 @@ in {
               hostnameMap);
           }
           // lib.optionalAttrs (cfg.authProviders != {}) {
-            apps.security = {
-              oauth2_providers = lib.mapAttrsToList (name: provider:
+            apps.security.config = {
+              identity_providers = lib.mapAttrsToList (name: provider:
                 {inherit name; inherit (provider) driver;}
                 // lib.filterAttrs (n: _: n != "driver") provider
               ) cfg.authProviders;
 
-              authentication_portals = lib.mapAttrs (name: _provider: {
+              authentication_portals = lib.mapAttrsToList (name: _provider: {
                 inherit name;
                 identity_providers = [name];
                 cookie_domain =
@@ -275,7 +275,7 @@ in {
                 ui.links = [];
               }) cfg.authProviders;
 
-              authorization_policies = lib.mapAttrs (name: _provider: {
+              authorization_policies = lib.mapAttrsToList (name: _provider: {
                 inherit name;
                 crypto.key.verify = "$CADDY_SECURITY_JWT_KEY";
                 allow.roles = ["authp/user"];
