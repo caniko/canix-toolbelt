@@ -274,7 +274,7 @@ in {
                       else "";
                   in
                     if cookieDomain != "" then {"${cookieDomain}" = {};} else {};
-                ui.links = [];
+                ui.private_links = [];
               }) cfg.authProviders;
 
               authorization_policies = lib.mapAttrsToList (name: _provider: {
