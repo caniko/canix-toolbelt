@@ -260,7 +260,7 @@ in {
               authentication_portals = lib.mapAttrsToList (name: _provider: {
                 inherit name;
                 identity_providers = [name];
-                cookie_domain =
+                cookie_config.domains =
                   let
                     authHostnames = lib.unique (lib.concatMap (route:
                       let
@@ -268,10 +268,12 @@ in {
                       in
                         lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
                     ) cfg.routes);
+                    cookieDomain =
+                      if authHostnames != []
+                      then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
+                      else "";
                   in
-                    if authHostnames != []
-                    then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
-                    else "";
+                    if cookieDomain != "" then {"${cookieDomain}" = {};} else {};
                 ui.links = [];
               }) cfg.authProviders;
 
