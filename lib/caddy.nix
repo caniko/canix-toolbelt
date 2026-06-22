@@ -30,7 +30,7 @@
     handle = [
       {
         handler = "authenticator";
-        portal = portalName;
+        portal_name = portalName;
         route_matcher = "*";
       }
       {
