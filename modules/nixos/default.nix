@@ -78,4 +78,7 @@
 
   # GPU helpers
   gpu-switcheroo = ./hardware/gpu/switcheroo/switcheroo.nix;
+
+  # CLI Tools
+  cli-tools = ./cli-tools.nix;
 }
