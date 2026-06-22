@@ -280,7 +280,7 @@ in {
 
               authorization_policies = lib.mapAttrsToList (name: _provider: {
                 inherit name;
-                raw_crypto_key_store_config = ["verify key $CADDY_SECURITY_JWT_KEY"];
+                raw_crypto_key_store_config = ["crypto key verify $CADDY_SECURITY_JWT_KEY"];
                 access_list_rules = [{
                   comment = "allow authp/user role";
                   conditions = ["role is authp/user"];
