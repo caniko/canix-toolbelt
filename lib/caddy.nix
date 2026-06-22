@@ -30,7 +30,8 @@
     handle = [
       {
         handler = "authenticator";
-        inherit portalName;
+        portal_name = portalName;
+        route_matcher = "*";
       }
       {
         handler = "subroute";
