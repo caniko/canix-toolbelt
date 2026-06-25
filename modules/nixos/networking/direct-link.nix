@@ -73,6 +73,10 @@ in {
           assertion = cfg.role != "client" || cfg.gateway != null;
           message = "canix-toolbelt.networking.directLink.gateway must be set when role = \"client\"";
         }
+        {
+          assertion = cfg.role != "gateway" || selfHost.directLinkInterface != null;
+          message = "canix-toolbelt.networking.directLink: role = \"gateway\" requires ${hostname} to have network.directLinkInterface in lib/hosts.nix";
+        }
       ];
     }
 
@@ -86,6 +90,13 @@ in {
         // lib.optionalAttrs (cfg.sharedDhcpRange != null) {
           inherit (cfg) sharedDhcpRange;
         });
+
+      # NM's shared-mode dnsmasq listens on directLinkIp:53 for the client.
+      # Without this the NixOS firewall drops DNS queries from the client.
+      networking.firewall.interfaces.${selfHost.directLinkInterface} = {
+        allowedTCPPorts = [53];
+        allowedUDPPorts = [53];
+      };
     })
 
     (lib.mkIf (cfg.role == "client" && !(cfg.suppressInTravelMode && (config.canix-toolbelt.profiles.travel.enable or false))) {
