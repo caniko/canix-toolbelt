@@ -91,12 +91,13 @@
   in {
     ${pathUnitName} = {
       wantedBy = ["multi-user.target"];
-      pathConfig.PathExists = path;
-    }
-    # When triggersService is set, the path unit activates that service
-    # instead of the default <name>.service.
-    // lib.optionalAttrs (triggersService != null) {
-      unitConfig.Unit = triggersService;
+      pathConfig = {
+        PathExists = path;
+        # Unit= goes in the [Path] section for path units, not [Unit].
+        # systemd reads this to know which service to trigger.
+      } // lib.optionalAttrs (triggersService != null) {
+        Unit = triggersService;
+      };
     };
   };
 
