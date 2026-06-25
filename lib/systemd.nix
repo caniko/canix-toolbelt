@@ -32,12 +32,9 @@
     authTokenFile ? null,
     extraScript ? "",
     restartSec ? 30,
-    stateDirMode ? "0755",
   }: let
-    inherit (builtins) baseNameOf dirOf;
     serviceName = "download-${name}";
-    dir = dirOf path;
-    dirName = baseNameOf dir;
+    parentDir = builtins.dirOf path;
   in {
     ${serviceName} = {
       description = "Download ${name}";
@@ -52,8 +49,6 @@
         RestartSec = toString restartSec;
         StartLimitIntervalSec = "0";
         ConditionPathExists = "!${path}";
-        StateDirectory = dirName;
-        StateDirectoryMode = stateDirMode;
       };
 
       script = let
@@ -61,6 +56,7 @@
           "-H \"Authorization: Bearer $(cat ${lib.escapeShellArg authTokenFile})\"";
       in ''
         set -euo pipefail
+        mkdir -p ${lib.escapeShellArg parentDir}
         tmp="${path}.tmp"
         ${pkgs.curl}/bin/curl -L --fail --progress-bar \
           ${tokenFlag} \
