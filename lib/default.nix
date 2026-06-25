@@ -17,5 +17,6 @@ in
     rbac = import ./rbac.nix;
     sshAliases = import ./sshAliases.nix;
     storage = import ./storage.nix;
+    systemd = import ./systemd.nix {inherit lib;};
   }
   // site
