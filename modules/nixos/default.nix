@@ -52,6 +52,7 @@
   direct-link = ./networking/direct-link.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
   stalwart-seed-accounts = ./services/stalwart-seed-accounts.nix;
+  sunshine = ./services/sunshine.nix;
   vpn-dns = ./networking/vpn-dns.nix;
   wg-home-client = ./networking/wg-home-client.nix;
   wg-home-shared = ./networking/wg-home-shared.nix;
