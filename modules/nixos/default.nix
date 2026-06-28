@@ -26,6 +26,7 @@
   wooting = ./hardware/wooting.nix;
 
   # Services
+  betterdesk-server = ./services/betterdesk-server.nix;
   attic-projects-registry = ./services/attic-projects-registry.nix;
   atticd-preset = ./services/atticd-preset.nix;
   caddy-base = ./services/caddy-base.nix;
