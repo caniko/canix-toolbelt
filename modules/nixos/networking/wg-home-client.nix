@@ -119,7 +119,7 @@ in {
         peers = [
           {
             publicKey = wgServerPublicKey;
-            allowedIPs = ["10.123.0.0/24"];
+            allowedIPs = [ config.canix-toolbelt.networking.links.wg-home.cidr ];
             endpoint = "${wgHome.endpointHost}:${toString wgHome.port}";
             inherit (cfg) dynamicEndpointRefreshSeconds dynamicEndpointRefreshRestartSeconds;
             persistentKeepalive = 25;

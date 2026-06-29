@@ -131,6 +131,11 @@
         default = null;
         description = "Optional provider-side comment for synthesized public DNS records.";
       };
+      kind = mkOption {
+        type = types.nullOr types.str;
+        default = "static";
+        description = "Kind of static file service (e.g. 'static-file' for Caddy file_server routes).";
+      };
     };
   };
 in {

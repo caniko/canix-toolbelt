@@ -1,4 +1,4 @@
-{lib, ...}: let
+{config, lib, ...}: let
   inherit (lib) mkOption types;
   deviceTypes = import ../../../lib/deviceTypes.nix;
 
@@ -38,21 +38,21 @@
       lanIp = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = "192.168.178.72";
+        example = "10.0.0.72";
         description = "LAN IP address of this host.";
       };
 
       lanBroadcast = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = "192.168.178.255";
+        example = "10.0.0.255";
         description = "LAN broadcast address (for Wake-on-LAN).";
       };
 
       wgHomeIp = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = "10.123.0.2";
+        example = "10.0.0.2";
         description = "WireGuard wg-home VPN IP address of this host.";
       };
 
@@ -73,7 +73,7 @@
       directLinkIp = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = "10.10.0.1";
+        example = "10.0.0.1";
         description = "Static IP for direct P2P ethernet link.";
       };
 
@@ -138,9 +138,67 @@
     };
   };
 in {
+  options.canix-toolbelt.networking.links = mkOption {
+    type = types.attrsOf (types.submodule {
+      options = {
+        cidr = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Network CIDR for this link (e.g. \"10.123.0.0/24\").";
+        };
+        serverAddress = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Address of the server node on this link.";
+        };
+        port = mkOption {
+          type = types.nullOr types.port;
+          default = null;
+          description = "UDP port for this link (WireGuard etc.).";
+        };
+      };
+    });
+    default = {};
+    description = "Declared network links with their derived CIDRs and server addresses. Populated by fleetix topology.";
+  };
+
+  options.canix-toolbelt.fleetix = {
+    enable = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Enable fleetix integration: populates canix-toolbelt.hosts and networking.links from config.fleetix.topology.hosts. Requires the fleetix flake to be imported.";
+    };
+  };
+
   options.canix-toolbelt.hosts = mkOption {
     type = types.attrsOf hostSubmodule;
     default = {};
     description = "Central registry of all hosts with their SSH public keys and network addresses.";
   };
+
+  config = lib.mkIf config.canix-toolbelt.fleetix.enable (let
+    ft = config.fleetix.topology;
+  in {
+    canix-toolbelt.hosts = lib.mapAttrs (name: host: let
+      ln = host.links or {};
+    in {
+      hostPubkey = host.hostPubkey or null;
+      hostNames = host.hostNames or [];
+      deviceType = host.deviceType or null;
+      dataRoot = (host.storage or {}).dataRoot or null;
+      users = host.users or {};
+      gpuIgpu = (host.gpu or {}).igpu or null;
+      gpuDgpu = (host.gpu or {}).dgpu or null;
+      lanIp = host.network.lanIp or null;
+      lanBroadcast = host.network.lanBroadcast or null;
+      wgHomeIp = (ln.wg-home or {}).address or null;
+      wgHomePublicKey = (ln.wg-home or {}).publicKey or null;
+      macAddress = host.network.macAddress or null;
+      directLinkIp = (ln.direct-link or {}).address or null;
+      directLinkMac = (ln.direct-link or {}).macAddress or null;
+      directLinkInterface = (ln.direct-link or {}).externalInterface or null;
+      directLinkPeers = host.network.directLinkPeers or [];
+      wakeOnLanInterface = host.network.wakeOnLanInterface or null;
+    }) ft.hosts;
+  });
 }

@@ -10,39 +10,14 @@
 
   mkPowerCycleScript = name: target: let
     host = allHosts.${name} or {};
-    hasWol = (host.macAddress or null) != null && (host.lanBroadcast or null) != null;
-    wolCmd =
-      if hasWol
-      then ''
-        echo "Sending Wake-on-LAN to ${name}..."
-        ${pkgs.wol}/bin/wol -i ${host.lanBroadcast} ${host.macAddress}
-      ''
-      else ''echo "No WoL data for ${name}, skipping wake"'';
+    canixBin = "${pkgs.canix}/bin/canix";
   in
     pkgs.writeShellScript "power-cycle-${name}" ''
-      set -euo pipefail
-      TOKEN=$(cat "${cfg.haTokenFile}")
-
-      echo "Turning off ${name} via Home Assistant..."
-      ${pkgs.curl}/bin/curl -sf -X POST "${cfg.haUrl}/api/services/switch/turn_off" \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "Content-Type: application/json" \
-        -d '{"entity_id": "${target.entityId}"}'
-
-      echo "Waiting 10s for power drain..."
-      sleep 10
-
-      echo "Turning on ${name} via Home Assistant..."
-      ${pkgs.curl}/bin/curl -sf -X POST "${cfg.haUrl}/api/services/switch/turn_on" \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "Content-Type: application/json" \
-        -d '{"entity_id": "${target.entityId}"}'
-
-      echo "Waiting 30s for POST..."
-      sleep 30
-
-      ${wolCmd}
-      echo "Power cycle of ${name} complete."
+      exec ${canixBin} power-cycle \
+        "${name}" \
+        --ha-url "${cfg.haUrl}" \
+        --ha-token-file "${cfg.haTokenFile}" \
+        ${lib.optionalString ((host.macAddress or null) != null) ''--mac "${host.macAddress}"''}
     '';
 in {
   options.canix-toolbelt.services.power-cycle-relay = {

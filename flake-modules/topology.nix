@@ -72,11 +72,14 @@
 
     wgServerDetector = lib.mkOption {
       type = lib.types.functionTo (lib.types.functionTo lib.types.bool);
-      default = _name: hostData: let
+      default = name: hostData: let
+        role = ((hostData.links or {}).wg-home or {}).role or null;
         wg = hostData.network.wgHomeIp or null;
       in
-        wg != null && lib.hasSuffix ".1" wg;
-      description = "Predicate `name: hostData: bool` picking the wg-home server.";
+        if role != null
+        then role == "server"
+        else wg != null && lib.hasSuffix ".1" wg;
+      description = "Predicate `name: hostData: bool` picking the wg-home server. First checks `hostData.links.wg-home.role`, falls back to `.1`-suffix heuristic.";
     };
   };
 

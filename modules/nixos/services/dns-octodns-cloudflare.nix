@@ -179,6 +179,24 @@
         default = [];
         description = "Records deliberately left unmanaged by octoDNS.";
       };
+
+      tls = mkOption {
+        type = types.submodule {
+          options = {
+            subdomain = mkOption {
+              type = types.str;
+              description = "Subdomain for TLS certificate configuration.";
+            };
+            extraTrustedNetworks = mkOption {
+              type = types.listOf types.str;
+              default = [];
+              description = "Additional trusted networks for TLS/ACME validation.";
+            };
+          };
+        };
+        default = {};
+        description = "TLS/ACME certificate configuration for this zone.";
+      };
     };
   };
 
@@ -236,6 +254,44 @@
     {}
     allServices;
 
+  # Synthesize CNAME records for Codeberg Pages sites from the topology registry.
+  # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
+  # to <repoName>.caniko.codeberg.page.
+  synthesizedCodebergPagesByZone = let
+    pagesTarget = site:
+      let
+        parts = splitString "/" site.targetRepo;
+        repoName = builtins.elemAt parts (builtins.length parts - 1);
+      in "${repoName}.caniko.codeberg.page";
+  in
+    foldl'
+    (acc: site: let
+      zone = serviceZone "${site.subdomain}.tartanoglu.com";
+    in
+      if zone == null
+      then acc
+      else
+        acc
+        // {
+          ${zone} =
+            (acc.${zone} or [])
+            ++ [
+              {
+                name = site.subdomain;
+                type = "CNAME";
+                data = pagesTarget site;
+                dataFile = null;
+                dataAgenixFile = null;
+                ttl = null;
+                ttlAuto = true;
+                proxied = false;
+                comment = "Codeberg Pages: ${site.targetRepo}";
+              }
+            ];
+        })
+    {}
+    (cfg.codebergPagesSites or []);
+
   effectiveRecordsForZone = zoneName: zone: let
     explicitKeys = builtins.listToAttrs (
       builtins.map (record: {
@@ -245,10 +301,9 @@
       zone.records
     );
     synthesized =
-      if cfg.autoSynthesizeServiceCnames
-      then synthesizedRecordsByZone.${zoneName} or []
-      else [];
-    filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) synthesized;
+      lib.optional (cfg.autoSynthesizeServiceCnames) (synthesizedRecordsByZone.${zoneName} or [])
+      ++ lib.optional (cfg.autoSynthesizeCodebergPagesCnames) (synthesizedCodebergPagesByZone.${zoneName} or []);
+    filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) (lib.flatten synthesized);
   in
     filteredSynthesized ++ zone.records;
 
@@ -643,6 +698,35 @@ in {
       type = types.bool;
       default = true;
       description = "Synthesize Cloudflare CNAME records from canix-toolbelt service registry hostnames in declared zones.";
+    };
+
+    autoSynthesizeCodebergPagesCnames = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Synthesize CNAME records for Codeberg Pages sites from the codebergPagesSites registry.";
+    };
+
+    codebergPagesSites = mkOption {
+      type = types.listOf (types.submodule {
+        freeformType = types.attrsOf types.raw;
+        options = {
+          __pkl_class = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            description = "Pkl class name preserved by pklx serializer. Ignored by the DNS module.";
+          };
+          subdomain = mkOption {
+            type = types.str;
+            description = "Subdomain for the Codeberg Pages site (e.g. 'myproject' for myproject.tartanoglu.com).";
+          };
+          targetRepo = mkOption {
+            type = types.str;
+            description = "Codeberg repository (e.g. 'caniko/myproject').";
+          };
+        };
+      });
+      default = [];
+      description = "Registry of Codeberg Pages sites. Each entry generates a CNAME from <subdomain>.<zone> to <repoName>.caniko.codeberg.page.";
     };
 
     reconciler = {

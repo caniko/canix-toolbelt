@@ -18,7 +18,7 @@ in {
     wgIp = mkOption {
       type = types.str;
       description = "WireGuard IP of this host, used for OIDC redirect URL and default relay address";
-      example = "10.123.0.1";
+      example = "10.0.0.1";
     };
 
     oidcClientSecretPath = mkOption {

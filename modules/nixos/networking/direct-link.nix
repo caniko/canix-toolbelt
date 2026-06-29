@@ -51,7 +51,7 @@ in {
     sharedDhcpRange = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      example = "10.10.0.2,10.10.0.254";
+      example = "10.0.0.2,10.0.0.254";
       description = "On gateway role, optional DHCP range NM hands out on the shared link.";
     };
 

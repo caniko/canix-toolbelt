@@ -52,6 +52,11 @@
       url = "github:caniko/crush/feat/api-key-file";
       flake = false;
     };
+
+    # Fleet topology — consumed for host registry and link derived data.
+    fleetix = {
+      url = "git+https://codeberg.org/caniko/fleetix.git";
+    };
   };
 
   outputs = inputs @ {
