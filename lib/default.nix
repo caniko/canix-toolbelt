@@ -7,6 +7,7 @@ in
     deviceTypes = import ./deviceTypes.nix;
     dns = import ./dns.nix;
     facterDisks = import ./facterDisks.nix;
+    fleetix = import ./fleetix.nix {inherit lib;};
     gpu = import ./gpu.nix;
     mkPkgs = import ./mkPkgs.nix;
     networkmanager = import ./networkmanager.nix;

@@ -25,7 +25,7 @@ in {
   # When the wg-home link is declared (via fleetix integration), derive wgHome defaults
   config.canix-toolbelt.networking.wgHome = lib.mkIf (wgLink.cidr != null) {
     vpnDomain = lib.mkDefault "vpn.${wgLink.endpointSubdomain or "wg"}.candee.baby";
-    endpointHost = lib.mkDefault (wgLink.endpointSubdomain or "wg");
+    endpointHost = lib.mkDefault (wgLink.endpointHost or wgLink.ddnsHost or wgLink.endpointSubdomain or "wg");
     port = lib.mkDefault (wgLink.port or 54321);
   };
 }

@@ -3,7 +3,8 @@
   lib,
   ...
 }: let
-  inherit (lib) filter mkOption types;
+  inherit (lib) filter mkIf mkMerge mkOption types;
+  fleetixLib = (import ../../../lib {inherit lib;}).fleetix;
 
   authSubmodule = types.submodule {
     options = {
@@ -69,6 +70,21 @@
         type = types.str;
         description = "Hostname where the service runs (key from canix-toolbelt.hosts)";
       };
+      lanExposed = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Whether to open the service port on the target host's LAN interface.";
+      };
+      serviceHost = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional service-host label for DNS or routing metadata.";
+      };
+      zone = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional DNS zone associated with this service.";
+      };
       proxied = mkOption {
         type = types.bool;
         default = false;
@@ -102,6 +118,28 @@
     };
   };
 
+  internalServiceSubmodule = types.submodule {
+    options = {
+      name = mkOption {
+        type = types.str;
+        description = "Internal service identifier";
+      };
+      port = mkOption {
+        type = types.port;
+        description = "Port the internal service listens on";
+      };
+      targetHost = mkOption {
+        type = types.str;
+        description = "Hostname where the service runs";
+      };
+      description = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Human-readable service description.";
+      };
+    };
+  };
+
   staticFileServiceSubmodule = types.submodule {
     options = {
       name = mkOption {
@@ -113,7 +151,8 @@
         description = "Public hostname for the static file route";
       };
       staticRoot = mkOption {
-        type = types.path;
+        type = types.nullOr types.path;
+        default = null;
         description = "Directory served as the static file root";
       };
       cloudflareProxied = mkOption {
@@ -130,6 +169,11 @@
         type = types.nullOr types.str;
         default = null;
         description = "Optional provider-side comment for synthesized public DNS records.";
+      };
+      zone = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional DNS zone associated with this service.";
       };
       kind = mkOption {
         type = types.nullOr types.str;
@@ -170,6 +214,18 @@ in {
       description = "Static file services rendered as Caddy file_server routes";
     };
 
+    internalServices = mkOption {
+      type = types.listOf internalServiceSubmodule;
+      default = [];
+      description = "Internal service registry entries that are not public reverse-proxy routes.";
+    };
+
+    emailIdentities = mkOption {
+      type = types.attrsOf types.str;
+      default = {};
+      description = "Fleet-level service email identities.";
+    };
+
     localServices = mkOption {
       type = types.listOf reverseProxyServiceSubmodule;
       readOnly = true;
@@ -188,4 +244,47 @@ in {
       description = "Local services that need a local reverse proxy (proxied = true)";
     };
   };
+
+  config = mkMerge [
+    (mkIf config.canix-toolbelt.fleetix.enable (let
+      ft =
+        if config.canix-toolbelt.fleetix.topology != null
+        then config.canix-toolbelt.fleetix.topology
+        else config.fleetix.topology;
+      domains = fleetixLib.normalizeDomains {topology = ft;};
+      services = fleetixLib.normalizeServices {
+        inherit domains;
+        topology = ft;
+      };
+    in {
+      canix-toolbelt.services = {
+        inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;
+      };
+    }))
+
+    (let
+      localPorts = map (svc: svc.port) config.canix-toolbelt.services.localServices;
+    in
+      mkIf (localPorts != []) {
+        networking.firewall.allowedTCPPorts = localPorts;
+      })
+
+    (let
+      hostname = config.networking.hostName;
+      host = config.canix-toolbelt.hosts.${hostname} or {};
+      lanInterface = host.lanInterface or null;
+      lanExposedPorts =
+        map (svc: svc.port)
+        (filter (
+            svc:
+              svc.targetHost
+              == hostname
+              && (svc.lanExposed or false)
+          )
+          config.canix-toolbelt.services.reverseProxyServices);
+    in
+      mkIf (lanInterface != null && lanExposedPorts != []) {
+        networking.firewall.interfaces.${lanInterface}.allowedTCPPorts = lanExposedPorts;
+      })
+  ];
 }

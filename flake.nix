@@ -4,7 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -51,11 +54,6 @@
     crush-fork = {
       url = "github:caniko/crush/feat/api-key-file";
       flake = false;
-    };
-
-    # Fleet topology — consumed for host registry and link derived data.
-    fleetix = {
-      url = "git+https://codeberg.org/caniko/fleetix.git";
     };
   };
 
@@ -113,7 +111,9 @@
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+            fleetix-lib-eval = import ./nixos-tests/fleetix-lib-eval.nix {inherit pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
+            dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
@@ -132,14 +132,14 @@
             };
           });
         in
-        pkgs.buildGoModule.override { go = go_1_26_4; } {
-          pname = "crush";
-          version = "0.77.0-api-key-file";
-          src = inputs.crush-fork;
-          vendorHash = "sha256-a+4k+fjqdWsAUv0ilagd46pYwFaSd1+mJ25Vr47Lsys=";
-          ldflags = [ "-s" "-w" ];
-          doCheck = false;
-        };
+          pkgs.buildGoModule.override {go = go_1_26_4;} {
+            pname = "crush";
+            version = "0.77.0-api-key-file";
+            src = inputs.crush-fork;
+            vendorHash = "sha256-a+4k+fjqdWsAUv0ilagd46pYwFaSd1+mJ25Vr47Lsys=";
+            ldflags = ["-s" "-w"];
+            doCheck = false;
+          };
         apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
           domain = "canix-toolbelt.tartanoglu.com";
         };

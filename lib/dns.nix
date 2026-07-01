@@ -3,6 +3,13 @@
   # List-returning helpers are meant to be spliced with `++`; single-record
   # helpers are meant to be inserted inline in a records list.
 
+  hostInZone = {
+    lib,
+    fqdn,
+    zone,
+  }:
+    fqdn == zone || lib.hasSuffix ".${zone}" fqdn;
+
   # Generate proxied/non-proxied CNAMEs to the zone apex for a list of subdomain names.
   # Used to compress the "name -> zone-apex" boilerplate in zone records.
   apexCname = {

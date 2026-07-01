@@ -1,6 +1,11 @@
-{config, lib, ...}: let
+{
+  config,
+  lib,
+  ...
+}: let
   inherit (lib) mkOption types;
   deviceTypes = import ../../../lib/deviceTypes.nix;
+  fleetixLib = (import ../../../lib {inherit lib;}).fleetix;
 
   hostUserSubmodule = types.submodule {
     freeformType = types.attrsOf types.anything;
@@ -47,6 +52,13 @@
         default = null;
         example = "10.0.0.255";
         description = "LAN broadcast address (for Wake-on-LAN).";
+      };
+
+      lanInterface = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "end0";
+        description = "Interface name for LAN-scoped service exposure.";
       };
 
       wgHomeIp = mkOption {
@@ -156,6 +168,21 @@ in {
           default = null;
           description = "UDP port for this link (WireGuard etc.).";
         };
+        endpointSubdomain = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Public endpoint subdomain for links with externally dialed endpoints.";
+        };
+        endpointHost = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Public endpoint hostname for links with externally dialed endpoints.";
+        };
+        ddnsHost = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Dynamic DNS hostname for links with externally dialed endpoints.";
+        };
       };
     });
     default = {};
@@ -168,6 +195,15 @@ in {
       default = false;
       description = "Enable fleetix integration: populates canix-toolbelt.hosts and networking.links from config.fleetix.topology.hosts. Requires the fleetix flake to be imported.";
     };
+
+    topology = mkOption {
+      type = types.nullOr types.attrs;
+      default = null;
+      description = ''
+        Optional Fleetix topology attrset. When null, the adapter reads
+        config.fleetix.topology from the Fleetix NixOS module.
+      '';
+    };
   };
 
   options.canix-toolbelt.hosts = mkOption {
@@ -177,28 +213,38 @@ in {
   };
 
   config = lib.mkIf config.canix-toolbelt.fleetix.enable (let
-    ft = config.fleetix.topology;
+    ft =
+      if config.canix-toolbelt.fleetix.topology != null
+      then config.canix-toolbelt.fleetix.topology
+      else config.fleetix.topology;
+    normalized = fleetixLib.normalizeAll {topology = ft;};
   in {
-    canix-toolbelt.hosts = lib.mapAttrs (name: host: let
-      ln = host.links or {};
-    in {
+    canix-toolbelt.networking.links = lib.mapAttrs (_linkName: link: {
+      inherit (link) port cidr serverAddress;
+      endpointSubdomain = link.endpointSubdomain or null;
+      endpointHost = link.endpointHost or null;
+      ddnsHost = link.ddnsHost or null;
+    }) normalized.links;
+
+    canix-toolbelt.hosts = lib.mapAttrs (_name: host: {
       hostPubkey = host.hostPubkey or null;
       hostNames = host.hostNames or [];
       deviceType = host.deviceType or null;
-      dataRoot = (host.storage or {}).dataRoot or null;
+      dataRoot = host.dataRoot or null;
       users = host.users or {};
       gpuIgpu = (host.gpu or {}).igpu or null;
       gpuDgpu = (host.gpu or {}).dgpu or null;
       lanIp = host.network.lanIp or null;
       lanBroadcast = host.network.lanBroadcast or null;
-      wgHomeIp = (ln.wg-home or {}).address or null;
-      wgHomePublicKey = (ln.wg-home or {}).publicKey or null;
+      lanInterface = host.network.lanInterface or null;
+      wgHomeIp = host.network.wgHomeIp or null;
+      wgHomePublicKey = host.network.wgHomePublicKey or null;
       macAddress = host.network.macAddress or null;
-      directLinkIp = (ln.direct-link or {}).address or null;
-      directLinkMac = (ln.direct-link or {}).macAddress or null;
-      directLinkInterface = (ln.direct-link or {}).externalInterface or null;
+      directLinkIp = host.network.directLinkIp or null;
+      directLinkMac = host.network.directLinkMac or null;
+      directLinkInterface = host.network.directLinkInterface or null;
       directLinkPeers = host.network.directLinkPeers or [];
       wakeOnLanInterface = host.network.wakeOnLanInterface or null;
-    }) ft.hosts;
+    }) normalized.hosts;
   });
 }

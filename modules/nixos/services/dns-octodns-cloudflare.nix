@@ -258,11 +258,10 @@
   # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
   # to <repoName>.caniko.codeberg.page.
   synthesizedCodebergPagesByZone = let
-    pagesTarget = site:
-      let
-        parts = splitString "/" site.targetRepo;
-        repoName = builtins.elemAt parts (builtins.length parts - 1);
-      in "${repoName}.caniko.codeberg.page";
+    pagesTarget = site: let
+      parts = splitString "/" site.targetRepo;
+      repoName = builtins.elemAt parts (builtins.length parts - 1);
+    in "${repoName}.caniko.codeberg.page";
   in
     foldl'
     (acc: site: let
@@ -648,6 +647,9 @@
   ];
 
   reconcilerEnabled = cfg.enable && cfg.cloudflareToken.secretPath != null;
+  applyExtraArgs =
+    concatStringsSep " "
+    (["--doit"] ++ lib.optional cfg.reconciler.applyForce "--force" ++ cfg.reconciler.extraApplyArgs);
 
   mkReconcileService = {
     description,
@@ -734,6 +736,18 @@ in {
         type = types.str;
         default = "cloudflare-octodns";
         description = "System user that runs the octoDNS reconcile services.";
+      };
+
+      applyForce = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Pass --force to octoDNS for the activation apply service.";
+      };
+
+      extraApplyArgs = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Additional octoDNS arguments passed only to the activation apply service.";
       };
     };
 
@@ -826,7 +840,7 @@ in {
       cloudflare-octodns-apply =
         (mkReconcileService {
           description = "Cloudflare DNS reconcile (apply changes)";
-          extraArgs = "--doit";
+          extraArgs = applyExtraArgs;
         })
         // {
           wantedBy = ["multi-user.target"];
