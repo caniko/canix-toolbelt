@@ -26,6 +26,30 @@ pkgs.testers.nixosTest {
       EOF
     '';
     runtime = config.canix-toolbelt.services.forgejoRunner.containerRuntime;
+    dynamicRunnerConfig = pkgs.writeShellScript "forgejo-runner-test-dynamic-config" ''
+      set -eu
+
+      uuid_file=/tmp/forgejo-runner-test.uuid
+      config_file=/tmp/forgejo-runner-test.yaml
+
+      for _ in $(seq 1 120); do
+        if [ -r "$uuid_file" ]; then
+          break
+        fi
+        sleep 1
+      done
+      test -r "$uuid_file"
+
+      cp ${config.services.forgejo-runner.instances.test.configFile} "$config_file"
+      chmod 0600 "$config_file"
+
+      uuid="$(cat "$uuid_file")"
+      ${pkgs.gnused}/bin/sed -i \
+        "s/00000000-0000-0000-0000-000000000000/$uuid/g" \
+        "$config_file"
+
+      exec ${lib.getExe config.services.forgejo-runner.package} daemon --config "$config_file"
+    '';
   in {
     imports = [
       ../modules/nixos/services/forgejo-runner.nix
@@ -85,20 +109,22 @@ pkgs.testers.nixosTest {
       ];
     };
 
-    services.forgejo.runner.instances.test = {
+    services.forgejo-runner.instances.test = {
       enable = true;
-      url = "http://localhost:3000";
-      registrationTokenFile = "/var/lib/forgejo/runner_token";
-      labels = [
-        # Match atlas' docker-scheme label shape so the runtime container
-        # options and locally loaded runner image are exercised.
-        "test:${runtime.imageRef}"
-      ];
       settings = {
         log.level = "info";
         runner = {
           name = "test";
           capacity = 1;
+        };
+        server.connections.local = {
+          url = "http://localhost:3000";
+          uuid = "00000000-0000-0000-0000-000000000000";
+          labels = [
+            # Match atlas' docker-scheme label shape so the runtime container
+            # options and locally loaded runner image are exercised.
+            "test:${runtime.imageRef}"
+          ];
         };
         container = {
           # Use the VM's host network so the hermetic HTTPS probe can reach a
@@ -111,6 +137,7 @@ pkgs.testers.nixosTest {
           valid_volumes = runtime.validVolumes;
         };
       };
+      secrets.server.connections.local.token_url = "/var/lib/forgejo/runner_token";
     };
 
     # Phase 03 selected 3d/no-code-change in:
@@ -118,12 +145,13 @@ pkgs.testers.nixosTest {
     # Simulate a systemd-unit environment leak source. The current runtime must
     # neutralize it by making the container SSL_CERT_FILE/NIX_SSL_CERT_FILE
     # point at /canix-forgejo-action-certs instead of this host profile path.
-    systemd.services."forgejo-runner@test" = {
+    systemd.services.forgejo-runner-test = {
       wantedBy = lib.mkForce [];
       environment = {
         SSL_CERT_FILE = "/nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt";
         NIX_SSL_CERT_FILE = "/nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt";
       };
+      serviceConfig.ExecStart = lib.mkForce "${dynamicRunnerConfig}";
     };
   };
 
@@ -198,14 +226,20 @@ pkgs.testers.nixosTest {
         + "-d '{\"has_actions\":true}'"
     )
 
-    server.succeed(
-        "su -l forgejo -c 'GITEA_WORK_DIR=/var/lib/forgejo forgejo actions generate-runner-token' "
-        + "> /var/lib/forgejo/runner_token"
+    runner_registration = json.loads(
+        server.succeed(
+            "curl --fail -X POST http://localhost:3000/api/v1/user/actions/runners "
+            + "-H 'Accept: application/json' -H 'Content-Type: application/json' "
+            + f"-H 'Authorization: token {api_token}' "
+            + "-d '{\"name\":\"test\"}'"
+        )
     )
-    server.systemctl("start forgejo-runner@test.service")
-    server.wait_for_unit("forgejo-runner@test.service")
+    server.succeed(f"printf %s {shlex.quote(runner_registration['token'])} > /var/lib/forgejo/runner_token")
+    server.succeed(f"printf %s {shlex.quote(runner_registration['uuid'])} > /tmp/forgejo-runner-test.uuid")
+    server.systemctl("start forgejo-runner-test.service")
+    server.wait_for_unit("forgejo-runner-test.service")
     server.wait_until_succeeds(
-        "journalctl -o cat -u forgejo-runner@test.service | grep -q 'Runner registered successfully'",
+        "journalctl -o cat -u forgejo-runner-test.service | grep -q 'Runner registered successfully'",
         timeout=60,
     )
 
