@@ -4,6 +4,10 @@
   perSystem.treefmt = {
     flakeCheck = true;
 
+    settings.excludes = [
+      "nix/store/**"
+    ];
+
     programs = {
       deadnix.enable = true;
       gofmt.enable = true;

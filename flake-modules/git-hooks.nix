@@ -45,13 +45,16 @@
 
     config.pre-commit = {
       check.enable = true;
-      settings.hooks = {
-        treefmt.enable = true;
-        mypy = lib.mkIf cfg.mypy.enable {
-          enable = true;
-          inherit (cfg.mypy) args excludes files;
-          pass_filenames = cfg.mypy.passFilenames;
-          settings.binPath = lib.mkIf (cfg.mypy.binPath != null) cfg.mypy.binPath;
+      settings = {
+        install.enable = true;
+        hooks = {
+          treefmt.enable = true;
+          mypy = lib.mkIf cfg.mypy.enable {
+            enable = true;
+            inherit (cfg.mypy) args excludes files;
+            pass_filenames = cfg.mypy.passFilenames;
+            settings.binPath = lib.mkIf (cfg.mypy.binPath != null) cfg.mypy.binPath;
+          };
         };
       };
     };
