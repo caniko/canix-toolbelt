@@ -19,17 +19,22 @@
     filter
     filterAttrs
     foldl'
-    hasSuffix
     literalExpression
     mapAttrs
     mkEnableOption
     mkOption
-    removeSuffix
-    splitString
     types
     ;
 
-  dnsGenerate = dnsManager.lib.generate crossbowBuildPkgs;
+  effectiveDnsManagerBuildPkgs =
+    # dns-manager runs while rendering config into the Nix store, not on the
+    # target host. Cross builds set _module.args.dnsManagerBuildPkgs so this
+    # stays native to the build machine instead of compiling the renderer for
+    # the target.
+    config._module.args.dnsManagerBuildPkgs or crossbowBuildPkgs;
+  dnsGenerate = dnsManager.lib.generate effectiveDnsManagerBuildPkgs;
+  caddyLib = import ../../../lib/caddy.nix {inherit lib;};
+  fleetixLib = inputs.fleetix.lib;
 
   recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
@@ -40,7 +45,6 @@
     else name;
   normalizeType = type: lib.toUpper type;
   recordKey = record: "${normalizeName record.name}|${normalizeType record.type}";
-
   dropNulls = filterAttrs (_: value: value != null);
   valueOr = fallback: value:
     if value == null
@@ -131,6 +135,34 @@
     };
   };
 
+  redirectSubmodule = types.submodule {
+    options = {
+      from = mkOption {
+        type = types.str;
+        example = "example.com";
+        description = "Hostname that should receive the HTTP redirect.";
+      };
+
+      to = mkOption {
+        type = types.str;
+        example = "https://www.example.com";
+        description = "Absolute http(s) target URL without request URI placeholder.";
+      };
+
+      status = mkOption {
+        type = types.int;
+        default = 301;
+        description = "HTTP 3xx status code for the redirect.";
+      };
+
+      preservePath = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Append the original request URI to the redirect target.";
+      };
+    };
+  };
+
   zoneSubmodule = types.submodule {
     options = {
       defaultTtl = mkOption {
@@ -200,96 +232,65 @@
     };
   };
 
-  allServices =
-    (config.canix-toolbelt.services.reverseProxyServices or [])
-    ++ (config.canix-toolbelt.services.staticFileServices or []);
-
   zoneNames = attrNames cfg.zones;
 
-  serviceZone = hostname: let
-    matches = filter (zone: hostname == zone || hasSuffix ".${zone}" hostname) zoneNames;
-  in
-    if matches == []
-    then null
-    else
-      foldl'
-      (best: zone:
-        if best == null || builtins.length (splitString "." zone) > builtins.length (splitString "." best)
-        then zone
-        else best)
-      null
-      matches;
+  topologyForDnsIntents = {
+    domains = {
+      zones = zoneNames;
+      managedZones = zoneNames;
+      codebergPagesSites = cfg.codebergPagesSites or [];
+    };
+    services = {
+      reverseProxyServices = config.canix-toolbelt.services.reverseProxyServices or [];
+      staticFileServices = config.canix-toolbelt.services.staticFileServices or [];
+      internalServices = [];
+    };
+  };
 
-  serviceRelativeName = zone: hostname:
-    if hostname == zone
-    then "@"
-    else removeSuffix ".${zone}" hostname;
+  cnameIntentToRecord = intent: {
+    name = intent.relativeName;
+    type = "CNAME";
+    data = intent.target;
+    dataFile = null;
+    dataAgenixFile = null;
+    ttl = null;
+    ttlAuto = true;
+    inherit (intent) proxied comment;
+  };
 
   synthesizedRecordsByZone =
     foldl'
-    (acc: service: let
-      zone = serviceZone service.hostname;
-    in
-      if zone == null || (service.vpnOnly or false) || !(service.publishCname or true)
-      then acc
-      else
-        acc
-        // {
-          ${zone} =
-            (acc.${zone} or [])
-            ++ [
-              {
-                name = serviceRelativeName zone service.hostname;
-                type = "CNAME";
-                data = zone;
-                dataFile = null;
-                dataAgenixFile = null;
-                ttl = null;
-                ttlAuto = true;
-                proxied = service.cloudflareProxied or false;
-                comment = service.dnsComment or null;
-              }
-            ];
-        })
+    (acc: intent:
+      acc
+      // {
+        ${intent.zone} =
+          (acc.${intent.zone} or [])
+          ++ [
+            (cnameIntentToRecord intent)
+          ];
+      })
     {}
-    allServices;
+    (fleetixLib.services.serviceCnameIntents {topology = topologyForDnsIntents;});
 
   # Synthesize CNAME records for Codeberg Pages sites from the topology registry.
   # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
   # to <repoName>.caniko.codeberg.page.
-  synthesizedCodebergPagesByZone = let
-    pagesTarget = site: let
-      parts = splitString "/" site.targetRepo;
-      repoName = builtins.elemAt parts (builtins.length parts - 1);
-    in "${repoName}.caniko.codeberg.page";
-  in
+  synthesizedCodebergPagesByZone =
     foldl'
-    (acc: site: let
-      zone = serviceZone "${site.subdomain}.tartanoglu.com";
-    in
-      if zone == null
-      then acc
-      else
-        acc
-        // {
-          ${zone} =
-            (acc.${zone} or [])
-            ++ [
-              {
-                name = site.subdomain;
-                type = "CNAME";
-                data = pagesTarget site;
-                dataFile = null;
-                dataAgenixFile = null;
-                ttl = null;
-                ttlAuto = true;
-                proxied = false;
-                comment = "Codeberg Pages: ${site.targetRepo}";
-              }
-            ];
-        })
+    (acc: intent:
+      acc
+      // {
+        ${intent.zone} =
+          (acc.${intent.zone} or [])
+          ++ [
+            (cnameIntentToRecord intent)
+          ];
+      })
     {}
-    (cfg.codebergPagesSites or []);
+    (fleetixLib.services.codebergPagesCnameIntents {
+      topology = topologyForDnsIntents;
+      baseZone = cfg.codebergPagesZone;
+    });
 
   effectiveRecordsForZone = zoneName: zone: let
     explicitKeys = builtins.listToAttrs (
@@ -426,6 +427,7 @@
         else (cfg.zones.${builtins.head (attrNames effectiveZones)}.defaultTtl or 3600);
       zones = mapAttrs zoneToExtraConfig effectiveZones;
     };
+    redirects = cfg.redirects;
   };
 
   token =
@@ -484,7 +486,18 @@
     (record: "Apex (@) CNAME is invalid per RFC 1034 §3.6.2 (${record._zoneName}: ${record.name} ${record.type}). Use type = \"ALIAS\" for Cloudflare CNAME-flattening at the zone apex.")
     (filter (record: normalizeName record.name == "" && normalizeType record.type == "CNAME") allEffectiveRecords);
 
-  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors;
+  redirectErrors =
+    concatMap
+    (redirect: let
+      ctx = "redirect ${redirect.from}";
+    in
+      lib.optional (redirect.from == "") "${ctx}: from must not be empty"
+      ++ lib.optional (!(lib.hasPrefix "https://" redirect.to || lib.hasPrefix "http://" redirect.to)) "${ctx}: to must be an absolute http(s) URL"
+      ++ lib.optional (lib.hasInfix "{http.request.uri}" redirect.to) "${ctx}: to must not include {http.request.uri}; use preservePath instead"
+      ++ lib.optional (!(redirect.status >= 300 && redirect.status <= 399)) "${ctx}: status must be a 3xx HTTP status code")
+    cfg.redirects;
+
+  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors;
 
   validatedDnsConfig =
     if validationErrors == []
@@ -630,6 +643,7 @@
   };
 
   octodnsConfig = mkOctodnsConfig;
+  caddyRedirectRoutes = builtins.map caddyLib.mkRedirectRoute cfg.redirects;
 
   octodnsConfigLocal = pkgs.linkFarm "cloudflare-octodns-local" [
     {
@@ -667,6 +681,10 @@
     };
   };
 in {
+  imports = [
+    ./caddy-base.nix
+  ];
+
   options.canix-toolbelt.dns = {
     enable = mkEnableOption "declarative DNS zones via dns-manager";
 
@@ -674,6 +692,12 @@ in {
       type = types.attrsOf zoneSubmodule;
       default = {};
       description = "DNS zones declared on this host.";
+    };
+
+    redirects = mkOption {
+      type = types.listOf redirectSubmodule;
+      default = [];
+      description = "HTTP redirect intents projected to Caddy routes without invoking the dns-manager renderer.";
     };
 
     cloudflareToken = {
@@ -706,6 +730,12 @@ in {
       type = types.bool;
       default = true;
       description = "Synthesize CNAME records for Codeberg Pages sites from the codebergPagesSites registry.";
+    };
+
+    codebergPagesZone = mkOption {
+      type = types.str;
+      default = "tartanoglu.com";
+      description = "Zone under which Codeberg Pages CNAME records are synthesized.";
     };
 
     codebergPagesSites = mkOption {
@@ -819,6 +849,8 @@ in {
       inherit octodnsConfigLocal;
       agenix.records = agenixSecretRecords;
     };
+
+    canix-toolbelt.services.caddy.routes = lib.mkAfter caddyRedirectRoutes;
 
     users.groups = lib.mkIf reconcilerEnabled {
       ${cfg.reconciler.user} = {};

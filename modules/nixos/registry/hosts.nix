@@ -1,11 +1,12 @@
 {
   config,
+  inputs ? {},
   lib,
   ...
 }: let
   inherit (lib) mkOption types;
   deviceTypes = import ../../../lib/deviceTypes.nix;
-  fleetixLib = (import ../../../lib {inherit lib;}).fleetix;
+  fleetixLib = inputs.fleetix.lib or (throw "canix-toolbelt host-registry: inputs.fleetix.lib is required when canix-toolbelt.fleetix.enable = true");
 
   hostUserSubmodule = types.submodule {
     freeformType = types.attrsOf types.anything;
@@ -217,7 +218,7 @@ in {
       if config.canix-toolbelt.fleetix.topology != null
       then config.canix-toolbelt.fleetix.topology
       else config.fleetix.topology;
-    normalized = fleetixLib.normalizeAll {topology = ft;};
+    normalized = fleetixLib.projections.normalize {topology = ft;};
   in {
     canix-toolbelt.networking.links = lib.mapAttrs (_linkName: link: {
       inherit (link) port cidr serverAddress;

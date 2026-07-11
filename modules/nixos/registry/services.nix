@@ -1,10 +1,11 @@
 {
   config,
+  inputs ? {},
   lib,
   ...
 }: let
   inherit (lib) filter mkIf mkMerge mkOption types;
-  fleetixLib = (import ../../../lib {inherit lib;}).fleetix;
+  fleetixLib = inputs.fleetix.lib or (throw "canix-toolbelt service-registry: inputs.fleetix.lib is required when canix-toolbelt.fleetix.enable = true");
 
   authSubmodule = types.submodule {
     options = {
@@ -14,6 +15,45 @@
         type = types.enum ["kanidm" "rauthy"];
         default = "kanidm";
         description = "OIDC identity provider backend.";
+      };
+    };
+  };
+
+  metricEndpointSubmodule = types.submodule {
+    options = {
+      port = mkOption {
+        type = types.port;
+        description = "Metrics endpoint port.";
+      };
+      path = mkOption {
+        type = types.str;
+        default = "/metrics";
+        description = "Metrics endpoint HTTP path.";
+      };
+      scheme = mkOption {
+        type = types.enum ["http" "https"];
+        default = "http";
+        description = "Metrics endpoint scheme.";
+      };
+    };
+  };
+
+  monitoringSubmodule = types.submodule {
+    options = {
+      probe = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional blackbox probe kind override.";
+      };
+      metrics = mkOption {
+        type = types.listOf metricEndpointSubmodule;
+        default = [];
+        description = "Metrics endpoints associated with this service.";
+      };
+      alert = mkOption {
+        type = types.nullOr types.bool;
+        default = null;
+        description = "Optional alerting intent for this service.";
       };
     };
   };
@@ -115,6 +155,11 @@
         default = null;
         description = "Optional provider-side comment for synthesized public DNS records.";
       };
+      monitoring = mkOption {
+        type = monitoringSubmodule;
+        default = {};
+        description = "Monitoring metadata for this service.";
+      };
     };
   };
 
@@ -136,6 +181,11 @@
         type = types.nullOr types.str;
         default = null;
         description = "Human-readable service description.";
+      };
+      monitoring = mkOption {
+        type = monitoringSubmodule;
+        default = {};
+        description = "Monitoring metadata for this service.";
       };
     };
   };
@@ -179,6 +229,11 @@
         type = types.nullOr types.str;
         default = "static";
         description = "Kind of static file service (e.g. 'static-file' for Caddy file_server routes).";
+      };
+      monitoring = mkOption {
+        type = monitoringSubmodule;
+        default = {};
+        description = "Monitoring metadata for this service.";
       };
     };
   };
@@ -251,11 +306,8 @@ in {
         if config.canix-toolbelt.fleetix.topology != null
         then config.canix-toolbelt.fleetix.topology
         else config.fleetix.topology;
-      domains = fleetixLib.normalizeDomains {topology = ft;};
-      services = fleetixLib.normalizeServices {
-        inherit domains;
-        topology = ft;
-      };
+      normalized = fleetixLib.projections.normalize {topology = ft;};
+      services = normalized.services;
     in {
       canix-toolbelt.services = {
         inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;

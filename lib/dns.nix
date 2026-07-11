@@ -10,6 +10,41 @@
   }:
     fqdn == zone || lib.hasSuffix ".${zone}" fqdn;
 
+  dynamicHostExcludes = {
+    lib,
+    zone,
+    dynamicHosts,
+  }: let
+    dynForZone = builtins.filter (h:
+      h.fqdn == zone || lib.hasSuffix ".${zone}" h.fqdn)
+    dynamicHosts;
+    relName = h:
+      if h.fqdn == zone
+      then "@"
+      else lib.removeSuffix ".${zone}" h.fqdn;
+  in
+    builtins.concatMap (h: [
+      {
+        name = relName h;
+        type = "A";
+      }
+      {
+        name = relName h;
+        type = "AAAA";
+      }
+    ])
+    dynForZone;
+
+  cloudflareDdnsProxiedExpression = {
+    dynamicHosts ? null,
+    proxiedFqdns ? map (h: h.fqdn) (builtins.filter (h: h.proxied) dynamicHosts),
+  }: let
+    proxiedNames = proxiedFqdns;
+  in
+    if proxiedNames == []
+    then "false"
+    else builtins.concatStringsSep " || " (map (n: "is(${n})") proxiedNames);
+
   # Generate proxied/non-proxied CNAMEs to the zone apex for a list of subdomain names.
   # Used to compress the "name -> zone-apex" boilerplate in zone records.
   apexCname = {

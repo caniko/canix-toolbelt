@@ -124,13 +124,23 @@
     wrapperName = wrapperArgs.wrapperName or (lib.getName basePackage);
     enableAngleVulkan = wrapperArgs.enableAngleVulkan or true;
     skipPrograms = wrapperArgs.skipPrograms or [];
+    wrapperBasePackage =
+      if basePackage ? overrideAttrs
+      then
+        basePackage.overrideAttrs (old: {
+          # wrapper-manager copies basePackage.meta onto the generated
+          # symlinkJoin. Keep license enforcement on the real package, not on
+          # the local wrapper derivation.
+          meta = removeAttrs (old.meta or {}) ["license" "sourceProvenance"];
+        })
+      else basePackage;
     inherit
       ((wrapper-manager.lib {
           inherit pkgs;
           modules = [
             {
               wrappers.${wrapperName} = {
-                inherit basePackage;
+                basePackage = wrapperBasePackage;
                 prependFlags = chromiumFlags {inherit enableAngleVulkan;};
                 env = chromiumEnv;
                 programs = lib.genAttrs skipPrograms (_: {});

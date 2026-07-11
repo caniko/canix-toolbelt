@@ -1,4 +1,12 @@
-{lib}: {
+{lib}: let
+  redirectLocation = {
+    to,
+    preservePath ? true,
+  }:
+    if preservePath
+    then "${to}{http.request.uri}"
+    else to;
+in {
   # Build a Caddy route with caddy-security authenticate handler
   # guarding a reverse proxy to the upstream service. The portal
   # must match a key in canix-toolbelt.services.caddy.authProviders.
@@ -79,6 +87,58 @@
         ];
       })
       ++ [proxyHandler];
+  };
+
+  mkRedirectRoute = {
+    from,
+    to,
+    status ? 301,
+    preservePath ? true,
+  }: {
+    match = [{host = [from];}];
+    handle = [
+      {
+        handler = "static_response";
+        status_code = status;
+        headers.Location = [
+          (redirectLocation {
+            inherit to preservePath;
+          })
+        ];
+      }
+    ];
+  };
+
+  mkStaticResponseRoute = {
+    hostname,
+    status,
+    location ? null,
+    path ? null,
+    queryNot ? null,
+  }: {
+    match = [
+      ({
+        host = [hostname];
+      }
+      // lib.optionalAttrs (path != null) {
+        path =
+          if builtins.isList path
+          then path
+          else [path];
+      }
+      // lib.optionalAttrs (queryNot != null) {
+        not = [{query = queryNot;}];
+      })
+    ];
+    handle = [
+      ({
+        handler = "static_response";
+        status_code = status;
+      }
+      // lib.optionalAttrs (location != null) {
+        headers.Location = [location];
+      })
+    ];
   };
 
   mkStaticFileRoute = {

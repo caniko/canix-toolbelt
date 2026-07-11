@@ -23,6 +23,29 @@
 
   pgReceivewalCmd = "${wrapBin "pg-receivewal" "bin/pg_receivewal"} -h ${sourceId} -p ${toString cfg.source.port} -U replicator";
   pgBasebackupCmd = "${wrapBin "pg-basebackup" "bin/pg_basebackup"} -h ${sourceId} -p ${toString cfg.source.port} -U replicator";
+  pruneBackupsScript = ''
+    retain_days=${toString cfg.targetSettings.retain.baseBackupDays}
+    wal_retain=${toString cfg.targetSettings.retain.walDays}
+
+    prune_old_backups() {
+      cutoff_epoch=$(date -d "$retain_days days ago" +%s)
+      if [ -d "$backup_root/base" ]; then
+        find "$backup_root/base" -maxdepth 1 -type d -name "????-??-??" | while read -r dir; do
+          dir_date=$(basename "$dir")
+          dir_epoch=$(date -d "$dir_date" +%s 2>/dev/null || true)
+          if [ -n "$dir_epoch" ] && [ "$dir_epoch" -lt "$cutoff_epoch" ]; then
+            echo "pg-backup: pruning old base backup $dir"
+            rm -rf "$dir"
+          fi
+        done
+      fi
+
+      if [ -d "$wal_dir" ]; then
+        find "$wal_dir" -maxdepth 2 -type f -name "????????????????????????????????????????" \
+          -mtime +$wal_retain -delete 2>/dev/null || true
+      fi
+    }
+  '';
 in {
   options.canix-toolbelt.services.pgBackup = {
     enable = mkEnableOption "PostgreSQL backup replication (source or target)";
@@ -155,7 +178,7 @@ in {
         baseBackupDays = mkOption {
           type = types.ints.positive;
           default = 30;
-          description = "Days to keep base backups. Older ones are pruned after each fresh backup.";
+          description = "Days to keep base backups. Older ones are pruned before and after each fresh backup.";
         };
 
         walDays = mkOption {
@@ -182,6 +205,10 @@ in {
         {
           assertion = cfg.role != "target" || cfg.targetSettings.receiveWal.enable || cfg.targetSettings.baseBackup.enable;
           message = "canix-toolbelt.services.pgBackup (role=target) requires at least one of receiveWal or baseBackup to be enabled.";
+        }
+        {
+          assertion = cfg.role != "target" || cfg.targetSettings.retain.walDays >= cfg.targetSettings.retain.baseBackupDays + 1;
+          message = "canix-toolbelt.services.pgBackup requires walDays >= baseBackupDays + 1 for safe PITR.";
         }
       ];
     }
@@ -277,10 +304,30 @@ in {
         };
       };
 
+      # Manual retention service used to reclaim an existing backlog without
+      # pulling another full backup first. pg-basebackup requires this service
+      # so every scheduled pull gets the same prune-before-pull behavior.
+      systemd.services.pg-backup-prune = {
+        description = "Prune retained PostgreSQL backups from ${sourceId}";
+        serviceConfig = {
+          Type = "oneshot";
+          User = "postgres";
+        };
+        script = ''
+          set -euo pipefail
+
+          backup_root="${cfg.targetSettings.backupDir}/${sourceId}"
+          wal_dir="$backup_root/wal"
+          ${pruneBackupsScript}
+          prune_old_backups
+        '';
+      };
+
       # pg_basebackup: periodic full backup pull
       systemd.services.pg-basebackup = mkIf cfg.targetSettings.baseBackup.enable {
         description = "Pull base backup from ${sourceId}";
-        after = ["network-online.target"];
+        after = ["network-online.target" "pg-backup-prune.service"];
+        requires = ["pg-backup-prune.service"];
         wants = ["network-online.target"];
         serviceConfig = {
           Type = "oneshot";
@@ -292,6 +339,7 @@ in {
           backup_root="${cfg.targetSettings.backupDir}/${sourceId}"
           date_dir="$backup_root/base/$(date -I)"
           wal_dir="$backup_root/wal"
+          ${pruneBackupsScript}
 
           # --- Pull base backup ---
           rm -rf "$date_dir"
@@ -316,20 +364,7 @@ in {
           ${pgBasebackupCmd} -D "$date_dir" --wal-method=stream \
             $max_rate --verbose --slot="$slot"
 
-          # --- Prune old base backups ---
-          retain_days=${toString cfg.targetSettings.retain.baseBackupDays}
-          find "$backup_root/base" -maxdepth 1 -type d -name "????-??-??" | while read -r dir; do
-            dir_date=$(basename "$dir")
-            if [ "$(date -d "$dir_date" +%s 2>/dev/null)" -lt "$(date -d "$retain_days days ago" +%s)" ]; then
-              echo "pg-backup: pruning old base backup $dir"
-              rm -rf "$dir"
-            fi 2>/dev/null || true
-          done
-
-          # --- Prune old WALs ---
-          wal_retain=${toString cfg.targetSettings.retain.walDays}
-          find "$wal_dir" -maxdepth 2 -type f -name "????????????????????????????????????????" \
-            -mtime +$wal_retain -delete 2>/dev/null || true
+          prune_old_backups
         '';
       };
 

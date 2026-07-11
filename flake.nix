@@ -21,6 +21,10 @@
         treefmt-nix.follows = "treefmt-nix";
       };
     };
+    fleetix = {
+      url = "git+https://codeberg.org/caniko/fleetix.git";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -111,9 +115,11 @@
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
-            fleetix-lib-eval = import ./nixos-tests/fleetix-lib-eval.nix {inherit pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
+            dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
+            dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
+            caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};

@@ -36,6 +36,11 @@
           default = {};
           description = "Test stub for networking.hosts.";
         };
+        options.systemd.services = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.attrsOf lib.types.anything);
+          default = {};
+          description = "Test stub for systemd services.";
+        };
       })
       ../modules/nixos/services/rauthy-preset.nix
       {
@@ -90,6 +95,11 @@
           type = lib.types.attrsOf (lib.types.listOf lib.types.str);
           default = {};
           description = "Test stub for networking.hosts.";
+        };
+        options.systemd.services = lib.mkOption {
+          type = lib.types.attrsOf (lib.types.attrsOf lib.types.anything);
+          default = {};
+          description = "Test stub for systemd services.";
         };
       })
       ../modules/nixos/services/rauthy-preset.nix
