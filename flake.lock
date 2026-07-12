@@ -361,7 +361,6 @@
     "fleetix": {
       "inputs": {
         "crane": "crane_3",
-        "flake-utils": "flake-utils_3",
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -369,10 +368,13 @@
         "rust-overlay": "rust-overlay_4"
       },
       "locked": {
-        "lastModified": 1783337170,
-        "narHash": "sha256-8Tp0lFIEaOXRD1EcMN65bCWLayh3PzqBCfWK/ivokQ0=",
-        "path": "/data/nvme0/can/Projects/fleetix",
-        "type": "path"
+        "lastModified": 1783512090,
+        "narHash": "sha256-zVZdUIE+Cu1ORRxQ/mhHQxiTlr0Yzb9H/apPJtxGgaI=",
+        "ref": "refs/heads/trunk",
+        "rev": "1f03faef0d5dda904a2509ceb3653b4870a0974a",
+        "revCount": 27,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/fleetix.git"
       },
       "original": {
         "type": "git",
@@ -946,10 +948,7 @@
           "fleetix",
           "crane"
         ],
-        "flake-utils": [
-          "fleetix",
-          "flake-utils"
-        ],
+        "flake-utils": "flake-utils_3",
         "meta-harbor": "meta-harbor",
         "nix-opencode-lsp": "nix-opencode-lsp",
         "nixpkgs": [
@@ -964,11 +963,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783280778,
-        "narHash": "sha256-nATAAHS7pPbQL+0CofjJa2mAPkh/q282DkvLXZTfY18=",
+        "lastModified": 1783377853,
+        "narHash": "sha256-Dut/BAYlfNxoTD3kSrtFj9KLXwBeQcUndLHj8L0QMdw=",
         "ref": "trunk",
-        "rev": "073c7e8ffdd4d9f0b5c6735ec81377d1dde6a145",
-        "revCount": 102,
+        "rev": "40815d2973e74629cc45ac7e4ca11d0fd9f6a12b",
+        "revCount": 105,
         "type": "git",
         "url": "https://codeberg.org/caniko/rs-harbor.git"
       },
@@ -1076,11 +1075,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783231873,
-        "narHash": "sha256-cTDI249Vl2JTQ3aicT9jeJPIBlNlodpJbdO0yLigCzU=",
+        "lastModified": 1783404876,
+        "narHash": "sha256-DAh1CfiRVwr8Szkj5PiHmsqh10NHPb8SKPx7w/B+l9E=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "cb368fd55ced25a1fa12414b9e984cdfb1681d18",
+        "rev": "3c161f20193bd91a73913b417e5b06d41860336d",
         "type": "github"
       },
       "original": {

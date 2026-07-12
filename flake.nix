@@ -78,6 +78,10 @@
         lib =
           (import ./lib {inherit (nixpkgs) lib;})
           // {
+            # Compatibility alias. Fleetix owns these projections; keep the
+            # old export name during the migration without carrying a second
+            # implementation in canix-toolbelt.
+            fleetix = inputs.fleetix.lib;
             # ACP/agent provider preset package sets for programs.goose; pass
             # the host `pkgs`. Lets hosts wire e.g.
             #   acp.providers.claude.packages =
@@ -119,6 +123,8 @@
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
+            activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
+            activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
             caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};

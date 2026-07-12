@@ -3,12 +3,13 @@
 in
   {
     agenixPaths = import ./agenixPaths.nix;
+    activation = import ./activation.nix {inherit lib;};
     caddy = import ./caddy.nix {inherit lib;};
     deviceTypes = import ./deviceTypes.nix;
     dns = import ./dns.nix;
     facterDisks = import ./facterDisks.nix;
-    fleetix = import ./fleetix.nix {inherit lib;};
     gpu = import ./gpu.nix;
+    homeActivation = import ./homeActivation.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
     networkmanager = import ./networkmanager.nix;
     nexus = import ./nexus.nix {inherit lib;};

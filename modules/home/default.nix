@@ -7,6 +7,10 @@
   wrapper-manager,
   goose,
 }: {
+  # Shared readiness contracts for Home Manager features with activation
+  # hooks, runtime credentials, or mutable external state.
+  activation-contracts = ./activation-contracts.nix;
+
   # GPU — iGPU render offload (DRI_PRIME) + VA-API decode-device selection
   igpu = ./desktop/igpu.nix;
   # GPU — Chromium VA-API acceleration flags/env wrapper
