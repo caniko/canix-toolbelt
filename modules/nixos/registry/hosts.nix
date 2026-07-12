@@ -111,6 +111,12 @@
         description = "Hostnames this host is directly cabled to (mutual).";
       };
 
+      directLinkRole = mkOption {
+        type = types.nullOr (types.enum ["gateway" "client"]);
+        default = null;
+        description = "Role declared by this host's Fleetix direct-link binding.";
+      };
+
       wakeOnLanInterface = mkOption {
         type = types.nullOr types.str;
         default = null;
@@ -220,32 +226,40 @@ in {
       else config.fleetix.topology;
     normalized = fleetixLib.projections.normalize {topology = ft;};
   in {
-    canix-toolbelt.networking.links = lib.mapAttrs (_linkName: link: {
-      inherit (link) port cidr serverAddress;
-      endpointSubdomain = link.endpointSubdomain or null;
-      endpointHost = link.endpointHost or null;
-      ddnsHost = link.ddnsHost or null;
-    }) normalized.links;
+    canix-toolbelt.networking.links =
+      lib.mapAttrs (_linkName: link: {
+        inherit (link) port cidr serverAddress;
+        endpointSubdomain = link.endpointSubdomain or null;
+        endpointHost = link.endpointHost or null;
+        ddnsHost = link.ddnsHost or null;
+      })
+      normalized.links;
 
-    canix-toolbelt.hosts = lib.mapAttrs (_name: host: {
-      hostPubkey = host.hostPubkey or null;
-      hostNames = host.hostNames or [];
-      deviceType = host.deviceType or null;
-      dataRoot = host.dataRoot or null;
-      users = host.users or {};
-      gpuIgpu = (host.gpu or {}).igpu or null;
-      gpuDgpu = (host.gpu or {}).dgpu or null;
-      lanIp = host.network.lanIp or null;
-      lanBroadcast = host.network.lanBroadcast or null;
-      lanInterface = host.network.lanInterface or null;
-      wgHomeIp = host.network.wgHomeIp or null;
-      wgHomePublicKey = host.network.wgHomePublicKey or null;
-      macAddress = host.network.macAddress or null;
-      directLinkIp = host.network.directLinkIp or null;
-      directLinkMac = host.network.directLinkMac or null;
-      directLinkInterface = host.network.directLinkInterface or null;
-      directLinkPeers = host.network.directLinkPeers or [];
-      wakeOnLanInterface = host.network.wakeOnLanInterface or null;
-    }) normalized.hosts;
+    canix-toolbelt.hosts =
+      lib.mapAttrs (_name: host: {
+        hostPubkey = host.hostPubkey or null;
+        hostNames = host.hostNames or [];
+        deviceType = host.deviceType or null;
+        dataRoot = host.dataRoot or null;
+        users = host.users or {};
+        gpuIgpu = (host.gpu or {}).igpu or null;
+        gpuDgpu = (host.gpu or {}).dgpu or null;
+        lanIp = host.network.lanIp or null;
+        lanBroadcast = host.network.lanBroadcast or null;
+        lanInterface = host.network.lanInterface or null;
+        wgHomeIp = host.network.wgHomeIp or null;
+        wgHomePublicKey = host.network.wgHomePublicKey or null;
+        macAddress = host.network.macAddress or null;
+        directLinkIp = host.network.directLinkIp or null;
+        directLinkMac = host.network.directLinkMac or null;
+        directLinkInterface = host.network.directLinkInterface or null;
+        directLinkPeers = host.network.directLinkPeers or [];
+        directLinkRole =
+          if builtins.hasAttr "direct-link" (host.links or {})
+          then ((builtins.getAttr "direct-link" host.links).role or null)
+          else null;
+        wakeOnLanInterface = host.network.wakeOnLanInterface or null;
+      })
+      normalized.hosts;
   });
 }

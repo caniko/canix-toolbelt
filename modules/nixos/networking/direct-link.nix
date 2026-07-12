@@ -15,6 +15,14 @@
   nm = import ../../../lib/networkmanager.nix;
 
   selfHost = config.canix-toolbelt.hosts.${hostname} or null;
+  topologyRole =
+    if selfHost != null
+    then selfHost.directLinkRole or null
+    else null;
+  effectiveRole =
+    if cfg.role != null
+    then cfg.role
+    else topologyRole;
   gatewayHost =
     if cfg.gateway != null
     then config.canix-toolbelt.hosts.${cfg.gateway}
@@ -29,7 +37,8 @@ in {
     enable = lib.mkEnableOption "Direct P2P ethernet link via NetworkManager";
 
     role = lib.mkOption {
-      type = lib.types.enum ["gateway" "client"];
+      type = lib.types.nullOr (lib.types.enum ["gateway" "client"]);
+      default = null;
       description = ''
         gateway: serve NAT (NM "shared" mode) on directLinkInterface.
         client:  static IP, default route via gateway's directLinkIp.
@@ -67,20 +76,24 @@ in {
       assertions = [
         {
           assertion = selfHost != null && selfHost.directLinkIp != null;
-          message = "canix-toolbelt.networking.directLink requires ${hostname} to have network.directLinkIp in lib/hosts.nix";
+          message = "canix-toolbelt.networking.directLink requires ${hostname} to have network.directLinkIp in Fleetix topology";
         }
         {
-          assertion = cfg.role != "client" || cfg.gateway != null;
+          assertion = effectiveRole != null;
+          message = "canix-toolbelt.networking.directLink requires role = \"gateway\"/\"client\" or a Fleetix direct-link binding role";
+        }
+        {
+          assertion = effectiveRole != "client" || cfg.gateway != null;
           message = "canix-toolbelt.networking.directLink.gateway must be set when role = \"client\"";
         }
         {
-          assertion = cfg.role != "gateway" || selfHost.directLinkInterface != null;
-          message = "canix-toolbelt.networking.directLink: role = \"gateway\" requires ${hostname} to have network.directLinkInterface in lib/hosts.nix";
+          assertion = effectiveRole != "gateway" || selfHost.directLinkInterface != null;
+          message = "canix-toolbelt.networking.directLink: role = \"gateway\" requires ${hostname} to have network.directLinkInterface in Fleetix topology";
         }
       ];
     }
 
-    (lib.mkIf (cfg.role == "gateway") {
+    (lib.mkIf (effectiveRole == "gateway") {
       networking.networkmanager.ensureProfiles.profiles.direct-link = nm.mkSharedEthernetProfile ({
           id = "direct-link";
           interfaceName = selfHost.directLinkInterface;
@@ -97,9 +110,15 @@ in {
         allowedTCPPorts = [53];
         allowedUDPPorts = [53];
       };
+
+      # NetworkManager launches dnsmasq for shared profiles.  The packaged
+      # unit historically used KillMode=process, which can orphan dnsmasq on
+      # a NetworkManager restart and leave 10.10.0.1:53 permanently occupied.
+      # Kill the helper children with the gateway manager instead.
+      systemd.services.NetworkManager.serviceConfig.KillMode = lib.mkForce "mixed";
     })
 
-    (lib.mkIf (cfg.role == "client" && !(cfg.suppressInTravelMode && (config.canix-toolbelt.profiles.travel.enable or false))) {
+    (lib.mkIf (effectiveRole == "client" && !(cfg.suppressInTravelMode && (config.canix-toolbelt.profiles.travel.enable or false))) {
       networking.networkmanager.ensureProfiles.profiles.direct-link = {
         connection = {
           id = "direct-link";
