@@ -10,6 +10,7 @@ in
     facterDisks = import ./facterDisks.nix;
     gpu = import ./gpu.nix;
     homeActivation = import ./homeActivation.nix {inherit lib;};
+    hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
     networkmanager = import ./networkmanager.nix;
     nexus = import ./nexus.nix {inherit lib;};

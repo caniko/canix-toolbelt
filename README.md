@@ -11,7 +11,7 @@ Two output families:
   vendor stacks, EFI/btrfs/pipewire/fwupd defaults, boot-assessment, hardware
   watchdog).
 - **`flakeModules.*`** — `flake-parts` modules for `treefmt-nix`, git-hooks,
-  and a generic ripgrep-based structure/boundary check.
+  host-output selection, and a generic ripgrep-based structure/boundary check.
 - **`lib.mk*Site` helpers** — reusable website plumbing for tools that publish
   Zola sites, mdBook docs, combined static trees, and Codeberg Pages deploy
   apps without carrying per-project copies.
@@ -82,6 +82,22 @@ Two output families:
         };
       };
     };
+}
+```
+
+### Host-output selection
+
+`flakeModules.host-selection` provides one flake-level policy for projects
+that derive several outputs from the same host registry. Hosts omitted from
+the policy stay enabled; setting a host to `enable = false` lets consumers
+filter their NixOS, Home Manager, and installer outputs while retaining the
+host in inventory data such as topology and SSH records.
+
+```nix
+{
+  imports = [canix-toolbelt.flakeModules.host-selection];
+
+  canix-toolbelt.host-selection.bar.enable = false;
 }
 ```
 

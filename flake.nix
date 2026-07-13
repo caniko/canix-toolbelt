@@ -97,6 +97,7 @@
           dev-stack = ./flake-modules/dev-stack.nix;
           formatters = ./flake-modules/formatters.nix;
           git-hooks = ./flake-modules/git-hooks.nix;
+          host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
           pages-deploy = ./flake-modules/pages-deploy.nix;
           shebang-audit = ./flake-modules/shebang-audit.nix;
@@ -125,6 +126,7 @@
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
+            host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
