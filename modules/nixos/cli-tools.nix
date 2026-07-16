@@ -1,9 +1,15 @@
-{config, lib, pkgs, ...}: let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   inherit (lib) mkEnableOption mkIf mkOption types;
+  safety = import ../../lib/agent-safety.nix {inherit lib;};
 
   cfg = config.canix-toolbelt.packages.cliTools;
 
-  builtInKeys = ["enable" "opencodeRules"];
+  builtInKeys = ["enable" "opencodeRules" "agentSafety"];
 
   knownTools = {
     jq = {
@@ -136,55 +142,110 @@
     };
   };
 
-  toolOptions = builtins.mapAttrs (name: entry: {
-    enable = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Whether to install ${entry.description} system-wide.";
-    };
-    opencodePermission = mkOption {
-      type = types.nullOr (types.enum ["allow" "deny" "ask"]);
-      default = null;
-      description = ''
-        Whether to generate an opencode bash permission rule for this tool.
-        Set to "allow", "ask", or "deny" to emit a permission rule. null means no rule.
-      '';
-    };
-    package = mkOption {
-      type = types.package;
-      default = entry.package;
-      defaultText = lib.literalExpression "pkgs.${name}";
-      description = "Package to use for ${entry.description}.";
-    };
-  }) knownTools;
+  toolOptions =
+    builtins.mapAttrs (name: entry: {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Whether to install ${entry.description} system-wide.";
+      };
+      opencodePermission = mkOption {
+        type = types.nullOr (types.enum ["allow" "deny" "ask"]);
+        default = null;
+        description = ''
+          Compatibility action for the removed one-rule OpenCode integration.
+          Use autoSafe for command-aware declarations.
+        '';
+      };
+      autoSafe = safety.mkAutoSafeOption "Prompt-safe command declaration for ${entry.description}.";
+      package = mkOption {
+        type = types.package;
+        default = entry.package;
+        defaultText = lib.literalExpression "pkgs.${name}";
+        description = "Package to use for ${entry.description}.";
+      };
+    })
+    knownTools;
 
   enabledTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.enable) cfg;
-  opencodeTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && v.opencodePermission != null) cfg;
+  opencodeTools = lib.filterAttrs (n: v: !(builtins.elem n builtInKeys) && (v.autoSafe != null || v.opencodePermission != null)) cfg;
+  autoSafeToolRules = builtins.foldl' (
+    acc: name: let
+      tool = opencodeTools.${name};
+      entry = builtins.getAttr name knownTools;
+      bins = entry.binPatterns or [name];
+      autoSafe =
+        if tool.autoSafe == null
+        then null
+        else
+          tool.autoSafe
+          // {
+            executables =
+              if tool.autoSafe.executables == []
+              then bins
+              else tool.autoSafe.executables;
+          };
+      rendered =
+        if autoSafe == null
+        then {}
+        else
+          safety.renderPrograms {
+            ${name} = {inherit autoSafe;};
+          };
+      compatibility =
+        if tool.opencodePermission == null
+        then {}
+        else
+          builtins.listToAttrs (map (bin: {
+              name = "${bin} *";
+              value = tool.opencodePermission;
+            })
+            bins);
+    in
+      acc // rendered // compatibility
+  ) {} (builtins.attrNames opencodeTools);
 in {
-  options.canix-toolbelt.packages.cliTools = {
-    enable = mkEnableOption "system-level CLI tools";
-    opencodeRules = mkOption {
-      type = types.attrsOf types.str;
-      readOnly = true;
-      internal = true;
-      description = "Bash permission rules for opencode derived from enabled CLI tools.";
-    };
-  } // toolOptions;
+  options.canix-toolbelt.packages.cliTools =
+    {
+      enable = mkEnableOption "system-level CLI tools";
+      opencodeRules = mkOption {
+        type = types.attrsOf types.str;
+        readOnly = true;
+        internal = true;
+        description = "Bash permission rules for opencode derived from enabled CLI tools.";
+      };
+      agentSafety = mkOption {
+        type = types.attrsOf types.attrs;
+        readOnly = true;
+        internal = true;
+        description = "Normalized agent-safety declarations for integrated Home Manager.";
+      };
+    }
+    // toolOptions;
 
   config = mkIf cfg.enable {
     environment.systemPackages = builtins.attrValues (
       builtins.mapAttrs (_: t: t.package) enabledTools
     );
 
-    canix-toolbelt.packages.cliTools.opencodeRules =
-      builtins.foldl' (acc: name:
-        let tool = opencodeTools.${name};
-            entry = builtins.getAttr name knownTools;
-            bins = entry.binPatterns or [name];
-        in acc // builtins.listToAttrs (map (bin: {
-          name = "${bin} *";
-          value = tool.opencodePermission;
-        }) bins)
-      ) {} (builtins.attrNames opencodeTools);
+    canix-toolbelt.packages.cliTools.opencodeRules = autoSafeToolRules;
+    canix-toolbelt.packages.cliTools.agentSafety =
+      builtins.mapAttrs (name: tool: let
+        bins = (builtins.getAttr name knownTools).binPatterns or [name];
+      in {
+        autoSafe =
+          if tool.autoSafe == null
+          then null
+          else
+            tool.autoSafe
+            // {
+              executables =
+                if tool.autoSafe.executables == []
+                then bins
+                else tool.autoSafe.executables;
+            };
+        executables = bins;
+      })
+      opencodeTools;
   };
 }

@@ -11,6 +11,11 @@
   # hooks, runtime credentials, or mutable external state.
   activation-contracts = ./activation-contracts.nix;
 
+  # Shared typed prompt policy and OpenCode renderer. Consumers add
+  # `programs.<name>.autoSafe` declarations and this module compiles them into
+  # the backend permission object.
+  agent-safety = ./agent-safety.nix;
+
   # GPU — iGPU render offload (DRI_PRIME) + VA-API decode-device selection
   igpu = ./desktop/igpu.nix;
   # GPU — Chromium VA-API acceleration flags/env wrapper

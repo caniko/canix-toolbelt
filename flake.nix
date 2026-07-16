@@ -126,6 +126,9 @@
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
+            agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
+            agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
+            pg-backup-eval = import ./nixos-tests/pg-backup-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
@@ -138,7 +141,7 @@
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
-          go_1_26_4 = pkgs.go.overrideAttrs (old: {
+          go_1_26_4 = pkgs.go.overrideAttrs (_old: {
             version = "1.26.4";
             src = pkgs.fetchurl {
               url = "https://go.dev/dl/go1.26.4.linux-amd64.tar.gz";

@@ -50,6 +50,15 @@ in {
       '';
     };
 
+    databaseProvisionLocally = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Ensure the local PostgreSQL `atticd` database and role when
+        {option}`databaseUrl` points at the local PostgreSQL service.
+      '';
+    };
+
     memoryHigh = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -75,6 +84,23 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !cfg.databaseProvisionLocally || (cfg.databaseUrl != null && lib.hasPrefix "postgresql:" cfg.databaseUrl && config.services.postgresql.enable);
+        message = "canix-toolbelt.services.atticd.databaseProvisionLocally requires a local postgresql:// databaseUrl and services.postgresql.enable = true.";
+      }
+    ];
+
+    services.postgresql = lib.mkIf cfg.databaseProvisionLocally {
+      ensureDatabases = ["atticd"];
+      ensureUsers = [
+        {
+          name = "atticd";
+          ensureDBOwnership = true;
+        }
+      ];
+    };
+
     services.atticd = {
       enable = true;
       environmentFile = cfg.jwtSecretFile;
