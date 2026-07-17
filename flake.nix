@@ -128,6 +128,7 @@
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
             agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
+            dev-agent-isolation-eval = import ./nixos-tests/dev-agent-isolation-eval.nix {inherit pkgs;};
             pg-backup-eval = import ./nixos-tests/pg-backup-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};

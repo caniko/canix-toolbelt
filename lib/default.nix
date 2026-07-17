@@ -7,6 +7,7 @@ in
     activation = import ./activation.nix {inherit lib;};
     caddy = import ./caddy.nix {inherit lib;};
     deviceTypes = import ./deviceTypes.nix;
+    devAgentIsolation = import ./dev-agent-isolation.nix {inherit lib;};
     dns = import ./dns.nix;
     facterDisks = import ./facterDisks.nix;
     gpu = import ./gpu.nix;

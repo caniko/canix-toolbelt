@@ -91,6 +91,16 @@
           narrow: a broad pattern could undo an application's own OOM policy.
         '';
       };
+
+      verifyEditorCgroup = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Validate the matched process's actual cgroup has OOMPolicy=continue
+          and memory.oom.group=0. The cgroup is discovered from /proc rather
+          than from a compositor-specific unit-name pattern.
+        '';
+      };
     };
   };
 
@@ -108,10 +118,8 @@
     SYSTEMD = "${pkgs.systemd}"
     SYSTEMCTL = os.path.join(SYSTEMD, "bin", "systemctl")
     CGROUP_ROOT = "/sys/fs/cgroup"
-    EDITOR_SCOPE_PATTERNS = [
-        "app-org.chromium.Chromium-*.scope",
-    ]
     running = True
+    reported_editor_contract_failures = set()
 
 
     def log(level, message):
@@ -150,44 +158,51 @@
         sys.exit(2)
 
 
-    def list_running_editor_scopes():
-        units = []
-        for pattern in EDITOR_SCOPE_PATTERNS:
-            result = subprocess.run(
-                [
-                    SYSTEMCTL,
-                    "--user",
-                    "list-units",
-                    "--type=scope",
-                    "--state=running",
-                    "--no-legend",
-                    "--plain",
-                    pattern,
-                ],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    "cannot list running editor scopes: "
-                    f"{result.stderr.strip()}"
-                )
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if parts:
-                    units.append(parts[0])
-        return sorted(set(units))
+    def cgroup_path_for_pid(pid):
+        with open(f"/proc/{pid}/cgroup", encoding="ascii") as f:
+            for line in f:
+                hierarchy, separator, path = line.rstrip("\n").partition("::")
+                if separator and hierarchy == "0":
+                    return path or "/"
+        raise RuntimeError(f"cannot find unified cgroup for pid={pid}")
 
 
-    def unit_control_group(unit):
+    def cgroup_unit_for_path(path):
+        for component in reversed(path.strip("/").split("/")):
+            if component.endswith((".scope", ".service")):
+                return component
+        return None
+
+
+    def manager_default_oom_policy():
         result = subprocess.run(
             [
                 SYSTEMCTL,
                 "--user",
                 "show",
-                "--property=ControlGroup",
+                "--property=DefaultOOMPolicy",
+                "--value",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "cannot read user-manager DefaultOOMPolicy: "
+                f"{result.stderr.strip()}"
+            )
+        return result.stdout.strip()
+
+
+    def unit_oom_policy(unit):
+        result = subprocess.run(
+            [
+                SYSTEMCTL,
+                "--user",
+                "show",
+                "--property=OOMPolicy",
                 "--value",
                 unit,
             ],
@@ -198,69 +213,49 @@
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"cannot read ControlGroup for {unit}: {result.stderr.strip()}"
+                f"cannot read OOMPolicy for {unit}: {result.stderr.strip()}"
             )
-        cgroup = result.stdout.strip()
-        if not cgroup:
-            raise RuntimeError(f"empty ControlGroup for {unit}")
-        return cgroup
+        return result.stdout.strip()
 
 
-    def verify_editor_cgroups():
-        bad = []
-        for unit in list_running_editor_scopes():
-            cgroup = unit_control_group(unit)
-            oom_group_path = os.path.join(
-                CGROUP_ROOT,
-                cgroup.lstrip("/"),
-                "memory.oom.group",
-            )
-            try:
-                with open(oom_group_path, encoding="ascii") as f:
-                    value = f.read().strip()
-            except OSError as e:
-                raise RuntimeError(
-                    f"cannot read {oom_group_path} for {unit}: {e}"
-                ) from e
-            if value != "0":
-                bad.append(f"{unit} ({oom_group_path}={value})")
-        if bad:
-            raise RuntimeError(
-                "editor cgroup memory.oom.group must be 0: "
-                + ", ".join(bad)
-            )
+    def verify_editor_cgroup(pid, allow_degraded):
+        path = cgroup_path_for_pid(pid)
+        unit = cgroup_unit_for_path(path)
+        if unit is None:
+            message = f"editor process pid={pid} is not in a systemd unit: {path}"
+            if message not in reported_editor_contract_failures:
+                reported_editor_contract_failures.add(message)
+                log("WARN" if allow_degraded else "ERROR", message)
+            return
 
+        oom_group_path = os.path.join(CGROUP_ROOT, path.lstrip("/"), "memory.oom.group")
+        try:
+            with open(oom_group_path, encoding="ascii") as f:
+                oom_group = f.read().strip()
+        except OSError as e:
+            message = f"cannot read editor cgroup memory.oom.group for pid={pid}: {e}"
+            if allow_degraded:
+                log("WARN", message)
+                return
+            raise RuntimeError(message) from e
 
-    def verify_editor_oom_policy():
-        bad = []
-        for unit in list_running_editor_scopes():
-            result = subprocess.run(
-                [
-                    SYSTEMCTL,
-                    "--user",
-                    "show",
-                    "--property=OOMPolicy",
-                    "--value",
-                    unit,
-                ],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+        try:
+            oom_policy = unit_oom_policy(unit)
+        except RuntimeError as e:
+            if allow_degraded:
+                log("WARN", str(e))
+                return
+            raise
+
+        if oom_group != "0" or oom_policy != "continue":
+            message = (
+                f"editor cgroup contract failed for pid={pid} unit={unit}: "
+                f"memory.oom.group={oom_group!r}, OOMPolicy={oom_policy!r}"
             )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"cannot read OOMPolicy for {unit}: {result.stderr.strip()}"
-                )
-            value = result.stdout.strip()
-            if value != "continue":
-                bad.append(f"{unit} (OOMPolicy={value})")
-        if bad:
-            raise RuntimeError(
-                "editor scope OOMPolicy must be continue, else a single "
-                "kernel OOM-kill on a biased descendant tears down the "
-                "whole editor scope: " + ", ".join(bad)
-            )
+            if message not in reported_editor_contract_failures:
+                reported_editor_contract_failures.add(message)
+                log("WARN" if allow_degraded else "ERROR", message)
+            return
 
 
     def set_own_adj_with_helper(helper):
@@ -303,15 +298,17 @@
                 f"cannot set own oom_score_adj=-1000: {e}",
             )
 
-        try:
-            verify_editor_cgroups()
-        except Exception as e:
-            startup_problem(cfg.get("allowDegraded", False), str(e))
-
-        try:
-            verify_editor_oom_policy()
-        except Exception as e:
-            startup_problem(cfg.get("allowDegraded", False), str(e))
+        if cfg.get("verifyEditorScopes", True):
+            try:
+                policy = manager_default_oom_policy()
+                if policy != "continue":
+                    startup_problem(
+                        cfg.get("allowDegraded", False),
+                        "user-manager DefaultOOMPolicy must be continue, "
+                        f"got {policy!r}",
+                    )
+            except Exception as e:
+                startup_problem(cfg.get("allowDegraded", False), str(e))
 
 
     def read_process_table():
@@ -392,9 +389,9 @@
         protected = {}
         for pid, proc in processes.items():
             cmdline = proc["cmdline"]
-            for name, regex, max_adj in protect_re:
+            for name, regex, max_adj, verify_cgroup in protect_re:
                 if regex.search(cmdline):
-                    protected[pid] = (name, max_adj)
+                    protected[pid] = (name, max_adj, verify_cgroup)
                     break
 
         descendant_reasons = {}
@@ -415,9 +412,11 @@
                 processes[pid]["cmdline"],
             )
 
-        for pid, (name, max_adj) in sorted(protected.items()):
+        for pid, (name, max_adj, verify_cgroup) in sorted(protected.items()):
             if pid not in processes:
                 continue
+            if verify_cgroup and cfg.get("verifyEditorScopes", True):
+                verify_editor_cgroup(pid, cfg.get("allowDegraded", False))
             try:
                 current = read_adj(pid)
             except FileNotFoundError:
@@ -450,7 +449,12 @@
                 for a in cfg["agents"]
             ]
             protect_re = [
-                (p["name"], re.compile(p["cmdlineRegex"]), p.get("maxAdj", 0))
+                (
+                    p["name"],
+                    re.compile(p["cmdlineRegex"]),
+                    p.get("maxAdj", 0),
+                    p.get("verifyEditorCgroup", False),
+                )
                 for p in cfg["protect"]
             ]
         except re.error as e:
@@ -511,6 +515,15 @@ in {
       description = "If true, do not hard-fail on startup gate; bias what we can.";
     };
 
+    verifyEditorScopes = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Validate the user-manager OOM contract at startup and the actual
+        cgroup of protect entries that opt into verifyEditorCgroup.
+      '';
+    };
+
     agents = lib.mkOption {
       type = lib.types.listOf (lib.types.submodule matcherSubmodule);
       default = [
@@ -556,7 +569,7 @@ in {
 
   config = lib.mkIf cfg.enable {
     environment.etc."dev-oom-guard/config.json".source = jsonFormat.generate "dev-oom-guard.json" {
-      inherit (cfg) pollSeconds killAdj allowDegraded agents protect;
+      inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect;
       selfBiasHelper = "/run/wrappers/bin/dev-oom-guard-self-bias";
     };
 
