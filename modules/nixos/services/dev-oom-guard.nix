@@ -228,12 +228,16 @@
                 log("WARN" if allow_degraded else "ERROR", message)
             return
 
-        oom_group_path = os.path.join(CGROUP_ROOT, path.lstrip("/"), "memory.oom.group")
+        oom_group_path = os.path.join(
+            CGROUP_ROOT, path.lstrip("/"), "memory.oom.group"
+        )
         try:
             with open(oom_group_path, encoding="ascii") as f:
                 oom_group = f.read().strip()
         except OSError as e:
-            message = f"cannot read editor cgroup memory.oom.group for pid={pid}: {e}"
+            message = (
+                f"cannot read editor cgroup memory.oom.group for pid={pid}: {e}"
+            )
             if allow_degraded:
                 log("WARN", message)
                 return
