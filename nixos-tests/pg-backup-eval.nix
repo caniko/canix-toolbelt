@@ -16,8 +16,29 @@
       }
     ];
   };
+  sourceEval = import "${pkgs.path}/nixos/lib/eval-config.nix" {
+    system = "x86_64-linux";
+    modules = [
+      ../modules/nixos/services/pg-backup.nix
+      {
+        system.stateVersion = "24.11";
+        services.postgresql.enable = true;
+        canix-toolbelt.services.pgBackup = {
+          enable = true;
+          role = "source";
+          source.hostName = "10.0.0.1";
+          sourceSettings = {
+            listenAddresses = ["10.0.0.1"];
+            allowedReplicationHosts = ["10.0.0.2/32"];
+            replicatorPasswordFile = "/run/secrets/pg-replicator-password";
+          };
+        };
+      }
+    ];
+  };
   receive = eval.config.systemd.services.pg-receivewal.serviceConfig;
   base = eval.config.systemd.services.pg-basebackup.script;
+  sourcePostgresql = sourceEval.config.services.postgresql;
 in
   mkEvalCheck {
     name = "pg-backup-eval";
@@ -30,8 +51,18 @@ in
       }
       {
         name = "restart-policy";
-        assertion = receive.Restart == "on-failure";
+        assertion = receive.Restart == "on-failure" && receive.RestartSteps == 6 && receive.RestartMaxDelaySec == "5min";
         message = "continuous WAL streaming must restart after failure";
+      }
+      {
+        name = "source-replication-hba";
+        assertion = lib.hasInfix "host replication replicator 10.0.0.2/32 scram-sha-256" sourcePostgresql.authentication;
+        message = "source role must render the allowed replication host in pg_hba.conf";
+      }
+      {
+        name = "source-replication-firewall";
+        assertion = lib.elem 5432 sourceEval.config.networking.firewall.interfaces.wg-home.allowedTCPPorts;
+        message = "source role must open PostgreSQL on the configured replication interface";
       }
       {
         name = "verify-backup";

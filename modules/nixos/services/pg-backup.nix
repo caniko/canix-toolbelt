@@ -73,16 +73,18 @@
     # creating the slot, which silently disables continuous WAL archiving.
     systemd.services."pg-receivewal${suffix}" = mkIf cfg.targetSettings.receiveWal.enable {
       description = "Receive WAL segments from ${sourceId}";
+      unitConfig.RequiresMountsFor = backupRoot;
       after = ["network-online.target"];
       wants = ["network-online.target"];
       wantedBy = ["multi-user.target"];
       serviceConfig = {
         User = "postgres";
-        RequiresMountsFor = backupRoot;
         ExecStartPre = ["${pgReceivewalCmd} -D ${walDir} --status-interval=5 --no-loop --slot=${cfg.targetSettings.receiveWal.slotName} --create-slot --if-not-exists"];
         ExecStart = "${pgReceivewalCmd} -D ${walDir} --verbose --slot=${cfg.targetSettings.receiveWal.slotName}";
         Restart = "on-failure";
         RestartSec = "5s";
+        RestartSteps = 6;
+        RestartMaxDelaySec = "5min";
         PrivateTmp = true;
         AmbientCapabilities = "";
         CapabilityBoundingSet = "";
@@ -93,10 +95,10 @@
 
     systemd.services."pg-backup-prune${suffix}" = {
       description = "Prune retained PostgreSQL backups from ${sourceId}";
+      unitConfig.RequiresMountsFor = backupRoot;
       serviceConfig = {
         Type = "oneshot";
         User = "postgres";
-        RequiresMountsFor = backupRoot;
         ProtectSystem = "strict";
         ReadWritePaths = [backupRoot];
         UMask = "0077";
@@ -115,13 +117,13 @@
     # a complete dated backup.
     systemd.services."pg-basebackup${suffix}" = mkIf cfg.targetSettings.baseBackup.enable {
       description = "Pull base backup from ${sourceId}";
+      unitConfig.RequiresMountsFor = backupRoot;
       after = ["network-online.target" "pg-backup-prune${suffix}.service"];
       requires = ["pg-backup-prune${suffix}.service"];
       wants = ["network-online.target"];
       serviceConfig = {
         Type = "oneshot";
         User = "postgres";
-        RequiresMountsFor = backupRoot;
         ProtectSystem = "strict";
         ReadWritePaths = [backupRoot];
         UMask = "0077";
@@ -353,47 +355,48 @@ in {
       }
 
       (mkIf (cfg.role == "source") {
-          services.postgresql = {
-            settings = mkMerge [
-              (lib.optionalAttrs (cfg.sourceSettings.listenAddresses != []) {
-                # NixOS' enableTCPIP setting otherwise forces '*'. Replication
-                # should bind only to the explicitly selected interface addresses.
-                listen_addresses = lib.mkForce (lib.concatStringsSep "," cfg.sourceSettings.listenAddresses);
-              })
-              {
-                wal_level = lib.mkDefault cfg.sourceSettings.walLevel;
-                max_wal_senders = lib.mkDefault cfg.sourceSettings.maxWalSenders;
-                max_replication_slots = lib.mkDefault cfg.sourceSettings.maxReplicationSlots;
-              }
-            ];
-            ensureUsers = [
-              {
-                name = "replicator";
-                ensureClauses.replication = true;
-              }
-            ];
-            authentication = lib.mkAfter (
-              lib.concatMapStringsSep "\n" (host: "host replication replicator ${host} scram-sha-256")
-              cfg.sourceSettings.allowedReplicationHosts
-            );
-          };
-
-          systemd.services.postgresql-setup.script = lib.mkAfter (
-            lib.optionalString (cfg.sourceSettings.replicatorPasswordFile != null) ''
-              if [ ! -r ${cfg.sourceSettings.replicatorPasswordFile} ] || [ ! -s ${cfg.sourceSettings.replicatorPasswordFile} ]; then
-                echo "pg-backup: replicator password file unreadable or empty" >&2
-                exit 1
-              fi
-              printf '%s\n' \
-                '\set replicator_password `cat ${cfg.sourceSettings.replicatorPasswordFile}`' \
-                "ALTER ROLE replicator WITH PASSWORD :'replicator_password';" \
-                | psql -d postgres
-            ''
+        services.postgresql = {
+          settings = mkMerge [
+            (lib.optionalAttrs (cfg.sourceSettings.listenAddresses != []) {
+              # NixOS' enableTCPIP setting otherwise forces '*'. Replication
+              # should bind only to the explicitly selected interface addresses.
+              listen_addresses = lib.mkForce (lib.concatStringsSep "," cfg.sourceSettings.listenAddresses);
+            })
+            {
+              wal_level = lib.mkDefault cfg.sourceSettings.walLevel;
+              max_wal_senders = lib.mkDefault cfg.sourceSettings.maxWalSenders;
+              max_replication_slots = lib.mkDefault cfg.sourceSettings.maxReplicationSlots;
+            }
+          ];
+          ensureUsers = [
+            {
+              name = "replicator";
+              ensureClauses.replication = true;
+            }
+          ];
+          authentication = lib.mkAfter (
+            lib.concatMapStringsSep "\n" (host: "host replication replicator ${host} scram-sha-256")
+            cfg.sourceSettings.allowedReplicationHosts
           );
-        }
-        // lib.mkIf (cfg.sourceSettings.firewallInterface != null && cfg.sourceSettings.allowedReplicationHosts != []) {
-          networking.firewall.interfaces."${cfg.sourceSettings.firewallInterface}".allowedTCPPorts = [cfg.source.port];
-        })
+        };
+
+        systemd.services.postgresql-setup.script = lib.mkAfter (
+          lib.optionalString (cfg.sourceSettings.replicatorPasswordFile != null) ''
+            if [ ! -r ${cfg.sourceSettings.replicatorPasswordFile} ] || [ ! -s ${cfg.sourceSettings.replicatorPasswordFile} ]; then
+              echo "pg-backup: replicator password file unreadable or empty" >&2
+              exit 1
+            fi
+            printf '%s\n' \
+              '\set replicator_password `cat ${cfg.sourceSettings.replicatorPasswordFile}`' \
+              "ALTER ROLE replicator WITH PASSWORD :'replicator_password';" \
+              | psql -d postgres
+          ''
+        );
+      })
+
+      (mkIf (cfg.role == "source" && cfg.sourceSettings.firewallInterface != null && cfg.sourceSettings.allowedReplicationHosts != []) {
+        networking.firewall.interfaces."${cfg.sourceSettings.firewallInterface}".allowedTCPPorts = [cfg.source.port];
+      })
 
       (mkIf (cfg.role == "target")
         (mkMerge [
