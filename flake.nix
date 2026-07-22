@@ -88,6 +88,10 @@
             #     canix-toolbelt.lib.goose.acpPackages pkgs).claude;
             goose.acpPackages = import ./modules/home/ai/goose/presets.nix;
             gooseCheckFixtures = import ./modules/home/ai/goose/checks/lib.nix;
+            chromiumGpu = import ./lib/chromiumGpu.nix {
+              lib = nixpkgs.lib;
+              wrapper-manager = inputs.wrapper-manager;
+            };
           };
         nixosModules = import ./modules/nixos;
         homeModules = import ./modules/home {inherit (inputs) wrapper-manager goose;};
@@ -120,6 +124,7 @@
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+            chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};

@@ -18,6 +18,7 @@
   ...
 }: let
   igpuCfg = config.canix-toolbelt.igpu;
+  mkBackendWrapper = import ../../../lib/chromiumGpu.nix {inherit lib wrapper-manager;};
   gpuInfo =
     if gpu != null
     then gpu
@@ -36,8 +37,6 @@
       then gpuInfo.igpu
       else null
     ));
-
-  isIntel = renderingGpu == "intel";
 
   # VA-API *decode* vendor. This drives only the decode feature flags + libva
   # env (NOT the rendering/ANGLE backend, which is GL on every host). When
@@ -74,24 +73,12 @@
         }
     );
 
-  chromiumFlags = {enableAngleVulkan ? true}:
+  chromiumFlags =
     [
       "--password-store=gnome-libsecret"
-      # Force native Wayland Ozone instead of Xwayland. `auto` self-detects:
-      # Wayland when WAYLAND_DISPLAY is set (every consuming host runs a Wayland
-      # compositor), X11 otherwise. Under Xwayland, ANGLE-Vulkan fails to find
-      # an EGL config on hybrid GPUs and the whole GPU process dies ("No
-      # suitable EGL configs found"); native Wayland avoids that entirely.
-      "--ozone-platform-hint=auto"
       "--ignore-gpu-blocklist"
       "--disable-gpu-driver-bug-workaround"
       "--enable-unsafe-webgpu"
-      # ANGLE on its GL backend. ANGLE-Vulkan is deliberately NOT used: under
-      # Wayland the Vulkan path can't back the compositor surface (Chromium
-      # logs "not compatible with Vulkan" and falls back to GL anyway), and on
-      # multi-GPU hosts without a MESA_VK_DEVICE_SELECT pin it cannot choose a
-      # device, killing the GPU process.
-      "--use-gl=angle"
     ]
     # Pin VA-API decode to the iGPU render node; Chromium otherwise hardcodes
     # /dev/dri/renderD128. Paired with LIBVA_DRIVER_NAME in chromiumEnv.
@@ -122,46 +109,13 @@
       else args;
     inherit (wrapperArgs) basePackage;
     wrapperName = wrapperArgs.wrapperName or (lib.getName basePackage);
-    enableAngleVulkan = wrapperArgs.enableAngleVulkan or true;
     skipPrograms = wrapperArgs.skipPrograms or [];
-    wrapperBasePackage =
-      if basePackage ? overrideAttrs
-      then
-        basePackage.overrideAttrs (old: {
-          # wrapper-manager copies basePackage.meta onto the generated
-          # symlinkJoin. Keep license enforcement on the real package, not on
-          # the local wrapper derivation.
-          meta = removeAttrs (old.meta or {}) ["license" "sourceProvenance"];
-        })
-      else basePackage;
-    inherit
-      ((wrapper-manager.lib {
-          inherit pkgs;
-          modules = [
-            {
-              wrappers.${wrapperName} = {
-                basePackage = wrapperBasePackage;
-                prependFlags = chromiumFlags {inherit enableAngleVulkan;};
-                env = chromiumEnv;
-                programs = lib.genAttrs skipPrograms (_: {});
-              };
-            }
-          ];
-        }).config.wrappers.${
-          wrapperName
-        })
-      wrapped
-      ;
   in
-    wrapped
-    // {
-      override = f:
-        mkChromiumGpuWrapper (
-          wrapperArgs
-          // {
-            basePackage = basePackage.override f;
-          }
-        );
+    mkBackendWrapper {
+      inherit pkgs basePackage wrapperName skipPrograms;
+      extraFlags = chromiumFlags ++ (wrapperArgs.extraFlags or []);
+      extraEnv = chromiumEnv // (wrapperArgs.extraEnv or {});
+      ozonePlatform = wrapperArgs.ozonePlatform or "auto";
     };
 in {
   options.canix-toolbelt.chromiumGpu.wrap = lib.mkOption {
