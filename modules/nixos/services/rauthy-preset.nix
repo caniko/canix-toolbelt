@@ -47,6 +47,12 @@ in {
       description = "Runtime environment file for Rauthy secrets.";
     };
 
+    database = mkOption {
+      type = types.enum ["hiqlite" "postgres"];
+      default = "hiqlite";
+      description = "Database backend for Rauthy; HiQLite is the default.";
+    };
+
     adminEmail = mkOption {
       type = types.str;
       description = "Bootstrap administrator email address.";
@@ -225,7 +231,7 @@ in {
         inherit provision;
 
         enable = true;
-        configurePostgres = true;
+        configurePostgres = cfg.database == "postgres";
 
         settings = {
           server = {

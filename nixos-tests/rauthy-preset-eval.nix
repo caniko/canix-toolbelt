@@ -154,6 +154,11 @@ in
         message = "expected generated API-key provisioning to be enabled";
       }
       {
+        name = "hiqlite-default";
+        assertion = rauthy.configurePostgres == false;
+        message = "expected the Rauthy preset to select HiQLite by default";
+      }
+      {
         name = "transient-api-key-enabled";
         assertion = provision.transientApiKey.enable == true;
         message = "expected transient API-key provisioning to be enabled";
