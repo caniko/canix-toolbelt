@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: atlas-nix-trusted
+    runs-on: codefloe-global
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
     steps:

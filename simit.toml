@@ -1,0 +1,10 @@
+[ci]
+provider = "actions"
+platform = "forgejo"
+runtime = "nix"
+runner = "codefloe-global"
+
+[ci.pages]
+repo = "caniko/canix-toolbelt"
+canonical_domain = "canix-toolbelt.tartanoglu.com"
+source_branch = "main"
