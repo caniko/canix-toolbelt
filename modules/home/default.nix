@@ -20,6 +20,8 @@
   igpu = ./desktop/igpu.nix;
   # GPU — Chromium VA-API acceleration flags/env wrapper
   chromium-gpu = import ./desktop/chromium-gpu.nix {inherit wrapper-manager;};
+  # COSMIC — switch keyboard layouts when more than one is configured
+  keyboard-layout-shortcut = ./desktop/keyboard-layout-shortcut.nix;
   # AI — goose: the upstream Home Manager module plus canix's opinionated
   # defaults (enhanced CLI build with shell completions + man pages).
   goose = import ./ai/goose/default.nix {gooseFlake = goose;};
