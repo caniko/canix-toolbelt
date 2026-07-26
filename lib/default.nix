@@ -19,6 +19,7 @@ in
     opencode = import ./opencode.nix {inherit lib;};
     opsShellPackages = import ./opsShellPackages.nix;
     peerRoute = import ./peerRoute.nix;
+    projectTree = import ./projectTree.nix {inherit lib;};
     rbac = import ./rbac.nix;
     sshAliases = import ./sshAliases.nix;
     storage = import ./storage.nix;

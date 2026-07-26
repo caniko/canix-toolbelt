@@ -15,6 +15,7 @@
   # `programs.<name>.autoSafe` declarations and this module compiles them into
   # the backend permission object.
   agent-safety = ./agent-safety.nix;
+  project-tree = ./project-tree.nix;
 
   # GPU — iGPU render offload (DRI_PRIME) + VA-API decode-device selection
   igpu = ./desktop/igpu.nix;
