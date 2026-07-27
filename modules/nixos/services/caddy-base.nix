@@ -221,6 +221,7 @@ in {
               writer = {
                 output = "file";
                 filename = "${config.services.caddy.logDir}/other.log";
+                mode = "0640";
                 roll = true;
                 roll_size_mb = rollSizeMb;
               };
@@ -233,6 +234,7 @@ in {
               writer = {
                 output = "file";
                 filename = "${config.services.caddy.logDir}/admin.log";
+                mode = "0640";
                 roll = true;
                 roll_size_mb = rollSizeMb;
               };
@@ -245,6 +247,7 @@ in {
               writer = {
                 output = "file";
                 filename = "${config.services.caddy.logDir}/tls.log";
+                mode = "0640";
                 roll = true;
                 roll_size_mb = rollSizeMb;
               };
@@ -257,6 +260,7 @@ in {
               writer = {
                 output = "file";
                 filename = "${config.services.caddy.logDir}/debug.log";
+                mode = "0640";
                 roll = true;
                 roll_keep = 1;
                 roll_size_mb = rollSizeMb;
@@ -269,6 +273,7 @@ in {
               writer = {
                 output = "file";
                 filename = "${config.services.caddy.logDir}/${name}-access.log";
+                mode = "0640";
                 roll = true;
                 roll_size_mb = rollSizeMb;
               };
@@ -283,6 +288,7 @@ in {
                 writer = {
                   output = "file";
                   filename = "${config.services.caddy.logDir}/${name}-error.log";
+                  mode = "0640";
                   roll = true;
                   roll_size_mb = rollSizeMb;
                 };

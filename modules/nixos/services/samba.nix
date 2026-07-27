@@ -117,7 +117,14 @@ in {
         virtualHosts = lib.listToAttrs (
           map (svc: {
             name = "http://${svc.hostname}";
-            value.extraConfig = "reverse_proxy localhost:${toString svc.port}";
+            value = {
+              extraConfig = "reverse_proxy localhost:${toString svc.port}";
+              logFormat = ''
+                output file ${config.services.caddy.logDir}/access-http:__${svc.hostname}.log {
+                  mode 0640
+                }
+              '';
+            };
           })
           config.canix-toolbelt.services.proxiedLocalServices
         );

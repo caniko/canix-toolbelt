@@ -120,6 +120,7 @@
     CGROUP_ROOT = "/sys/fs/cgroup"
     running = True
     reported_editor_contract_failures = set()
+    paused = {}
 
 
     def log(level, message):
@@ -148,6 +149,21 @@
                 if line.startswith("PPid:"):
                     return int(line.split()[1])
         return 0
+
+
+    def process_starttime(pid):
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
+            stat = f.read()
+        _, fields = stat.rsplit(") ", 1)
+        return fields.split()[19]
+
+
+    def process_state(pid):
+        with open(f"/proc/{pid}/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    return line.split()[1]
+        return ""
 
 
     def startup_problem(allow_degraded, message):
@@ -387,6 +403,88 @@
         )
 
 
+    def pause_state_path():
+        state_directory = os.environ.get("STATE_DIRECTORY")
+        if not state_directory:
+            state_directory = os.path.join(
+                os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
+                "dev-oom-guard",
+            )
+        os.makedirs(state_directory, mode=0o700, exist_ok=True)
+        return os.path.join(state_directory, "paused.json")
+
+
+    def load_paused():
+        try:
+            with open(pause_state_path(), encoding="utf-8") as f:
+                saved = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+        return {
+            str(pid): str(starttime)
+            for pid, starttime in saved.items()
+            if str(pid).isdigit()
+        }
+
+
+    def save_paused():
+        path = pause_state_path()
+        if not paused:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            return
+        temporary = f"{path}.tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
+            json.dump(paused, f, sort_keys=True)
+            f.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+
+
+    def resume_paused():
+        changed = False
+        for pid_text, starttime in list(paused.items()):
+            pid = int(pid_text)
+            try:
+                if process_starttime(pid) == starttime:
+                    os.kill(pid, signal.SIGCONT)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+            except (PermissionError, OSError) as e:
+                log("WARN", f"cannot resume paused pid={pid}: {e}")
+            paused.pop(pid_text, None)
+            changed = True
+        if changed:
+            save_paused()
+
+
+    def pause_descendants(descendant_reasons, protected, processes):
+        changed = False
+        for pid, agent_name in sorted(descendant_reasons.items()):
+            if pid in protected or pid not in processes or str(pid) in paused:
+                continue
+            try:
+                starttime = process_starttime(pid)
+                if process_state(pid) in ("T", "t"):
+                    continue
+                os.kill(pid, signal.SIGSTOP)
+                paused[str(pid)] = starttime
+                log(
+                    "INFO",
+                    f"paused pid={pid} reason=agent-descendant:{agent_name} "
+                    f"cmdline={processes[pid]['cmdline'][:240]}",
+                )
+                changed = True
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except (PermissionError, OSError) as e:
+                log("WARN", f"cannot pause pid={pid}: {e}")
+        if changed:
+            save_paused()
+
+
     def scan_once(cfg, agents_re, protect_re):
         processes, children = read_process_table()
 
@@ -440,6 +538,12 @@
                     processes[pid]["cmdline"],
                 )
 
+        pause_path = cfg.get("pausePath")
+        if pause_path and os.path.exists(pause_path):
+            pause_descendants(descendant_reasons, protected, processes)
+        else:
+            resume_paused()
+
 
     def handle_signal(signum, _frame):
         global running
@@ -477,6 +581,7 @@
 
         agents_re, protect_re = compile_agent_regexes(cfg)
         startup_gate(cfg)
+        paused.update(load_paused())
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
@@ -484,14 +589,18 @@
         log(
             "INFO",
             "dev-oom-guard started; "
-            f"killAdj={cfg['killAdj']}, pollSeconds={cfg['pollSeconds']}",
+            f"killAdj={cfg['killAdj']}, pollSeconds={cfg['pollSeconds']}, "
+            f"pausePath={cfg.get('pausePath')!r}",
         )
-        while running:
-            try:
-                scan_once(cfg, agents_re, protect_re)
-            except Exception as e:
-                log("WARN", f"scan failed: {e}")
-            time.sleep(cfg["pollSeconds"])
+        try:
+            while running:
+                try:
+                    scan_once(cfg, agents_re, protect_re)
+                except Exception as e:
+                    log("WARN", f"scan failed: {e}")
+                time.sleep(cfg["pollSeconds"])
+        finally:
+            resume_paused()
 
 
     if __name__ == "__main__":
@@ -505,6 +614,15 @@ in {
       type = lib.types.ints.positive;
       default = 5;
       description = "Seconds between /proc scans.";
+    };
+
+    pausePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        When this marker exists, suspend matched agent descendants until it is
+        removed. Paused PID/start-time pairs are resumed on shutdown.
+      '';
     };
 
     killAdj = lib.mkOption {
@@ -573,7 +691,7 @@ in {
 
   config = lib.mkIf cfg.enable {
     environment.etc."dev-oom-guard/config.json".source = jsonFormat.generate "dev-oom-guard.json" {
-      inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect;
+      inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect pausePath;
       selfBiasHelper = "/run/wrappers/bin/dev-oom-guard-self-bias";
     };
 
@@ -593,6 +711,8 @@ in {
         Restart = "on-failure";
         RestartSec = "10s";
         OOMScoreAdjust = -1000;
+        StateDirectory = "dev-oom-guard";
+        StateDirectoryMode = "0700";
       };
     };
   };
