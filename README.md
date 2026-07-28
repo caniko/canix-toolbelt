@@ -103,10 +103,8 @@ host in inventory data such as topology and SSH records.
 
 ### Site helpers
 
-The site helpers target the Codeberg Pages workflow used by caniko tools, but
-the build outputs are plain static directories and can be reused by any static
-host. The deploy helper reads the git remote name from an environment variable
-(`DEPLOY_REMOTE` by default), so CI owns token injection and remote URLs.
+The site helpers build plain static directories that can be reused by any
+static host. Pages deployment is owned by Plinth's `mkDeployPagesApp`.
 
 `lib.mkZolaSite` builds a Zola source tree. `dataFiles` copies generated or
 external files into the site tree before `zola build`; `theme = { name, src; }`
@@ -145,40 +143,6 @@ packages.${system}.site = canix-toolbelt.lib.mkCombinedSite {
   docs = config.packages.docs;
   domains = ["example.org" "www.example.org"];
 };
-```
-
-`lib.mkDeployPagesApp` returns a `writeShellApplication` app that force-updates
-the Pages branch from a built static site package. It never embeds a token or
-remote URL; CI should create a git remote and set `DEPLOY_REMOTE` to that remote
-name before running it.
-
-```nix
-apps.${system}.deploy-pages = {
-  type = "app";
-  program = "${
-    canix-toolbelt.lib.mkDeployPagesApp {
-      inherit pkgs;
-      sitePackage = config.packages.site;
-    }
-  }/bin/deploy-pages";
-};
-```
-
-Consumers using `flake-parts` can import `flakeModules.pages-deploy`, a thin
-wrapper over `mkDeployPagesApp` that registers `apps.deploy-pages`.
-
-```nix
-{
-  imports = [inputs.canix-toolbelt.flakeModules.pages-deploy];
-
-  perSystem = {config, ...}: {
-    canix-toolbelt.pages-deploy = {
-      enable = true;
-      sitePackage = config.packages.site;
-      branch = "pages";
-    };
-  };
-}
 ```
 
 ## Module index

@@ -103,7 +103,6 @@
           git-hooks = ./flake-modules/git-hooks.nix;
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
-          pages-deploy = ./flake-modules/pages-deploy.nix;
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
           topology = ./flake-modules/topology.nix;

@@ -70,10 +70,6 @@
     domains = null;
   };
 
-  deployPagesApp = toolbeltLib.mkDeployPagesApp {
-    inherit pkgs;
-    sitePackage = combinedWithDomains;
-  };
 in
   pkgs.runCommand "site-helpers-eval" {} ''
     test -f ${zolaSite}/index.html
@@ -83,8 +79,6 @@ in
     test -f ${combinedWithDomains}/.domains
     head -n 1 ${combinedWithDomains}/.domains | grep -qx test.example
     test ! -e ${combinedWithoutDomains}/.domains
-    test -x ${deployPagesApp}/bin/deploy-pages
-    ! grep -R "CODEBERG_TOKEN\|https://.*codeberg\|git@.*codeberg" ${deployPagesApp}/bin
     mkdir -p "$out"
     printf '%s\n' "site helpers evaluated and built fixtures" > "$out/result"
   ''
