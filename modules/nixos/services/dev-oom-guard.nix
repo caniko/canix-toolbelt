@@ -11,39 +11,106 @@
     src = pkgs.writeText "dev-oom-guard-self-bias.c" ''
       #include <errno.h>
       #include <fcntl.h>
+      #include <limits.h>
       #include <stdio.h>
+      #include <stdlib.h>
       #include <string.h>
       #include <sys/types.h>
       #include <unistd.h>
 
-      int main(void) {
-        char path[64];
-        pid_t parent = getppid();
-        int fd;
-        ssize_t written;
+      static int parse_long(const char *text, long minimum, long maximum, long *value) {
+        char *end;
+        long parsed;
 
-        if (snprintf(path, sizeof(path), "/proc/%ld/oom_score_adj", (long)parent) >= (int)sizeof(path)) {
-          fputs("parent pid path too long\n", stderr);
+        errno = 0;
+        parsed = strtol(text, &end, 10);
+        if (errno != 0 || *text == '\0' || *end != '\0' || parsed < minimum || parsed > maximum) {
+          return -1;
+        }
+        *value = parsed;
+        return 0;
+      }
+
+      static int target_belongs_to_caller(int proc_fd, uid_t caller) {
+        char line[256];
+        FILE *status;
+        int status_fd;
+        unsigned long real_uid, effective_uid, saved_uid, filesystem_uid;
+
+        status_fd = openat(proc_fd, "status", O_RDONLY | O_CLOEXEC);
+        if (status_fd < 0) {
+          return -1;
+        }
+        status = fdopen(status_fd, "r");
+        if (status == NULL) {
+          close(status_fd);
+          return -1;
+        }
+        while (fgets(line, sizeof(line), status) != NULL) {
+          if (sscanf(line, "Uid:\t%lu\t%lu\t%lu\t%lu", &real_uid, &effective_uid, &saved_uid, &filesystem_uid) == 4) {
+            fclose(status);
+            return real_uid == caller && effective_uid == caller && saved_uid == caller && filesystem_uid == caller;
+          }
+        }
+        fclose(status);
+        return -1;
+      }
+
+      int main(int argc, char **argv) {
+        char path[64];
+        char value_text[8];
+        long adjustment = -1000;
+        long target = getppid();
+        int proc_fd, score_fd;
+        ssize_t written;
+        int value_length;
+
+        if (argc == 3) {
+          if (parse_long(argv[1], 1, INT_MAX, &target) != 0 || parse_long(argv[2], -1000, 1000, &adjustment) != 0) {
+            fputs("usage: dev-oom-guard-self-bias [PID ADJUSTMENT(-1000..1000)]\n", stderr);
+            return 2;
+          }
+        } else if (argc != 1) {
+          fputs("usage: dev-oom-guard-self-bias [PID ADJUSTMENT(-1000..1000)]\n", stderr);
           return 2;
         }
 
-        fd = open(path, O_WRONLY | O_CLOEXEC);
-        if (fd < 0) {
+        if (snprintf(path, sizeof(path), "/proc/%ld", target) >= (int)sizeof(path)) {
+          fputs("target pid path too long\n", stderr);
+          return 2;
+        }
+        proc_fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (proc_fd < 0) {
           fprintf(stderr, "open %s: %s\n", path, strerror(errno));
           return 1;
         }
-
-        written = write(fd, "-1000", 5);
-        if (written != 5) {
-          fprintf(stderr, "write %s: %s\n", path, written < 0 ? strerror(errno) : "short write");
-          close(fd);
+        if (target_belongs_to_caller(proc_fd, getuid()) != 1) {
+          fprintf(stderr, "refusing pid %ld: target credentials do not match caller uid %ld\n", target, (long)getuid());
+          close(proc_fd);
           return 1;
         }
 
-        if (close(fd) != 0) {
-          fprintf(stderr, "close %s: %s\n", path, strerror(errno));
+        score_fd = openat(proc_fd, "oom_score_adj", O_WRONLY | O_CLOEXEC);
+        if (score_fd < 0) {
+          fprintf(stderr, "open %s/oom_score_adj: %s\n", path, strerror(errno));
+          close(proc_fd);
           return 1;
         }
+        value_length = snprintf(value_text, sizeof(value_text), "%ld", adjustment);
+        written = write(score_fd, value_text, value_length);
+        if (written != value_length) {
+          fprintf(stderr, "write %s/oom_score_adj: %s\n", path, written < 0 ? strerror(errno) : "short write");
+          close(score_fd);
+          close(proc_fd);
+          return 1;
+        }
+
+        if (close(score_fd) != 0) {
+          fprintf(stderr, "close %s/oom_score_adj: %s\n", path, strerror(errno));
+          close(proc_fd);
+          return 1;
+        }
+        close(proc_fd);
 
         return 0;
       }
@@ -84,11 +151,14 @@
       };
 
       maxAdj = lib.mkOption {
-        type = lib.types.int;
+        type = lib.types.ints.between (-1000) 1000;
         default = 0;
         description = ''
           Cap oom_score_adj at this value on every scan. This should stay
           narrow: a broad pattern could undo an application's own OOM policy.
+          Negative values use the privileged same-UID helper when required;
+          -1000 makes the matched process immune to the kernel OOM killer,
+          and descendants inherit the value until another policy changes it.
         '';
       };
 
@@ -368,7 +438,7 @@
         return seen
 
 
-    def set_adj_if_needed(pid, target, reason, cmdline):
+    def set_adj_if_needed(pid, target, reason, cmdline, helper=None):
         try:
             current = read_adj(pid)
             if current == target:
@@ -380,13 +450,45 @@
                 f"pid={pid} exited before oom_score_adj write for {reason}",
             )
             return
-        except PermissionError as e:
-            log(
-                "WARN",
-                "permission denied writing oom_score_adj "
-                f"for pid={pid} reason={reason}: {e}",
+        except PermissionError as direct_error:
+            if not helper:
+                log(
+                    "WARN",
+                    "permission denied writing oom_score_adj "
+                    f"for pid={pid} reason={reason}: {direct_error}",
+                )
+                return
+            result = subprocess.run(
+                [helper, str(pid), str(target)],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            return
+            if result.returncode != 0:
+                detail = (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or f"exit status {result.returncode}"
+                )
+                log(
+                    "WARN",
+                    f"helper failed writing oom_score_adj for pid={pid} "
+                    f"reason={reason}: {detail}",
+                )
+                return
+            try:
+                current = read_adj(pid)
+            except OSError as e:
+                log("WARN", f"cannot verify oom_score_adj for pid={pid}: {e}")
+                return
+            if current != target:
+                log(
+                    "WARN",
+                    f"helper readback mismatch for pid={pid}: "
+                    f"expected {target}, got {current}",
+                )
+                return
         except OSError as e:
             log(
                 "WARN",
@@ -536,6 +638,7 @@
                     max_adj,
                     f"protect:{name}",
                     processes[pid]["cmdline"],
+                    cfg.get("selfBiasHelper"),
                 )
 
         pause_path = cfg.get("pausePath")
@@ -690,6 +793,8 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    systemd.user.settings.Manager.DefaultOOMPolicy = lib.mkDefault "continue";
+
     environment.etc."dev-oom-guard/config.json".source = jsonFormat.generate "dev-oom-guard.json" {
       inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect pausePath;
       selfBiasHelper = "/run/wrappers/bin/dev-oom-guard-self-bias";

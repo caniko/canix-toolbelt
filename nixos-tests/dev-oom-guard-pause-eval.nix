@@ -18,9 +18,19 @@
           type = lib.types.attrs;
           default = {};
         };
+        options.systemd.user.settings.Manager.DefaultOOMPolicy = lib.mkOption {
+          type = lib.types.str;
+        };
         config.canix-toolbelt.services.devOomGuard = {
           enable = true;
           pausePath = "/run/user/1000/canix/foreground-active";
+          protect = [
+            {
+              name = "interactive-root";
+              cmdlineRegex = "interactive-root";
+              maxAdj = -1000;
+            }
+          ];
         };
       }
     ];
@@ -29,6 +39,7 @@
 
   cfg = evaluated.config.canix-toolbelt.services.devOomGuard;
   serviceConfig = evaluated.config.systemd.user.services.dev-oom-guard.serviceConfig;
+  managerSettings = evaluated.config.systemd.user.settings.Manager;
   configSource = evaluated.config.environment.etc."dev-oom-guard/config.json".source;
 in
   mkEvalCheck {
@@ -44,6 +55,16 @@ in
         name = "pause-path-is-rendered";
         assertion = lib.hasInfix "pausePath" (builtins.readFile configSource);
         message = "the runtime JSON must carry pausePath to the guard process";
+      }
+      {
+        name = "negative-protection-is-rendered";
+        assertion = lib.hasInfix ''"maxAdj": -1000'' (builtins.readFile configSource);
+        message = "negative protected-process adjustments must reach the runtime config";
+      }
+      {
+        name = "user-scope-oom-policy";
+        assertion = managerSettings.DefaultOOMPolicy == "continue";
+        message = "the guard must keep a descendant OOM kill from stopping the enclosing user scope";
       }
       {
         name = "restart-state-is-persistent";
