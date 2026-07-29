@@ -52,7 +52,6 @@
 
   forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
-  pg-backup = ./services/pg-backup.nix;
   direct-link = ./networking/direct-link.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
   stalwart-seed-accounts = ./services/stalwart-seed-accounts.nix;

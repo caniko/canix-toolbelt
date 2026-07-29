@@ -25,6 +25,12 @@
       url = "git+https://codeberg.org/caniko/fleetix.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Transitional compatibility only: database-specific modules now live in
+    # db-harbor and this input can be removed after consumers migrate.
+    db-harbor = {
+      url = "git+ssh://git@codeberg.org/caniko/migrationix.git";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -93,7 +99,20 @@
               wrapper-manager = inputs.wrapper-manager;
             };
           };
-        nixosModules = import ./modules/nixos;
+        nixosModules =
+          (import ./modules/nixos)
+          // {
+            # Compatibility alias. Database-specific backup mechanics are
+            # owned by db-harbor; keep the old option path during migration.
+            pg-backup = {
+              imports = [
+                inputs.db-harbor.nixosModules.pg-backup
+                (nixpkgs.lib.mkAliasOptionModule
+                  ["canix-toolbelt" "services" "pgBackup"]
+                  ["services" "db-harbor" "pgBackup"])
+              ];
+            };
+          };
         homeModules = import ./modules/home {inherit (inputs) wrapper-manager goose;};
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
@@ -131,13 +150,13 @@
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
+            resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};
             agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
             keyboard-layout-shortcut-eval = import ./nixos-tests/keyboard-layout-shortcut-eval.nix {inherit pkgs;};
             dev-agent-isolation-eval = import ./nixos-tests/dev-agent-isolation-eval.nix {inherit pkgs;};
             dev-oom-guard-pause-eval = import ./nixos-tests/dev-oom-guard-pause-eval.nix {inherit pkgs;};
             dev-oom-guard-protection = import ./nixos-tests/dev-oom-guard-protection.nix {inherit pkgs;};
-            pg-backup-eval = import ./nixos-tests/pg-backup-eval.nix {inherit pkgs;};
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
