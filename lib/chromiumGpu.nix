@@ -55,6 +55,8 @@
       version = basePackage.version or "";
       meta = basePackage.meta or {};
       passthru = basePackage.passthru or {};
+    }
+    // lib.optionalAttrs (basePackage ? override) {
       override =
         lib.setFunctionArgs
         (args:

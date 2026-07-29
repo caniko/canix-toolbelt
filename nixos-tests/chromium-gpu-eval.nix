@@ -29,6 +29,10 @@
   wayland = mkWrapped {ozonePlatform = "wayland";};
   x11 = mkWrapped {ozonePlatform = "x11";};
   skipped = mkWrapped {skipPrograms = ["fake-cli"];};
+  nonOverridable = wrapper {
+    inherit pkgs;
+    basePackage = removeAttrs fakePackage ["override"];
+  };
 in
   pkgs.runCommand "chromium-gpu-eval" {
     nativeBuildInputs = [pkgs.binutils pkgs.gnugrep];
@@ -53,6 +57,7 @@ in
 
     test -x ${skipped}/bin/fake-chromium
     test -x ${skipped}/bin/fake-cli
+    test -x ${nonOverridable}/bin/fake-chromium
     ${skipped}/bin/fake-cli > skipped.out
     if grep -F -- '--use-gl=angle' skipped.out >/dev/null; then
       echo 'skipPrograms must leave the selected program unwrapped' >&2
