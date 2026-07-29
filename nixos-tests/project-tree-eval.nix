@@ -62,8 +62,8 @@ in
             namespace = "caniko";
             repository = "demo";
           }
-          == "owned/codeberg.org/caniko/demo";
-        message = "owned project paths must follow class/forge/namespace/repository";
+          == "owned/demo";
+        message = "owned project paths must follow class/repository";
       }
       {
         name = "worktree-path";
@@ -74,8 +74,8 @@ in
             repository = "demo";
             purpose = "fix";
           }
-          == "worktrees/gitlab.com/team/nested/demo/fix";
-        message = "worktree paths must retain the full base coordinate";
+          == "worktrees/demo/fix";
+        message = "worktree paths must follow repository/purpose";
       }
       {
         name = "rendered-schema";

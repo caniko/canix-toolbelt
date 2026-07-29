@@ -37,18 +37,16 @@ in rec {
 
   projectPath = {
     class,
-    forge,
-    namespace,
     repository,
+    ...
   }:
     if !builtins.elem class primaryClasses
     then throw "canix-toolbelt projectTree: unsupported primary class ${class}"
-    else "${layout.primary.${class}}/${coordinate {inherit forge namespace repository;}}";
+    else "${layout.primary.${class}}/${clean "repository" repository}";
 
   worktreePath = {
-    forge,
-    namespace,
     repository,
     purpose,
-  }: "${layout.worktrees}/${coordinate {inherit forge namespace repository;}}/${clean "purpose" purpose}";
+    ...
+  }: "${layout.worktrees}/${clean "repository" repository}/${clean "purpose" purpose}";
 }
