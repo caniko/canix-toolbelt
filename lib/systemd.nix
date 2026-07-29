@@ -1,12 +1,14 @@
 # systemd — helpers for common systemd unit patterns.
 #
-# Three functions:
+# Four functions:
 #
 #   mkDownloadOneshot  — download a URL to a file if missing, retrying on failure
 #   mkPathTrigger      — systemd.path unit that triggers a service when a file appears
 #   mkConditionalOneshot — oneshot whose execution is gated on a file condition
+#   mkResumableOperator — ordered, resumable systemd stage controller
 #
 {lib}: {
+  mkResumableOperator = import ./resumable-operator.nix {inherit lib;};
   # mkDownloadOneshot :: { pkgs, name, url, path, authTokenFile?, extraScript?,
   #                        restartSec?, stateDirMode? } -> { <name> = <service def> }
   #
