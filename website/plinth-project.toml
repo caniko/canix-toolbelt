@@ -1,6 +1,6 @@
 [site]
 title = "canix-toolbelt"
-description = "Reusable, host-agnostic Nix building blocks extracted from"
+description = "Reusable, host-agnostic Nix building blocks extracted from caniko/canix for modules, flake composition, and reusable site plumbing."
 base_url = "/"
 footer_note = "Generated from repository metadata by the plinth-project FOSS sweep."
 
@@ -19,13 +19,13 @@ href = "git@codeberg.org:caniko/canix-toolbelt.git"
 [[pages]]
 slug = "index"
 title = "canix-toolbelt"
-description = "Reusable, host-agnostic Nix building blocks extracted from"
+description = "Reusable, host-agnostic Nix building blocks extracted from caniko/canix for modules, flake composition, and reusable site plumbing."
 
 [[pages.sections]]
 type = "hero"
 title = "canix-toolbelt"
-tagline = "Reusable, host-agnostic Nix building blocks extracted from"
-subtitle = "Reusable, host-agnostic Nix building blocks extracted from"
+tagline = "Host-agnostic Nix building blocks"
+subtitle = "Composable modules, flake-parts helpers, and reusable Codeberg Pages site plumbing."
 
 [[pages.sections.ctas]]
 label = "View source"
@@ -37,6 +37,13 @@ type = "feature_grid"
 id = "overview"
 
 [[pages.sections.features]]
-title = "Nix"
-description = "Project technology detected from repository manifests."
+title = "NixOS modules"
+description = "Composable CPU, GPU, EFI, PipeWire, watchdog, and hardware-base modules without host or secret coupling."
 
+[[pages.sections.features]]
+title = "Flake modules"
+description = "Reusable flake-parts modules for treefmt, git hooks, host-output selection, and structure checks."
+
+[[pages.sections.features]]
+title = "Site helpers"
+description = "Helpers for Zola sites, mdBook docs, combined static trees, and Codeberg Pages deployment apps."
