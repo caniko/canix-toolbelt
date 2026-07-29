@@ -10,9 +10,16 @@
           type = lib.types.attrs;
           default = {};
         };
-        options.security.wrappers = lib.mkOption {
-          type = lib.types.attrs;
-          default = {};
+        options.systemd.services.dev-oom-protector = {
+          description = lib.mkOption {type = lib.types.str;};
+          wantedBy = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [];
+          };
+          serviceConfig = lib.mkOption {
+            type = lib.types.attrs;
+            default = {};
+          };
         };
         options.systemd.user.services = lib.mkOption {
           type = lib.types.attrs;
@@ -24,6 +31,7 @@
         config.canix-toolbelt.services.devOomGuard = {
           enable = true;
           pausePath = "/run/user/1000/canix/foreground-active";
+          protectUsers = ["developer"];
           protect = [
             {
               name = "interactive-root";
@@ -39,6 +47,7 @@
 
   cfg = evaluated.config.canix-toolbelt.services.devOomGuard;
   serviceConfig = evaluated.config.systemd.user.services.dev-oom-guard.serviceConfig;
+  protectorConfig = evaluated.config.systemd.services.dev-oom-protector.serviceConfig;
   managerSettings = evaluated.config.systemd.user.settings.Manager;
   configSource = evaluated.config.environment.etc."dev-oom-guard/config.json".source;
 in
@@ -65,6 +74,14 @@ in
         name = "user-scope-oom-policy";
         assertion = managerSettings.DefaultOOMPolicy == "continue";
         message = "the guard must keep a descendant OOM kill from stopping the enclosing user scope";
+      }
+      {
+        name = "root-protector-is-restricted";
+        assertion =
+          lib.hasInfix " --protect " protectorConfig.ExecStart
+          && protectorConfig.NoNewPrivileges == true
+          && protectorConfig.ProtectSystem == "strict";
+        message = "protected-process adjustment must stay in the restricted root service";
       }
       {
         name = "restart-state-is-persistent";

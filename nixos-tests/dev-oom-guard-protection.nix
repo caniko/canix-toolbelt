@@ -21,6 +21,7 @@ pkgs.testers.nixosTest {
     canix-toolbelt.services.devOomGuard = {
       enable = true;
       pollSeconds = 1;
+      protectUsers = ["guard"];
       verifyEditorScopes = false;
       agents = [
         {

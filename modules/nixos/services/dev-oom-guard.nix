@@ -6,123 +6,6 @@
 }: let
   cfg = config.canix-toolbelt.services.devOomGuard;
   jsonFormat = pkgs.formats.json {};
-  selfBiasHelper = pkgs.stdenv.mkDerivation {
-    name = "dev-oom-guard-self-bias";
-    src = pkgs.writeText "dev-oom-guard-self-bias.c" ''
-      #include <errno.h>
-      #include <fcntl.h>
-      #include <limits.h>
-      #include <stdio.h>
-      #include <stdlib.h>
-      #include <string.h>
-      #include <sys/types.h>
-      #include <unistd.h>
-
-      static int parse_long(const char *text, long minimum, long maximum, long *value) {
-        char *end;
-        long parsed;
-
-        errno = 0;
-        parsed = strtol(text, &end, 10);
-        if (errno != 0 || *text == '\0' || *end != '\0' || parsed < minimum || parsed > maximum) {
-          return -1;
-        }
-        *value = parsed;
-        return 0;
-      }
-
-      static int target_belongs_to_caller(int proc_fd, uid_t caller) {
-        char line[256];
-        FILE *status;
-        int status_fd;
-        unsigned long real_uid, effective_uid, saved_uid, filesystem_uid;
-
-        status_fd = openat(proc_fd, "status", O_RDONLY | O_CLOEXEC);
-        if (status_fd < 0) {
-          return -1;
-        }
-        status = fdopen(status_fd, "r");
-        if (status == NULL) {
-          close(status_fd);
-          return -1;
-        }
-        while (fgets(line, sizeof(line), status) != NULL) {
-          if (sscanf(line, "Uid:\t%lu\t%lu\t%lu\t%lu", &real_uid, &effective_uid, &saved_uid, &filesystem_uid) == 4) {
-            fclose(status);
-            return real_uid == caller && effective_uid == caller && saved_uid == caller && filesystem_uid == caller;
-          }
-        }
-        fclose(status);
-        return -1;
-      }
-
-      int main(int argc, char **argv) {
-        char path[64];
-        char value_text[8];
-        long adjustment = -1000;
-        long target = getppid();
-        int proc_fd, score_fd;
-        ssize_t written;
-        int value_length;
-
-        if (argc == 3) {
-          if (parse_long(argv[1], 1, INT_MAX, &target) != 0 || parse_long(argv[2], -1000, 1000, &adjustment) != 0) {
-            fputs("usage: dev-oom-guard-self-bias [PID ADJUSTMENT(-1000..1000)]\n", stderr);
-            return 2;
-          }
-        } else if (argc != 1) {
-          fputs("usage: dev-oom-guard-self-bias [PID ADJUSTMENT(-1000..1000)]\n", stderr);
-          return 2;
-        }
-
-        if (snprintf(path, sizeof(path), "/proc/%ld", target) >= (int)sizeof(path)) {
-          fputs("target pid path too long\n", stderr);
-          return 2;
-        }
-        proc_fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (proc_fd < 0) {
-          fprintf(stderr, "open %s: %s\n", path, strerror(errno));
-          return 1;
-        }
-        if (target_belongs_to_caller(proc_fd, getuid()) != 1) {
-          fprintf(stderr, "refusing pid %ld: target credentials do not match caller uid %ld\n", target, (long)getuid());
-          close(proc_fd);
-          return 1;
-        }
-
-        score_fd = openat(proc_fd, "oom_score_adj", O_WRONLY | O_CLOEXEC);
-        if (score_fd < 0) {
-          fprintf(stderr, "open %s/oom_score_adj: %s\n", path, strerror(errno));
-          close(proc_fd);
-          return 1;
-        }
-        value_length = snprintf(value_text, sizeof(value_text), "%ld", adjustment);
-        written = write(score_fd, value_text, value_length);
-        if (written != value_length) {
-          fprintf(stderr, "write %s/oom_score_adj: %s\n", path, written < 0 ? strerror(errno) : "short write");
-          close(score_fd);
-          close(proc_fd);
-          return 1;
-        }
-
-        if (close(score_fd) != 0) {
-          fprintf(stderr, "close %s/oom_score_adj: %s\n", path, strerror(errno));
-          close(proc_fd);
-          return 1;
-        }
-        close(proc_fd);
-
-        return 0;
-      }
-    '';
-    dontUnpack = true;
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $out/bin
-      $CC "$src" -o $out/bin/dev-oom-guard-self-bias
-      runHook postInstall
-    '';
-  };
 
   matcherSubmodule = {
     options = {
@@ -156,9 +39,8 @@
         description = ''
           Cap oom_score_adj at this value on every scan. This should stay
           narrow: a broad pattern could undo an application's own OOM policy.
-          Negative values use the privileged same-UID helper when required;
-          -1000 makes the matched process immune to the kernel OOM killer,
-          and descendants inherit the value until another policy changes it.
+          Negative values are applied by the root-owned protector service;
+          -1000 makes the matched process immune to the kernel OOM killer.
         '';
       };
 
@@ -178,6 +60,7 @@
     import collections
     import json
     import os
+    import pwd
     import re
     import signal
     import subprocess
@@ -219,6 +102,14 @@
                 if line.startswith("PPid:"):
                     return int(line.split()[1])
         return 0
+
+
+    def read_uid(pid):
+        with open(f"/proc/{pid}/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("Uid:"):
+                    return int(line.split()[1])
+        raise RuntimeError(f"cannot find uid for pid={pid}")
 
 
     def process_starttime(pid):
@@ -348,46 +239,7 @@
             return
 
 
-    def set_own_adj_with_helper(helper):
-        try:
-            write_adj("self", -1000)
-        except PermissionError as direct_error:
-            if not helper:
-                raise RuntimeError(
-                    "direct write denied and no helper configured: "
-                    f"{direct_error}"
-                ) from direct_error
-            result = subprocess.run(
-                [helper],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            if result.returncode != 0:
-                detail = (
-                    result.stderr.strip()
-                    or result.stdout.strip()
-                    or f"exit status {result.returncode}"
-                )
-                raise RuntimeError(
-                    f"helper {helper} failed after direct write was denied: "
-                    f"{detail}"
-                ) from direct_error
-        current = read_adj("self")
-        if current != -1000:
-            raise RuntimeError(f"read back oom_score_adj={current}")
-
-
     def startup_gate(cfg):
-        try:
-            set_own_adj_with_helper(cfg.get("selfBiasHelper"))
-        except Exception as e:
-            startup_problem(
-                cfg.get("allowDegraded", False),
-                f"cannot set own oom_score_adj=-1000: {e}",
-            )
-
         if cfg.get("verifyEditorScopes", True):
             try:
                 policy = manager_default_oom_policy()
@@ -410,6 +262,7 @@
             pid = int(entry.name)
             try:
                 ppid = read_ppid(pid)
+                uid = read_uid(pid)
                 cmdline = read_cmdline(pid)
             except (FileNotFoundError, ProcessLookupError):
                 continue
@@ -420,6 +273,7 @@
                 continue
             processes[pid] = {
                 "ppid": ppid,
+                "uid": uid,
                 "cmdline": cmdline,
             }
             children[ppid].append(pid)
@@ -438,7 +292,7 @@
         return seen
 
 
-    def set_adj_if_needed(pid, target, reason, cmdline, helper=None):
+    def set_adj_if_needed(pid, target, reason, cmdline):
         try:
             current = read_adj(pid)
             if current == target:
@@ -450,45 +304,13 @@
                 f"pid={pid} exited before oom_score_adj write for {reason}",
             )
             return
-        except PermissionError as direct_error:
-            if not helper:
-                log(
-                    "WARN",
-                    "permission denied writing oom_score_adj "
-                    f"for pid={pid} reason={reason}: {direct_error}",
-                )
-                return
-            result = subprocess.run(
-                [helper, str(pid), str(target)],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+        except PermissionError as e:
+            log(
+                "WARN",
+                "permission denied writing oom_score_adj "
+                f"for pid={pid} reason={reason}: {e}",
             )
-            if result.returncode != 0:
-                detail = (
-                    result.stderr.strip()
-                    or result.stdout.strip()
-                    or f"exit status {result.returncode}"
-                )
-                log(
-                    "WARN",
-                    f"helper failed writing oom_score_adj for pid={pid} "
-                    f"reason={reason}: {detail}",
-                )
-                return
-            try:
-                current = read_adj(pid)
-            except OSError as e:
-                log("WARN", f"cannot verify oom_score_adj for pid={pid}: {e}")
-                return
-            if current != target:
-                log(
-                    "WARN",
-                    f"helper readback mismatch for pid={pid}: "
-                    f"expected {target}, got {current}",
-                )
-                return
+            return
         except OSError as e:
             log(
                 "WARN",
@@ -587,16 +409,53 @@
             save_paused()
 
 
-    def scan_once(cfg, agents_re, protect_re):
-        processes, children = read_process_table()
-
+    def matched_protected(processes, protect_re):
         protected = {}
         for pid, proc in processes.items():
-            cmdline = proc["cmdline"]
             for name, regex, max_adj, verify_cgroup in protect_re:
-                if regex.search(cmdline):
+                if regex.search(proc["cmdline"]):
                     protected[pid] = (name, max_adj, verify_cgroup)
                     break
+        return protected
+
+
+    def protect_once(protect_uids, protect_re):
+        processes, _ = read_process_table()
+        protected = matched_protected(processes, protect_re)
+
+        for pid, proc in processes.items():
+            if proc["uid"] not in protect_uids:
+                continue
+            match = protected.get(pid)
+            is_guard = "/etc/dev-oom-guard/config.json" in proc["cmdline"]
+            if match is None and is_guard:
+                match = ("dev-oom-guard", -1000, False)
+            if match is None:
+                continue
+            name, max_adj, _ = match
+            try:
+                current = read_adj(pid)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                log(
+                    "WARN",
+                    f"cannot read oom_score_adj for protected pid={pid} "
+                    f"protect={name}: {e}",
+                )
+                continue
+            if current > max_adj:
+                set_adj_if_needed(
+                    pid,
+                    max_adj,
+                    f"protect:{name}",
+                    proc["cmdline"],
+                )
+
+
+    def scan_once(cfg, agents_re, protect_re):
+        processes, children = read_process_table()
+        protected = matched_protected(processes, protect_re)
 
         descendant_reasons = {}
         for pid, proc in processes.items():
@@ -616,30 +475,11 @@
                 processes[pid]["cmdline"],
             )
 
-        for pid, (name, max_adj, verify_cgroup) in sorted(protected.items()):
+        for pid, (_name, _max_adj, verify_cgroup) in sorted(protected.items()):
             if pid not in processes:
                 continue
             if verify_cgroup and cfg.get("verifyEditorScopes", True):
                 verify_editor_cgroup(pid, cfg.get("allowDegraded", False))
-            try:
-                current = read_adj(pid)
-            except FileNotFoundError:
-                continue
-            except OSError as e:
-                log(
-                    "WARN",
-                    "cannot read oom_score_adj for protected "
-                    f"pid={pid} protect={name}: {e}",
-                )
-                continue
-            if current > max_adj:
-                set_adj_if_needed(
-                    pid,
-                    max_adj,
-                    f"protect:{name}",
-                    processes[pid]["cmdline"],
-                    cfg.get("selfBiasHelper"),
-                )
 
         pause_path = cfg.get("pausePath")
         if pause_path and os.path.exists(pause_path):
@@ -675,20 +515,47 @@
 
 
     def main():
-        if len(sys.argv) != 2:
-            log("FATAL", "usage: dev-oom-guard /etc/dev-oom-guard/config.json")
+        protect_mode = len(sys.argv) == 3 and sys.argv[1] == "--protect"
+        if not protect_mode and len(sys.argv) != 2:
+            log(
+                "FATAL",
+                "usage: dev-oom-guard [--protect] "
+                "/etc/dev-oom-guard/config.json",
+            )
             sys.exit(2)
 
-        with open(sys.argv[1], encoding="utf-8") as f:
+        config_path = sys.argv[2] if protect_mode else sys.argv[1]
+        with open(config_path, encoding="utf-8") as f:
             cfg = json.load(f)
 
         agents_re, protect_re = compile_agent_regexes(cfg)
-        startup_gate(cfg)
-        paused.update(load_paused())
-
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
 
+        if protect_mode:
+            try:
+                protect_uids = {
+                    pwd.getpwnam(name).pw_uid for name in cfg["protectUsers"]
+                }
+            except KeyError as e:
+                log("FATAL", f"unknown protect user: {e.args[0]}")
+                sys.exit(2)
+            log(
+                "INFO",
+                "dev-oom-protector started; "
+                f"protectUsers={cfg['protectUsers']}, "
+                f"pollSeconds={cfg['pollSeconds']}",
+            )
+            while running:
+                try:
+                    protect_once(protect_uids, protect_re)
+                except Exception as e:
+                    log("WARN", f"protection scan failed: {e}")
+                time.sleep(cfg["pollSeconds"])
+            return
+
+        startup_gate(cfg)
+        paused.update(load_paused())
         log(
             "INFO",
             "dev-oom-guard started; "
@@ -749,6 +616,16 @@ in {
       '';
     };
 
+    protectUsers = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      description = ''
+        Users whose matching processes the root-owned protector may adjust.
+        Keeping this explicit prevents process-name matches from affecting
+        system services or other local users.
+      '';
+    };
+
     agents = lib.mkOption {
       type = lib.types.listOf (lib.types.submodule matcherSubmodule);
       default = [
@@ -796,16 +673,23 @@ in {
     systemd.user.settings.Manager.DefaultOOMPolicy = lib.mkDefault "continue";
 
     environment.etc."dev-oom-guard/config.json".source = jsonFormat.generate "dev-oom-guard.json" {
-      inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect pausePath;
-      selfBiasHelper = "/run/wrappers/bin/dev-oom-guard-self-bias";
+      inherit (cfg) pollSeconds killAdj allowDegraded verifyEditorScopes agents protect protectUsers pausePath;
     };
 
-    security.wrappers.dev-oom-guard-self-bias = {
-      source = "${selfBiasHelper}/bin/dev-oom-guard-self-bias";
-      owner = "root";
-      group = "root";
-      setuid = true;
-      permissions = "u+rx,g+x,o+x";
+    systemd.services.dev-oom-protector = lib.mkIf (cfg.protectUsers != []) {
+      description = "Apply declarative OOM protection to selected users' processes";
+      wantedBy = ["multi-user.target"];
+      serviceConfig = {
+        ExecStart = "${devOomGuardScript} --protect /etc/dev-oom-guard/config.json";
+        Restart = "on-failure";
+        RestartSec = "10s";
+        OOMScoreAdjust = -1000;
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = ["AF_UNIX"];
+      };
     };
 
     systemd.user.services.dev-oom-guard = {
