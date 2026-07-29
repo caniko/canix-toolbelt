@@ -15,7 +15,7 @@
     # dns-manager owns reusable DNS schema/rendering/backend code. Toolbelt
     # keeps only host/service-registry integration and the canix DNS wrapper.
     dns-manager = {
-      url = "git+ssh://git@codeberg.org/caniko/dns-manager.git";
+      url = "git+https://codeberg.org/caniko/dns-manager.git?rev=c4abb508275cb1f105363953047bf22f015c0292";
       inputs = {
         nixpkgs.follows = "nixpkgs";
         treefmt-nix.follows = "treefmt-nix";

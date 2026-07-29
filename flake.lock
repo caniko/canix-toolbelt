@@ -153,15 +153,16 @@
       "locked": {
         "lastModified": 1781166117,
         "narHash": "sha256-puNBjDTEUmxeY0PtG+E74yQZvOv4GNM8mBtZXuXrUEA=",
-        "ref": "refs/heads/main",
+        "ref": "refs/heads/trunk",
         "rev": "c4abb508275cb1f105363953047bf22f015c0292",
         "revCount": 4,
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/dns-manager.git"
+        "url": "https://codeberg.org/caniko/dns-manager.git"
       },
       "original": {
+        "rev": "c4abb508275cb1f105363953047bf22f015c0292",
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/dns-manager.git"
+        "url": "https://codeberg.org/caniko/dns-manager.git"
       }
     },
     "flake-compat": {
@@ -644,17 +645,18 @@
         ]
       },
       "locked": {
-        "lastModified": 1783251082,
-        "narHash": "sha256-XfHlECWS/u6FWjYAMOsGk6pcGx+z3HA8WWGWR7VvTSI=",
-        "ref": "refs/heads/trunk",
-        "rev": "a45718d96cdde0101ef8c20942fada0b188745f0",
-        "revCount": 1,
-        "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-opencode-lsp.git"
+        "lastModified": 1785298780,
+        "narHash": "sha256-hq+/QcdG+pOKugcglqt92n3AwDbZnJB/Z+FCgmM3nwg=",
+        "owner": "caniko",
+        "repo": "nix-opencode-lsp",
+        "rev": "38e7ce16c754947a257a00a77682adfe696b6718",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-opencode-lsp.git"
+        "owner": "caniko",
+        "repo": "nix-opencode-lsp",
+        "rev": "38e7ce16c754947a257a00a77682adfe696b6718",
+        "type": "github"
       }
     },
     "nixpkgs": {
