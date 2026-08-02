@@ -3,8 +3,7 @@
 # A "gateway" host serves NAT (NM shared mode) on its directLinkInterface; a
 # "client" host connects with a static IP and routes through the gateway.
 # Topology data (IPs, interface, MAC) lives in canix-toolbelt.hosts on each host.
-# Hosts with the `travel` profile active skip the client profile so they
-# don't try to associate with an absent gateway when away from home.
+# NetworkManager leaves the profile inactive when the cable or peer is absent.
 {
   config,
   lib,
@@ -29,7 +28,6 @@
     else null;
 in {
   imports = [
-    ../profiles.nix
     ../registry/hosts.nix
   ];
 
@@ -62,12 +60,6 @@ in {
       default = null;
       example = "10.0.0.2,10.0.0.254";
       description = "On gateway role, optional DHCP range NM hands out on the shared link.";
-    };
-
-    suppressInTravelMode = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "On client role, skip the profile when the `travel` profile is active.";
     };
   };
 
@@ -118,7 +110,7 @@ in {
       systemd.services.NetworkManager.serviceConfig.KillMode = lib.mkForce "mixed";
     })
 
-    (lib.mkIf (effectiveRole == "client" && !(cfg.suppressInTravelMode && (config.canix-toolbelt.profiles.travel.enable or false))) {
+    (lib.mkIf (effectiveRole == "client") {
       networking.networkmanager.ensureProfiles.profiles.direct-link = {
         connection = {
           id = "direct-link";
