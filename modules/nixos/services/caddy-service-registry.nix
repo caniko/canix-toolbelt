@@ -10,36 +10,68 @@
   serviceCfg = config.canix-toolbelt.services;
   oidcCfg = cfg.oidc;
 
-  dialAddress = svc: let
+  dialAddress = svc: targetHost: let
     isLocal =
       if svc.local != null
       then svc.local
-      else svc.targetHost == config.networking.hostName;
+      else targetHost == config.networking.hostName;
   in
     if isLocal
     then "127.0.0.1"
-    else config.canix-toolbelt.hosts.${svc.targetHost}.lanIp;
+    else config.canix-toolbelt.hosts.${targetHost}.lanIp;
 
-  reverseProxyRoute = svc:
-    if svc.auth.enable
-    then
-      caddyLib.mkAuthServiceRoute {
-        inherit (svc) hostname upstreamScheme tlsServerName;
+  serviceRoutes = svc:
+    if svc.routes == []
+    then [
+      {
+        paths = [];
+        targetHost = svc.targetHost;
         port =
           if svc.proxied
           then 80
           else svc.port;
-        host = dialAddress svc;
+        upstreamScheme = svc.upstreamScheme;
+        tlsServerName = svc.tlsServerName;
+        stripPrefix = null;
+      }
+    ]
+    else svc.routes;
+
+  reverseProxyRoute = svc: route: let
+    targetHost =
+      if route.targetHost != null
+      then route.targetHost
+      else svc.targetHost;
+    paths = route.paths;
+    port =
+      if route.port != null
+      then route.port
+      else if svc.proxied
+      then 80
+      else svc.port;
+    upstreamScheme =
+      if route.upstreamScheme != null
+      then route.upstreamScheme
+      else svc.upstreamScheme;
+    tlsServerName =
+      if route.tlsServerName != null
+      then route.tlsServerName
+      else svc.tlsServerName;
+    stripPrefix = route.stripPrefix;
+  in
+    if svc.auth.enable
+    then
+      caddyLib.mkAuthServiceRoute {
+        inherit (svc) hostname;
+        inherit paths stripPrefix port upstreamScheme tlsServerName;
+        host = dialAddress svc targetHost;
         portalName = svc.name;
       }
     else
       caddyLib.mkReverseProxyRoute {
-        inherit (svc) hostname upstreamScheme tlsServerName;
-        port =
-          if svc.proxied
-          then 80
-          else svc.port;
-        host = dialAddress svc;
+        inherit (svc) hostname;
+        inherit paths stripPrefix port upstreamScheme tlsServerName;
+        host = dialAddress svc targetHost;
         inherit (cfg) goatcounterUrl;
         injectAnalytics = cfg.goatcounterUrl != null;
       };
@@ -51,7 +83,7 @@
     };
 
   caddyRoutes =
-    (map reverseProxyRoute serviceCfg.reverseProxyServices)
+    (lib.concatMap (svc: map (reverseProxyRoute svc) (serviceRoutes svc)) serviceCfg.reverseProxyServices)
     ++ (map staticFileRoute serviceCfg.staticFileServices);
 
   nonCloudflareHostnames = lib.unique (

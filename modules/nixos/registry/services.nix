@@ -7,6 +7,26 @@
   inherit (lib) filter mkIf mkMerge mkOption types;
   fleetixLib = inputs.fleetix.lib or (throw "canix-toolbelt service-registry: inputs.fleetix.lib is required when canix-toolbelt.fleetix.enable = true");
 
+  serviceRoutes = service:
+    if service.routes == []
+    then [
+      {
+        targetHost = service.targetHost;
+        port = service.port;
+      }
+    ]
+    else service.routes;
+
+  routeTargetHost = service: route:
+    if route.targetHost != null
+    then route.targetHost
+    else service.targetHost;
+
+  routePort = service: route:
+    if route.port != null
+    then route.port
+    else service.port;
+
   authSubmodule = types.submodule {
     options = {
       enable = lib.mkEnableOption "OIDC authentication via caddy-security";
@@ -54,6 +74,46 @@
         type = types.nullOr types.bool;
         default = null;
         description = "Optional alerting intent for this service.";
+      };
+    };
+  };
+
+  reverseProxyRouteSubmodule = types.submodule {
+    options = {
+      paths = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Ordered Caddy path matchers; an empty list is the fallback route.";
+      };
+      targetHost = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional route-specific backend host.";
+      };
+      port = mkOption {
+        type = types.nullOr types.port;
+        default = null;
+        description = "Optional route-specific backend port.";
+      };
+      upstreamScheme = mkOption {
+        type = types.nullOr (types.enum ["http" "https"]);
+        default = null;
+        description = "Optional route-specific backend scheme.";
+      };
+      tlsServerName = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional route-specific upstream TLS SNI.";
+      };
+      stripPrefix = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional path prefix to strip before proxying.";
+      };
+      monitoringIdentity = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Stable monitoring identity for this backend route.";
       };
     };
   };
@@ -159,6 +219,11 @@
         type = monitoringSubmodule;
         default = {};
         description = "Monitoring metadata for this service.";
+      };
+      routes = mkOption {
+        type = types.listOf reverseProxyRouteSubmodule;
+        default = [];
+        description = "Ordered route backends; an empty list preserves the legacy service route.";
       };
     };
   };
@@ -315,28 +380,31 @@ in {
     }))
 
     (let
-      localPorts = map (svc: svc.port) config.canix-toolbelt.services.localServices;
-    in
-      mkIf (localPorts != []) {
-        networking.firewall.allowedTCPPorts = localPorts;
-      })
+      localPorts = lib.unique (lib.concatMap (
+          service:
+            map (route: routePort service route) (
+              filter (route: routeTargetHost service route == config.networking.hostName) (serviceRoutes service)
+            )
+        )
+        config.canix-toolbelt.services.reverseProxyServices);
+    in {
+      networking.firewall.allowedTCPPorts = localPorts;
+    })
 
     (let
       hostname = config.networking.hostName;
       host = config.canix-toolbelt.hosts.${hostname} or {};
       lanInterface = host.lanInterface or null;
-      lanExposedPorts =
-        map (svc: svc.port)
-        (filter (
-            svc:
-              svc.targetHost
-              == hostname
-              && (svc.lanExposed or false)
+      lanExposedPorts = lib.unique (lib.concatMap (
+        service:
+          map (route: routePort service route) (
+            filter (route: routeTargetHost service route == hostname) (serviceRoutes service)
           )
-          config.canix-toolbelt.services.reverseProxyServices);
-    in
-      mkIf (lanInterface != null && lanExposedPorts != []) {
-        networking.firewall.interfaces.${lanInterface}.allowedTCPPorts = lanExposedPorts;
-      })
+      ) (filter (service: service.lanExposed or false) config.canix-toolbelt.services.reverseProxyServices));
+    in {
+      networking.firewall.interfaces = lib.optionalAttrs (lanInterface != null) {
+        ${lanInterface}.allowedTCPPorts = lanExposedPorts;
+      };
+    })
   ];
 }

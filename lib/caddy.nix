@@ -18,6 +18,8 @@ in {
     tlsServerName ? null,
     portalName,
     cookieDomain ? null,
+    paths ? [],
+    stripPrefix ? null,
   }: let
     proxyHandler =
       {
@@ -33,8 +35,17 @@ in {
             else hostname;
         };
       };
+    match =
+      {
+        host = [hostname];
+      }
+      // lib.optionalAttrs (paths != []) {path = paths;};
+    rewrite = lib.optional (stripPrefix != null) {
+      handler = "rewrite";
+      strip_path_prefix = stripPrefix;
+    };
   in {
-    match = [{host = [hostname];}];
+    match = [match];
     handle = [
       {
         handler = "authenticator";
@@ -43,7 +54,7 @@ in {
       }
       {
         handler = "subroute";
-        routes = [{handle = [proxyHandler];}];
+        routes = [{handle = rewrite ++ [proxyHandler];}];
       }
     ];
   };
@@ -56,6 +67,8 @@ in {
     tlsServerName ? null,
     injectAnalytics ? false,
     goatcounterUrl ? null,
+    paths ? [],
+    stripPrefix ? null,
   }: let
     proxyHandler =
       {
@@ -71,8 +84,17 @@ in {
             else hostname;
         };
       };
+    match =
+      {
+        host = [hostname];
+      }
+      // lib.optionalAttrs (paths != []) {path = paths;};
+    rewrite = lib.optional (stripPrefix != null) {
+      handler = "rewrite";
+      strip_path_prefix = stripPrefix;
+    };
   in {
-    match = [{host = [hostname];}];
+    match = [match];
     handle =
       (lib.optional injectAnalytics {
         handler = "replace_response";
@@ -86,6 +108,7 @@ in {
           }
         ];
       })
+      ++ rewrite
       ++ [proxyHandler];
   };
 
@@ -118,26 +141,26 @@ in {
   }: {
     match = [
       ({
-        host = [hostname];
-      }
-      // lib.optionalAttrs (path != null) {
-        path =
-          if builtins.isList path
-          then path
-          else [path];
-      }
-      // lib.optionalAttrs (queryNot != null) {
-        not = [{query = queryNot;}];
-      })
+          host = [hostname];
+        }
+        // lib.optionalAttrs (path != null) {
+          path =
+            if builtins.isList path
+            then path
+            else [path];
+        }
+        // lib.optionalAttrs (queryNot != null) {
+          not = [{query = queryNot;}];
+        })
     ];
     handle = [
       ({
-        handler = "static_response";
-        status_code = status;
-      }
-      // lib.optionalAttrs (location != null) {
-        headers.Location = [location];
-      })
+          handler = "static_response";
+          status_code = status;
+        }
+        // lib.optionalAttrs (location != null) {
+          headers.Location = [location];
+        })
     ];
   };
 
