@@ -302,8 +302,8 @@
       zone.records
     );
     synthesized =
-      lib.optional (cfg.autoSynthesizeServiceCnames) (synthesizedRecordsByZone.${zoneName} or [])
-      ++ lib.optional (cfg.autoSynthesizePagesCnames) (synthesizedPagesByZone.${zoneName} or []);
+      lib.optional cfg.autoSynthesizeServiceCnames (synthesizedRecordsByZone.${zoneName} or [])
+      ++ lib.optional cfg.autoSynthesizePagesCnames (synthesizedPagesByZone.${zoneName} or []);
     filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) (lib.flatten synthesized);
   in
     filteredSynthesized ++ zone.records;
@@ -428,7 +428,7 @@
         else (cfg.zones.${builtins.head (attrNames effectiveZones)}.defaultTtl or 3600);
       zones = mapAttrs zoneToExtraConfig effectiveZones;
     };
-    redirects = cfg.redirects;
+    inherit (cfg) redirects;
   };
 
   token =

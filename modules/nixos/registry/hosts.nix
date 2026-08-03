@@ -248,11 +248,12 @@ in {
         lanBroadcast = host.network.lanBroadcast or null;
         lanInterface = host.network.lanInterface or null;
         wgHomeIp = host.network.wgHomeIp or host.links."wg-home".address or null;
-        wgHomePublicKey = host.network.wgHomePublicKey or (
-          if (host.links."wg-home".role or null) == "server"
-          then host.links."wg-home".publicKey or null
-          else null
-        );
+        wgHomePublicKey =
+          host.network.wgHomePublicKey or (
+            if (host.links."wg-home".role or null) == "server"
+            then host.links."wg-home".publicKey or null
+            else null
+          );
         macAddress = host.network.macAddress or null;
         directLinkIp = host.network.directLinkIp or null;
         directLinkMac = host.network.directLinkMac or null;

@@ -256,8 +256,8 @@ in {
           };
         };
       }
-      // optionalAttrs (cfg.package != null) {package = cfg.package;}
-      // optionalAttrs (cfg.environmentFile != null) {environmentFile = cfg.environmentFile;};
+      // optionalAttrs (cfg.package != null) {inherit (cfg) package;}
+      // optionalAttrs (cfg.environmentFile != null) {inherit (cfg) environmentFile;};
 
     networking.hosts = mkIf (cfg.mailLoopbackHostname != null) {
       "127.0.0.1" = [cfg.mailLoopbackHostname];

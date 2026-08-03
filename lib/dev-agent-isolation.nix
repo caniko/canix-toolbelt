@@ -1,4 +1,4 @@
-{lib}: {
+_: {
   mkAttachExecWrapper = {
     pkgs,
     name ? "dev-agent-exec",

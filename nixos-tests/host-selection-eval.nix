@@ -1,7 +1,7 @@
 {pkgs}: let
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
-  lib = pkgs.lib;
-  hostSelection = (import ../lib {inherit lib;}).hostSelection;
+  inherit (pkgs) lib;
+  inherit ((import ../lib {inherit lib;})) hostSelection;
 
   evaluated = lib.evalModules {
     modules = [

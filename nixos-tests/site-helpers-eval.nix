@@ -69,7 +69,6 @@
     pname = "site-helper-combined-without-domains";
     domains = null;
   };
-
 in
   pkgs.runCommand "site-helpers-eval" {} ''
     test -f ${zolaSite}/index.html

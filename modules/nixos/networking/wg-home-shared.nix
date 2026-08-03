@@ -1,4 +1,8 @@
-{config, lib, ...}: let
+{
+  config,
+  lib,
+  ...
+}: let
   inherit (lib) mkOption types;
   wgLink = config.canix-toolbelt.networking.links.wg-home or {};
 in {
@@ -19,7 +23,6 @@ in {
         description = "WireGuard UDP port used by wg-home.";
       };
     };
-
   };
 
   # When the wg-home link is declared (via fleetix integration), derive wgHome defaults

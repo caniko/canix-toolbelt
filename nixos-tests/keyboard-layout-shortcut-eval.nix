@@ -5,7 +5,10 @@
   cosmicLib = {
     cosmic.mkRON = _kind: value: value;
   };
-  mkEvaluated = {layout, shortcut ? null}:
+  mkEvaluated = {
+    layout,
+    shortcut ? null,
+  }:
     lib.evalModules {
       specialArgs = {inherit cosmicLib;};
       modules = [
@@ -49,14 +52,16 @@ in
       }
       {
         name = "multiple-layouts-enabled";
-        assertion = shortcut many == {
-          action = {
-            value = ["InputSourceSwitch"];
-            variant = "System";
+        assertion =
+          shortcut many
+          == {
+            action = {
+              value = ["InputSourceSwitch"];
+              variant = "System";
+            };
+            description = "Switch keyboard layout";
+            key = "Super+Delete";
           };
-          description = "Switch keyboard layout";
-          key = "Super+Delete";
-        };
         message = "multiple layouts must add the default switch shortcut";
       }
       {

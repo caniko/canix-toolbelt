@@ -27,13 +27,14 @@ let
     igpu = gpuData.igpu or null;
     dgpu = gpuData.dgpu or null;
     deviceType = gpuData.deviceType or null;
-    displayGpu = gpuData.displayGpu or (
-      if deviceType == "laptop"
-      then "igpu"
-      else if dgpu != null
-      then "dgpu"
-      else igpu
-    );
+    displayGpu =
+      gpuData.displayGpu or (
+        if deviceType == "laptop"
+        then "igpu"
+        else if dgpu != null
+        then "dgpu"
+        else igpu
+      );
     main =
       if dgpu != null
       then dgpu
@@ -71,12 +72,14 @@ in {
     );
 
   forHosts = hostsData:
-    builtins.mapAttrs (_: hostData:
-      normalize (
-        (hostData.gpu or {})
-        // {
-          inherit (hostData) deviceType;
-        }
-      )
-    ) hostsData;
+    builtins.mapAttrs (
+      _: hostData:
+        normalize (
+          (hostData.gpu or {})
+          // {
+            inherit (hostData) deviceType;
+          }
+        )
+    )
+    hostsData;
 }

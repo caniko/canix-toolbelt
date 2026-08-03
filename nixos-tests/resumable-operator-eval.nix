@@ -5,8 +5,14 @@
     name = "fixture-operator";
     stateDir = "/var/lib/fixture-operator";
     stages = [
-      {name = "first"; unit = "fixture-first.service";}
-      {name = "second"; unit = "fixture-second.service";}
+      {
+        name = "first";
+        unit = "fixture-first.service";
+      }
+      {
+        name = "second";
+        unit = "fixture-second.service";
+      }
     ];
     maxAttempts = 2;
     retryDelays = ["1s"];

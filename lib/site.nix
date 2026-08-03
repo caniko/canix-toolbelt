@@ -114,5 +114,4 @@ in {
       cp -rL ${docs}/. "$out/${checkedDocsPath}/"
       ${domainsCommands domains}
     '';
-
 }

@@ -10,21 +10,24 @@
     to = "https://new.example.com";
     preservePath = false;
   };
-  domains = (inputs.fleetix.lib.projections.normalize {
-    topology = {
-      hosts = {};
-      links = {};
-      domains.redirects = [
-        {
-          from = "example.com";
-          to = "https://www.example.com";
-          status = 301;
-          preservePath = true;
-        }
-      ];
-      services = {};
-    };
-  }).domains;
+  inherit
+    ((inputs.fleetix.lib.projections.normalize {
+      topology = {
+        hosts = {};
+        links = {};
+        domains.redirects = [
+          {
+            from = "example.com";
+            to = "https://www.example.com";
+            status = 301;
+            preservePath = true;
+          }
+        ];
+        services = {};
+      };
+    }))
+    domains
+    ;
 
   moduleResult = inputs.nixpkgs.lib.nixosSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
@@ -37,7 +40,7 @@
       {
         canix-toolbelt.dns = {
           enable = true;
-          redirects = domains.redirects;
+          inherit (domains) redirects;
         };
 
         system.stateVersion = "25.11";
@@ -46,11 +49,11 @@
   };
 
   routes = moduleResult.config.canix-toolbelt.services.caddy.routes;
-  redirectRoutes =
-    builtins.filter (route:
-      route.match or [] != []
-      && (builtins.head route.match).host or [] == ["example.com"])
-    routes;
+  redirectRoutes = builtins.filter (route:
+    route.match or []
+    != []
+    && (builtins.head route.match).host or [] == ["example.com"])
+  routes;
   redirectRoute =
     if redirectRoutes == []
     then null

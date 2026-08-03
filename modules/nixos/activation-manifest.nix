@@ -1,4 +1,8 @@
-{config, lib, ...}: let
+{
+  config,
+  lib,
+  ...
+}: let
   contracts = config.canix-toolbelt.activation.contracts;
   activation = import ../../lib/activation.nix {inherit lib;};
   manifest = activation.mkManifest contracts;
