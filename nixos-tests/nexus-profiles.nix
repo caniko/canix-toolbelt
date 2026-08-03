@@ -18,7 +18,10 @@
       bar = {
         description = "Bar profile";
         enable = false;
-        specialisations.bar-on.enable = true;
+        specialisations = {
+          bar-off.enable = false;
+          bar-on.enable = true;
+        };
       };
     };
   };
@@ -78,6 +81,15 @@ in {
         goodModule
       ];
 
+      system.preSwitchChecks.bar-enter = toolbeltLib.nexus.mkProfileTransitionCheck {
+        profile = "bar";
+        from = false;
+        to = true;
+        script = ''
+          printf 'entered\n' >> /var/lib/bar-enter-count
+        '';
+      };
+
       system.stateVersion = "25.11";
     };
 
@@ -90,6 +102,14 @@ in {
       machine.succeed("grep -qx false /etc/canix-profiles/bar.enable")
       machine.succeed("test -e /run/current-system/specialisation/foo-off")
       machine.succeed("test -e /run/current-system/specialisation/bar-on")
+      machine.succeed("readlink -f /run/current-system > /tmp/base-system")
+      machine.succeed("/run/current-system/specialisation/bar-on/bin/switch-to-configuration switch")
+      machine.succeed("test $(wc -l < /var/lib/bar-enter-count) -eq 1")
+      machine.succeed("/run/current-system/bin/switch-to-configuration switch")
+      machine.succeed("test $(wc -l < /var/lib/bar-enter-count) -eq 1")
+      machine.succeed("$(cat /tmp/base-system)/specialisation/bar-off/bin/switch-to-configuration switch")
+      machine.succeed("$(cat /tmp/base-system)/specialisation/bar-on/bin/switch-to-configuration switch")
+      machine.succeed("test $(wc -l < /var/lib/bar-enter-count) -eq 2")
     '';
   };
 
