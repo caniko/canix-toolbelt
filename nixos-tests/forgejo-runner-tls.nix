@@ -29,8 +29,8 @@ pkgs.testers.nixosTest {
     dynamicRunnerConfig = pkgs.writeShellScript "forgejo-runner-test-dynamic-config" ''
       set -eu
 
-      uuid_file=/tmp/forgejo-runner-test.uuid
-      config_file=/tmp/forgejo-runner-test.yaml
+      uuid_file=/var/lib/forgejo-runner/test/runner.uuid
+      config_file=/var/lib/forgejo-runner/test/config.yaml
 
       for _ in $(seq 1 120); do
         if [ -r "$uuid_file" ]; then
@@ -235,11 +235,11 @@ pkgs.testers.nixosTest {
         )
     )
     server.succeed(f"printf %s {shlex.quote(runner_registration['token'])} > /var/lib/forgejo/runner_token")
-    server.succeed(f"printf %s {shlex.quote(runner_registration['uuid'])} > /tmp/forgejo-runner-test.uuid")
+    server.succeed(f"printf %s {shlex.quote(runner_registration['uuid'])} > /var/lib/forgejo-runner/test/runner.uuid")
     server.systemctl("start forgejo-runner-test.service")
     server.wait_for_unit("forgejo-runner-test.service")
     server.wait_until_succeeds(
-        "journalctl -o cat -u forgejo-runner-test.service | grep -q 'Runner registered successfully'",
+        "journalctl -o cat -u forgejo-runner-test.service | grep -q 'declared successfully'",
         timeout=60,
     )
 
