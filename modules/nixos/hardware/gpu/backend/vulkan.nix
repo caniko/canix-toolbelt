@@ -5,11 +5,5 @@
     libvdpau
     vkbasalt
     vulkan-loader
-    vulkan-tools
-    vulkan-validation-layers
-  ];
-
-  environment.systemPackages = with pkgs; [
-    vulkan-tools
   ];
 }

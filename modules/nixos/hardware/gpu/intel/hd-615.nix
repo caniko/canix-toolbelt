@@ -9,8 +9,6 @@
   hardware.graphics.extraPackages = with pkgs; [
     intel-ocl
     vulkan-loader
-    vulkan-tools
-    vulkan-validation-layers
   ];
 
   environment.variables = {
