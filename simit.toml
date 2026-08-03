@@ -7,4 +7,4 @@ runner = "codefloe-global"
 [ci.pages]
 repo = "caniko/canix-toolbelt"
 canonical_domain = "canix-toolbelt.tartanoglu.com"
-source_branch = "main"
+source_branch = "trunk"
