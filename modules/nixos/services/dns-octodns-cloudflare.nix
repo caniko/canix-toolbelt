@@ -288,7 +288,7 @@
           ];
       })
     {}
-    (fleetixLib.services.codebergPagesCnameIntents {
+    (fleetixLib.services.pagesCnameIntents {
       topology = topologyForDnsIntents;
       baseZone = cfg.codebergPagesZone;
     });
