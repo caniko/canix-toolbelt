@@ -95,8 +95,8 @@
             goose.acpPackages = import ./modules/home/ai/goose/presets.nix;
             gooseCheckFixtures = import ./modules/home/ai/goose/checks/lib.nix;
             chromiumGpu = import ./lib/chromiumGpu.nix {
-              lib = nixpkgs.lib;
-              wrapper-manager = inputs.wrapper-manager;
+              inherit (nixpkgs) lib;
+              inherit (inputs) wrapper-manager;
             };
           };
         nixosModules =

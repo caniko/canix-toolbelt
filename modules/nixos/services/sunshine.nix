@@ -9,7 +9,8 @@
 
   generatePorts = port: offsets: map (offset: port + offset) offsets;
   defaultPort = 47989;
-  basePort = if svc.settings ? port then svc.settings.port else defaultPort;
+  basePort =
+    svc.settings.port or defaultPort;
 
   tcpPorts = generatePorts basePort [(-5) 0 1 21];
   udpPorts = generatePorts basePort [9 10 11 13 21];
@@ -38,7 +39,8 @@ in {
     # and open per-interface instead.
     services.sunshine.openFirewall = mkIf (cfg.openFirewallInterfaces != []) false;
 
-    networking.firewall.interfaces = mkIf (cfg.openFirewallInterfaces != [])
+    networking.firewall.interfaces =
+      mkIf (cfg.openFirewallInterfaces != [])
       (genAttrs cfg.openFirewallInterfaces (_: {
         allowedTCPPorts = tcpPorts;
         allowedUDPPorts = udpPorts;

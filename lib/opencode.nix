@@ -3,7 +3,7 @@
 #
 # Consumers feed in bash permission rules and receive the expanded set
 # with twin rules (env-prefix and git -C variants). Host-agnostic.
-{ lib }: let
+{lib}: let
   gitPair = subcmd: perm: {
     "git ${subcmd}" = perm;
     "git -C * ${subcmd}" = perm;
@@ -48,5 +48,6 @@ in {
     invalidBashPermissionActions
     validateBashPermissionActions
     validBashPermissionActions
-    withEnvPrefixes;
+    withEnvPrefixes
+    ;
 }

@@ -6,14 +6,16 @@
 }: let
   cfg = config.canix-toolbelt.keyboard-layout-shortcut;
   inherit (cosmicLib.cosmic) mkRON;
-  layout = lib.attrByPath [
-    "wayland"
-    "desktopManager"
-    "cosmic"
-    "compositor"
-    "xkb_config"
-    "layout"
-  ] "" config;
+  layout =
+    lib.attrByPath [
+      "wayland"
+      "desktopManager"
+      "cosmic"
+      "compositor"
+      "xkb_config"
+      "layout"
+    ] ""
+    config;
   layouts = lib.filter (entry: lib.trim entry != "") (lib.splitString "," layout);
 in {
   options.canix-toolbelt.keyboard-layout-shortcut = {

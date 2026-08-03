@@ -4,10 +4,9 @@
   pkgs,
   utils,
   ...
-}:
-
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     foldlAttrs
     literalExpression
     mkDefault
@@ -15,8 +14,6 @@ let
     mkIf
     mkOption
     mkPackageOption
-    mkRemovedOptionModule
-    mkRenamedOptionModule
     nameValuePair
     optionalAttrs
     optionals
@@ -24,18 +21,17 @@ let
     ;
 
   cfg = config.services.forgejo-runner;
-  settingsFormat = pkgs.formats.yaml { };
-  secretsType =
-    let
-      pathType = types.pathWith {
-        inStore = false;
-        absolute = true;
-      };
-      base = types.oneOf [
-        pathType
-        (types.attrsOf base)
-      ];
-    in
+  settingsFormat = pkgs.formats.yaml {};
+  secretsType = let
+    pathType = types.pathWith {
+      inStore = false;
+      absolute = true;
+    };
+    base = types.oneOf [
+      pathType
+      (types.attrsOf base)
+    ];
+  in
     base
     // {
       description = "nested attribute set of ${pathType.description}";
@@ -44,42 +40,38 @@ let
   hasDocker = config.virtualisation.docker.enable;
   hasPodman = config.virtualisation.podman.enable;
   hasContainerRuntime = hasDocker || hasPodman;
-  labels =
-    instance:
+  labels = instance:
     instance.settings.runner.labels
     ++ (lib.flatten (
-      lib.mapAttrsToList (_: value: value.labels or [ ]) instance.settings.server.connections
+      lib.mapAttrsToList (_: value: value.labels or []) instance.settings.server.connections
     ));
-in
-{
+in {
   meta.maintainers = pkgs.forgejo-runner.meta.maintainers;
 
   options.services.forgejo-runner = {
-    package = mkPackageOption pkgs "forgejo-runner" { };
+    package = mkPackageOption pkgs "forgejo-runner" {};
 
     instances = mkOption {
-      default = { };
+      default = {};
       description = ''
         Forgejo Runner instances.
       '';
       type = types.attrsOf (
         types.submodule (
           {
-            options,
             config,
             name,
             ...
-          }:
-          {
+          }: {
             options.assertions = mkOption {
               type = types.listOf types.unspecified;
-              default = [ ];
+              default = [];
               internal = true;
               description = "NixOS assertion expressions for this instance.";
             };
             options.warnings = mkOption {
               type = types.listOf types.unspecified;
-              default = [ ];
+              default = [];
               internal = true;
               description = "NixOS warning expressions for this instance.";
             };
@@ -97,15 +89,14 @@ in
                     `config.virtualisation.podman.enable'.
                   '';
                 }
-              ]
-              ;
+              ];
             };
 
             options = {
               enable = mkEnableOption "Forgejo Runner instance";
 
               settings = mkOption {
-                default = { };
+                default = {};
                 description = ''
                   Free-form settings written directly to the `config.yaml` file.
                   Refer to [`config.example.yaml`] or run {command}`forgejo-runner generation-config` for supported values.
@@ -117,7 +108,7 @@ in
                   options = {
                     runner.labels = mkOption {
                       type = types.listOf types.str;
-                      default = [ ];
+                      default = [];
                       description = ''
                         Labels used to map jobs to their runtime environment.
 
@@ -135,8 +126,7 @@ in
 
                     server.connections = mkOption {
                       type = types.attrsOf (types.submodule (
-                        { config, ... }:
-                        {
+                        _: {
                           freeformType = settingsFormat.type;
                           options = {
                             url = mkOption {
@@ -157,29 +147,29 @@ in
                             };
                             labels = mkOption {
                               type = types.listOf types.str;
-                              default = [ ];
+                              default = [];
                             };
                           };
                         }
                       ));
-                      default = { };
+                      default = {};
                       internal = true;
                       description = ''
                         Connection settings generated from {option}`connections`.
                       '';
                     };
                   };
-                  config = lib.mapAttrsRecursive (
-                    path: value:
-                    "file:/run/credentials/forgejo-runner-${name}.service/${lib.join "__" path}"
-                  ) config.secrets;
+                  config =
+                    lib.mapAttrsRecursive (
+                      path: _value: "file:/run/credentials/forgejo-runner-${name}.service/${lib.join "__" path}"
+                    )
+                    config.secrets;
                 };
               };
 
               connections = mkOption {
                 type = types.attrsOf (types.submodule (
-                  { name, ... }:
-                  {
+                  {name, ...}: {
                     options = {
                       url = mkOption {
                         type = types.str;
@@ -223,7 +213,7 @@ in
                       };
                       labels = mkOption {
                         type = types.listOf types.str;
-                        default = [ ];
+                        default = [];
                         description = ''
                           Instance-specific labels for this connection.
 
@@ -239,23 +229,25 @@ in
                         '';
                       };
                     };
-                    config.settings.server.connections.${name} = {
-                      inherit (config) url uuid;
-                      token_url =
-                        if config.tokenFile != null
-                        then "file:$CREDENTIALS_DIRECTORY/${lib.escapeSystemdPath (builtins.toString config.tokenFile)}"
-                        else null;
-                      token =
-                        if config.token != null
-                        then config.token
-                        else null;
-                      labels = config.labels;
-                    } // lib.optionalAttrs (config.fetchInterval != null) {
-                      fetch_interval = config.fetchInterval;
-                    };
+                    config.settings.server.connections.${name} =
+                      {
+                        inherit (config) url uuid;
+                        token_url =
+                          if config.tokenFile != null
+                          then "file:$CREDENTIALS_DIRECTORY/${lib.escapeSystemdPath (builtins.toString config.tokenFile)}"
+                          else null;
+                        token =
+                          if config.token != null
+                          then config.token
+                          else null;
+                        inherit (config) labels;
+                      }
+                      // lib.optionalAttrs (config.fetchInterval != null) {
+                        fetch_interval = config.fetchInterval;
+                      };
                   }
                 ));
-                default = { };
+                default = {};
                 description = ''
                   One or more connections to Forgejo, each with a UUID and Token pair.
 
@@ -274,7 +266,7 @@ in
 
               secrets = mkOption {
                 type = secretsType;
-                default = { };
+                default = {};
                 description = ''
                   This follows the same structure as {option}`settings`
                   but the value of each key is a path instead of a string, list or bool.
@@ -346,51 +338,52 @@ in
     };
   };
 
-  config = mkIf (cfg.instances != { }) {
-    assertions = foldlAttrs (assertions: _: instance: assertions ++ instance.assertions) [ ] cfg.instances;
+  config = mkIf (cfg.instances != {}) {
+    assertions = foldlAttrs (assertions: _: instance: assertions ++ instance.assertions) [] cfg.instances;
 
-    systemd.services =
-      let
-        mkRunnerService =
-          name: instance:
-          let
-            wantsHost = instance.isHost;
-            wantsDocker = instance.isDocker && hasDocker;
-            wantsPodman = instance.isDocker && hasPodman;
-          in
-          nameValuePair "forgejo-runner-${utils.escapeSystemdPath name}" {
-            inherit (instance) enable;
-            description = "Forgejo Runner (${name})";
-            wants = [ "network-online.target" ];
-            after =
-              [ "network-online.target" ]
-              ++ optionals wantsDocker [ "docker.service" ]
-              ++ optionals wantsPodman [ "podman.service" ];
-            wantedBy = [ "multi-user.target" ];
-            environment = {
+    systemd.services = let
+      mkRunnerService = name: instance: let
+        wantsHost = instance.isHost;
+        wantsDocker = instance.isDocker && hasDocker;
+        wantsPodman = instance.isDocker && hasPodman;
+      in
+        nameValuePair "forgejo-runner-${utils.escapeSystemdPath name}" {
+          inherit (instance) enable;
+          description = "Forgejo Runner (${name})";
+          wants = ["network-online.target"];
+          after =
+            ["network-online.target"]
+            ++ optionals wantsDocker ["docker.service"]
+            ++ optionals wantsPodman ["podman.service"];
+          wantedBy = ["multi-user.target"];
+          environment =
+            {
               HOME = "/var/lib/forgejo-runner/${name}";
-            } // optionalAttrs wantsPodman {
+            }
+            // optionalAttrs wantsPodman {
               DOCKER_HOST = "unix:///run/podman/podman.sock";
             };
-            path = optionals wantsHost instance.hostPackages ++ [ pkgs.gitMinimal ];
+          path = optionals wantsHost instance.hostPackages ++ [pkgs.gitMinimal];
 
-            serviceConfig = {
-              DynamicUser = true;
-              StateDirectory = "forgejo-runner/${name}";
-              WorkingDirectory = "-/var/lib/forgejo-runner/${name}";
-              ExecPaths = optionals wantsHost [ "/var/lib/forgejo-runner/${name}" ];
-              ExecStart = "${lib.getExe cfg.package} daemon --config ${instance.configFile}";
-              Restart = "on-failure";
-              RestartSec = 10;
-              LoadCredential = lib.mapAttrsToListRecursive (
+          serviceConfig = {
+            DynamicUser = true;
+            StateDirectory = "forgejo-runner/${name}";
+            WorkingDirectory = "-/var/lib/forgejo-runner/${name}";
+            ExecPaths = optionals wantsHost ["/var/lib/forgejo-runner/${name}"];
+            ExecStart = "${lib.getExe cfg.package} daemon --config ${instance.configFile}";
+            Restart = "on-failure";
+            RestartSec = 10;
+            LoadCredential =
+              lib.mapAttrsToListRecursive (
                 path: value: "${lib.join "__" path}:${value}"
-              ) instance.secrets;
-              SupplementaryGroups =
-                optionals wantsDocker [ "docker" ]
-                ++ optionals wantsPodman [ "podman" ];
-            };
+              )
+              instance.secrets;
+            SupplementaryGroups =
+              optionals wantsDocker ["docker"]
+              ++ optionals wantsPodman ["podman"];
           };
-      in
+        };
+    in
       lib.mapAttrs' mkRunnerService (lib.filterAttrs (_: instance: instance.enable) cfg.instances);
   };
 }

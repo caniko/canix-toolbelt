@@ -11,8 +11,14 @@
       environment.etc = lib.mkOption {
         type = lib.types.attrsOf (lib.types.submodule {
           options = {
-            mode = lib.mkOption {type = lib.types.str; default = "0644";};
-            text = lib.mkOption {type = lib.types.str; default = "";};
+            mode = lib.mkOption {
+              type = lib.types.str;
+              default = "0644";
+            };
+            text = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+            };
           };
         });
         default = {};

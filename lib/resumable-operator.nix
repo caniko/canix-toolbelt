@@ -17,12 +17,12 @@
 }:
 assert stages != [];
 assert maxAttempts > 0;
-assert builtins.length retryDelays >= maxAttempts - 1;
-let
+assert builtins.length retryDelays >= maxAttempts - 1; let
   stageRecords = lib.imap0 (index: stage: stage // {inherit index;}) stages;
   stageScript = builtins.concatStringsSep "\n" (builtins.map (stage: ''
-    run_stage ${lib.escapeShellArg stage.name} ${lib.escapeShellArg stage.unit} ${toString stage.index} || true
-  '') stageRecords);
+      run_stage ${lib.escapeShellArg stage.name} ${lib.escapeShellArg stage.unit} ${toString stage.index} || true
+    '')
+    stageRecords);
   retryDelayArray = lib.concatMapStringsSep " " lib.escapeShellArg retryDelays;
   workerArray = lib.concatMapStringsSep " " lib.escapeShellArg quiesceUnits;
   controller = pkgs.writeShellApplication {
@@ -231,24 +231,26 @@ let
       StartLimitBurst = 5;
       StartLimitIntervalSec = "1h";
     };
-    serviceConfig = {
-      Type = "notify";
-      User = "root";
-      Group = "root";
-      ExecStart = "${controller}/bin/${name}-controller";
-      Restart = "on-failure";
-      RestartSec = "2min";
-      RestartPreventExitStatus = "20";
-      NotifyAccess = "all";
-      TimeoutStopSec = "30min";
-      ProtectSystem = "strict";
-      ProtectHome = true;
-      PrivateTmp = true;
-      NoNewPrivileges = true;
-      RestrictAddressFamilies = ["AF_UNIX"];
-      ReadWritePaths = [stateDir (builtins.dirOf sentinelPath)];
-      UMask = "0027";
-    } // extraServiceConfig;
+    serviceConfig =
+      {
+        Type = "notify";
+        User = "root";
+        Group = "root";
+        ExecStart = "${controller}/bin/${name}-controller";
+        Restart = "on-failure";
+        RestartSec = "2min";
+        RestartPreventExitStatus = "20";
+        NotifyAccess = "all";
+        TimeoutStopSec = "30min";
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+        RestrictAddressFamilies = ["AF_UNIX"];
+        ReadWritePaths = [stateDir (builtins.dirOf sentinelPath)];
+        UMask = "0027";
+      }
+      // extraServiceConfig;
   };
   cancelService = {
     description = "Cancel ${description}";
@@ -275,10 +277,12 @@ let
     };
   };
 in {
-  systemd.services = {
-    "${name}" = mainService;
-    "${name}-cancel" = cancelService;
-  } // lib.optionalAttrs resumeOnBoot {
-    "${name}-resume" = resumeService;
-  };
+  systemd.services =
+    {
+      "${name}" = mainService;
+      "${name}-cancel" = cancelService;
+    }
+    // lib.optionalAttrs resumeOnBoot {
+      "${name}-resume" = resumeService;
+    };
 }

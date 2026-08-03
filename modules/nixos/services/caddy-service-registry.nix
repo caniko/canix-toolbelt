@@ -25,22 +25,39 @@
     then [
       {
         paths = [];
-        targetHost = svc.targetHost;
-        port = if svc.proxied then 80 else svc.port;
-        upstreamScheme = svc.upstreamScheme;
-        tlsServerName = svc.tlsServerName;
+        inherit (svc) targetHost;
+        port =
+          if svc.proxied
+          then 80
+          else svc.port;
+        inherit (svc) upstreamScheme;
+        inherit (svc) tlsServerName;
         stripPrefix = null;
       }
     ]
     else svc.routes;
 
   reverseProxyRoute = svc: route: let
-    targetHost = if route.targetHost != null then route.targetHost else svc.targetHost;
-    paths = route.paths;
-    port = if route.port != null then route.port else if svc.proxied then 80 else svc.port;
-    upstreamScheme = if route.upstreamScheme != null then route.upstreamScheme else svc.upstreamScheme;
-    tlsServerName = if route.tlsServerName != null then route.tlsServerName else svc.tlsServerName;
-    stripPrefix = route.stripPrefix;
+    targetHost =
+      if route.targetHost != null
+      then route.targetHost
+      else svc.targetHost;
+    inherit (route) paths;
+    port =
+      if route.port != null
+      then route.port
+      else if svc.proxied
+      then 80
+      else svc.port;
+    upstreamScheme =
+      if route.upstreamScheme != null
+      then route.upstreamScheme
+      else svc.upstreamScheme;
+    tlsServerName =
+      if route.tlsServerName != null
+      then route.tlsServerName
+      else svc.tlsServerName;
+    inherit (route) stripPrefix;
   in
     if svc.auth.enable
     then
@@ -94,7 +111,7 @@
 
   oidcClients = builtins.listToAttrs (
     map (svc: {
-      name = svc.name;
+      inherit (svc) name;
       value = oidcClientFor svc;
     })
     kanidmAuthServices

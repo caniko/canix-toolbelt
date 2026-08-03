@@ -8,7 +8,7 @@
   allHosts = config.canix-toolbelt.hosts;
   inherit (lib) mapAttrs' mkEnableOption mkIf mkOption types;
 
-  mkPowerCycleScript = name: target: let
+  mkPowerCycleScript = name: _target: let
     host = allHosts.${name} or {};
     canixBin = "${pkgs.canix}/bin/canix";
   in

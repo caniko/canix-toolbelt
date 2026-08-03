@@ -28,7 +28,7 @@
   # Replicate the NixOS WireGuard module's inline escaping for systemd unit
   # names (nixpkgs/nixos/modules/services/networking/wireguard.nix).
   # The NixOS module replaces / - space + = with \xHH forms.
-  wgPeerUnitName = lib.replaceStrings [ "/" "-" " " "+" "=" ] [ "-" "\\x2d" "\\x20" "\\x2b" "\\x3d" ] wgServerPublicKey;
+  wgPeerUnitName = lib.replaceStrings ["/" "-" " " "+" "="] ["-" "\\x2d" "\\x20" "\\x2b" "\\x3d"] wgServerPublicKey;
   wgRefreshServiceName = "wireguard-wg-home-peer-${wgPeerUnitName}-refresh";
 in {
   imports = [
@@ -119,7 +119,7 @@ in {
         peers = [
           {
             publicKey = wgServerPublicKey;
-            allowedIPs = [ config.canix-toolbelt.networking.links.wg-home.cidr ];
+            allowedIPs = [config.canix-toolbelt.networking.links.wg-home.cidr];
             endpoint = "${wgHome.endpointHost}:${toString wgHome.port}";
             inherit (cfg) dynamicEndpointRefreshSeconds dynamicEndpointRefreshRestartSeconds;
             persistentKeepalive = 25;
@@ -133,8 +133,8 @@ in {
     # before systemd-resolved has finished configuring. Order it after
     # network-online.target so the first refresh attempt does not fail.
     systemd.services.${wgRefreshServiceName} = {
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
     };
   };
 }

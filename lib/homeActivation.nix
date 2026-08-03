@@ -6,7 +6,6 @@
   mkWritableSymlinkCopies = {
     dag,
     pkgs,
-    name,
     targets,
     mode ? "0644",
   }:

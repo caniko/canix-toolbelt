@@ -60,7 +60,8 @@
       version = pkg.version or "";
       meta = pkg.meta or {};
       passthru = pkg.passthru or {};
-      override = lib.setFunctionArgs
+      override =
+        lib.setFunctionArgs
         (args: wrapPkg (pkg.override args))
         (lib.functionArgs pkg.override);
     };
@@ -88,7 +89,8 @@
       version = pkg.version or "";
       meta = pkg.meta or {};
       passthru = pkg.passthru or {};
-      override = lib.setFunctionArgs
+      override =
+        lib.setFunctionArgs
         (args: wrapPkgDecode (pkg.override args))
         (lib.functionArgs pkg.override);
     };
