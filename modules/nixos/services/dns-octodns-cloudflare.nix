@@ -41,9 +41,11 @@
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
 
   normalizeName = name:
-    if name == "@"
-    then ""
-    else name;
+    lib.toLower (
+      if name == "@"
+      then ""
+      else name
+    );
   normalizeType = type: lib.toUpper type;
   recordKey = record: "${normalizeName record.name}|${normalizeType record.type}";
   dropNulls = filterAttrs (_: value: value != null);
@@ -239,7 +241,7 @@
     domains = {
       zones = zoneNames;
       managedZones = zoneNames;
-      codebergPagesSites = cfg.codebergPagesSites or [];
+      pagesSites = cfg.pagesSites or [];
     };
     services = {
       reverseProxyServices = config.canix-toolbelt.services.reverseProxyServices or [];
@@ -273,10 +275,8 @@
     {}
     (fleetixLib.services.serviceCnameIntents {topology = topologyForDnsIntents;});
 
-  # Synthesize CNAME records for Codeberg Pages sites from the topology registry.
-  # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
-  # to <repoName>.caniko.codeberg.page.
-  synthesizedCodebergPagesByZone =
+  # Synthesize project Pages CNAME records from the topology registry.
+  synthesizedPagesByZone =
     foldl'
     (acc: intent:
       acc
@@ -288,9 +288,9 @@
           ];
       })
     {}
-    (fleetixLib.services.codebergPagesCnameIntents {
+    (fleetixLib.services.pagesCnameIntents {
       topology = topologyForDnsIntents;
-      baseZone = cfg.codebergPagesZone;
+      baseZone = cfg.pagesZone;
     });
 
   effectiveRecordsForZone = zoneName: zone: let
@@ -303,7 +303,7 @@
     );
     synthesized =
       lib.optional (cfg.autoSynthesizeServiceCnames) (synthesizedRecordsByZone.${zoneName} or [])
-      ++ lib.optional (cfg.autoSynthesizeCodebergPagesCnames) (synthesizedCodebergPagesByZone.${zoneName} or []);
+      ++ lib.optional (cfg.autoSynthesizePagesCnames) (synthesizedPagesByZone.${zoneName} or []);
     filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) (lib.flatten synthesized);
   in
     filteredSynthesized ++ zone.records;
@@ -487,6 +487,24 @@
     (record: "Apex (@) CNAME is invalid per RFC 1034 §3.6.2 (${record._zoneName}: ${record.name} ${record.type}). Use type = \"ALIAS\" for Cloudflare CNAME-flattening at the zone apex.")
     (filter (record: normalizeName record.name == "" && normalizeType record.type == "CNAME") allEffectiveRecords);
 
+  # ponytail: Record sets are tiny; group once if zone inventories become large.
+  cnameCollisionErrors = lib.unique (concatMap (record:
+    if normalizeType record.type != "CNAME"
+    then []
+    else let
+      peers = filter (other:
+        other._zoneName
+        == record._zoneName
+        && normalizeName other.name == normalizeName record.name)
+      allEffectiveRecords;
+      cnameCount = builtins.length (filter (other: normalizeType other.type == "CNAME") peers);
+      hasOtherType = builtins.any (other: normalizeType other.type != "CNAME") peers;
+      context = "${record._zoneName}: ${record.name}";
+    in
+      lib.optional (cnameCount > 1) "duplicate CNAME records are invalid (${context})"
+      ++ lib.optional hasOtherType "CNAME cannot coexist with another record type (${context})")
+  allEffectiveRecords);
+
   redirectErrors =
     concatMap
     (redirect: let
@@ -498,7 +516,7 @@
       ++ lib.optional (!(redirect.status >= 300 && redirect.status <= 399)) "${ctx}: status must be a 3xx HTTP status code")
     cfg.redirects;
 
-  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors;
+  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ cnameCollisionErrors ++ redirectErrors;
 
   validatedDnsConfig =
     if validationErrors == []
@@ -727,19 +745,19 @@ in {
       description = "Synthesize Cloudflare CNAME records from canix-toolbelt service registry hostnames in declared zones.";
     };
 
-    autoSynthesizeCodebergPagesCnames = mkOption {
+    autoSynthesizePagesCnames = mkOption {
       type = types.bool;
       default = true;
-      description = "Synthesize CNAME records for Codeberg Pages sites from the codebergPagesSites registry.";
+      description = "Synthesize CNAME records for project Pages sites from the pagesSites registry.";
     };
 
-    codebergPagesZone = mkOption {
+    pagesZone = mkOption {
       type = types.str;
       default = "tartanoglu.com";
-      description = "Zone under which Codeberg Pages CNAME records are synthesized.";
+      description = "Zone under which project Pages CNAME records are synthesized.";
     };
 
-    codebergPagesSites = mkOption {
+    pagesSites = mkOption {
       type = types.listOf (types.submodule {
         freeformType = types.attrsOf types.raw;
         options = {
@@ -750,16 +768,20 @@ in {
           };
           subdomain = mkOption {
             type = types.str;
-            description = "Subdomain for the Codeberg Pages site (e.g. 'myproject' for myproject.tartanoglu.com).";
+            description = "Subdomain for the Pages site (e.g. 'myproject' for myproject.tartanoglu.com).";
           };
-          targetRepo = mkOption {
+          repository = mkOption {
             type = types.str;
-            description = "Codeberg repository (e.g. 'caniko/myproject').";
+            description = "Repository associated with the Pages site (e.g. 'caniko/myproject').";
+          };
+          cnameTarget = mkOption {
+            type = types.str;
+            description = "DNS CNAME target for the Pages provider (e.g. 'caniko.github.io').";
           };
         };
       });
       default = [];
-      description = "Registry of Codeberg Pages sites. Each entry generates a CNAME from <subdomain>.<zone> to <repoName>.caniko.codeberg.page.";
+      description = "Registry of project Pages sites. Each entry generates a CNAME from <subdomain>.<zone> to its explicit provider target.";
     };
 
     reconciler = {

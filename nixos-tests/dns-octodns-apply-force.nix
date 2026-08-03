@@ -29,6 +29,7 @@
     specialArgs = {
       inherit inputs;
       crossbowBuildPkgs = pkgs;
+      canixCrossPackage = _name: package: package;
     };
     modules = [
       ../modules/nixos/services/dns-octodns-cloudflare.nix
@@ -37,6 +38,14 @@
           enable = true;
           cloudflareToken.secretPath = "/run/secrets/cloudflare-token";
           reconciler.applyForce = true;
+          pagesZone = "example.com";
+          pagesSites = [
+            {
+              subdomain = "docs";
+              repository = "caniko/docs";
+              cnameTarget = "caniko.github.io";
+            }
+          ];
           zones."example.com".records = [
             {
               name = "www";
@@ -52,6 +61,7 @@
   };
 
   services = moduleResult.config.systemd.services;
+  pagesRecord = moduleResult.config.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.com".docs.cname;
   planExec = services.cloudflare-octodns.serviceConfig.ExecStart;
   applyExec = services.cloudflare-octodns-apply.serviceConfig.ExecStart;
 
@@ -60,6 +70,7 @@
     specialArgs = {
       inputs = fakeInputs;
       crossbowBuildPkgs = pkgs;
+      canixCrossPackage = _name: package: package;
     };
     modules = [
       ../modules/nixos/services/dns-octodns-cloudflare.nix
@@ -94,6 +105,41 @@
     (route: route.match or [] != [] && (builtins.head route.match).host or [] == ["example.com"])
     optimizationResult.config.canix-toolbelt.services.caddy.routes
   );
+  collisionResult = inputs.nixpkgs.lib.nixosSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    specialArgs = {
+      inputs = fakeInputs;
+      crossbowBuildPkgs = pkgs;
+      canixCrossPackage = _name: package: package;
+    };
+    modules = [
+      ../modules/nixos/services/dns-octodns-cloudflare.nix
+      {
+        canix-toolbelt.dns = {
+          enable = true;
+          pagesZone = "example.com";
+          pagesSites = [
+            {
+              subdomain = "docs";
+              repository = "caniko/docs";
+              cnameTarget = "caniko.github.io";
+            }
+          ];
+          zones."example.com".records = [
+            {
+              name = "Docs";
+              type = "A";
+              data = "192.0.2.1";
+            }
+          ];
+        };
+        system.stateVersion = "25.11";
+      }
+    ];
+  };
+  collisionEvaluation = builtins.tryEval (
+    builtins.deepSeq collisionResult.config.canix-toolbelt.dns.dnsConfig true
+  );
 in
   mkEvalCheck {
     name = "dns-octodns-apply-force";
@@ -113,6 +159,16 @@ in
         name = "apply-has-force";
         assertion = builtins.match ".* --force.*" applyExec != null;
         message = "cloudflare-octodns-apply must pass --force when reconciler.applyForce is true";
+      }
+      {
+        name = "github-pages-cname-is-synthesized";
+        assertion = pagesRecord.data == "caniko.github.io";
+        message = "Pages topology must synthesize the configured provider CNAME target";
+      }
+      {
+        name = "cname-collisions-fail-evaluation";
+        assertion = !collisionEvaluation.success;
+        message = "CNAME records must not coexist with another record type at the same name";
       }
       {
         name = "dns-manager-uses-build-pkgs";
