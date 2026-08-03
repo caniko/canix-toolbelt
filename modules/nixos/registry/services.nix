@@ -9,7 +9,12 @@
 
   serviceRoutes = service:
     if service.routes == []
-    then [{targetHost = service.targetHost; port = service.port;}]
+    then [
+      {
+        inherit (service) targetHost;
+        inherit (service) port;
+      }
+    ]
     else service.routes;
 
   routeTargetHost = service: route:
@@ -367,7 +372,7 @@ in {
         then config.canix-toolbelt.fleetix.topology
         else config.fleetix.topology;
       normalized = fleetixLib.projections.normalize {topology = ft;};
-      services = normalized.services;
+      inherit (normalized) services;
     in {
       canix-toolbelt.services = {
         inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;
@@ -375,28 +380,31 @@ in {
     }))
 
     (let
-      localPorts = lib.unique (lib.concatMap (service:
-        map (route: routePort service route) (
-          filter (route: routeTargetHost service route == config.networking.hostName) (serviceRoutes service)
+      localPorts = lib.unique (lib.concatMap (
+          service:
+            map (route: routePort service route) (
+              filter (route: routeTargetHost service route == config.networking.hostName) (serviceRoutes service)
+            )
         )
-      ) config.canix-toolbelt.services.reverseProxyServices);
-    in
-      mkIf (localPorts != []) {
-        networking.firewall.allowedTCPPorts = localPorts;
-      })
+        config.canix-toolbelt.services.reverseProxyServices);
+    in {
+      networking.firewall.allowedTCPPorts = localPorts;
+    })
 
     (let
       hostname = config.networking.hostName;
       host = config.canix-toolbelt.hosts.${hostname} or {};
       lanInterface = host.lanInterface or null;
-      lanExposedPorts = lib.unique (lib.concatMap (service:
-        map (route: routePort service route) (
-          filter (route: routeTargetHost service route == hostname) (serviceRoutes service)
-        )
+      lanExposedPorts = lib.unique (lib.concatMap (
+        service:
+          map (route: routePort service route) (
+            filter (route: routeTargetHost service route == hostname) (serviceRoutes service)
+          )
       ) (filter (service: service.lanExposed or false) config.canix-toolbelt.services.reverseProxyServices));
-    in
-      mkIf (lanInterface != null && lanExposedPorts != []) {
-        networking.firewall.interfaces.${lanInterface}.allowedTCPPorts = lanExposedPorts;
-      })
+    in {
+      networking.firewall.interfaces = lib.optionalAttrs (lanInterface != null) {
+        ${lanInterface}.allowedTCPPorts = lanExposedPorts;
+      };
+    })
   ];
 }
