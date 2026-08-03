@@ -70,6 +70,31 @@
       })
     hostToggles;
   };
+
+  mkProfileTransitionCheck = {
+    profile,
+    from,
+    to,
+    script,
+  }:
+    assert lib.assertMsg (builtins.match "[A-Za-z0-9._-]+" profile != null)
+    "canix-toolbelt.lib.nexus.mkProfileTransitionCheck: invalid profile name `${profile}`";
+    assert lib.assertMsg (from != to)
+    "canix-toolbelt.lib.nexus.mkProfileTransitionCheck: `from` and `to` must differ"; ''
+      incoming="''${1:?missing incoming system path}"
+      action="''${2-}"
+      [ "$action" = switch ] || exit 0
+
+      current_marker="/run/current-system/etc/canix-profiles/${profile}.enable"
+      incoming_marker="$incoming/etc/canix-profiles/${profile}.enable"
+      [ -r "$current_marker" ] && [ -r "$incoming_marker" ] || exit 0
+      IFS= read -r current < "$current_marker"
+      IFS= read -r next < "$incoming_marker"
+
+      if [ "$current" = "${lib.boolToString from}" ] && [ "$next" = "${lib.boolToString to}" ]; then
+        ${script}
+      fi
+    '';
 in {
-  inherit assertToggle mkProfilesForHost toggleSubmodule;
+  inherit assertToggle mkProfileTransitionCheck mkProfilesForHost toggleSubmodule;
 }
