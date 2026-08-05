@@ -145,6 +145,7 @@
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
+            vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
