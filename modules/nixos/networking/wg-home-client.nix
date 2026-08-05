@@ -416,6 +416,11 @@ in {
       description = "Periodically verify the wg-home endpoint";
       wantedBy = ["timers.target"];
       timerConfig = {
+        # OnUnitInactiveSec-only timers never fire for a unit that has never
+        # been activated (systemd re-arms only on deactivation); the selector
+        # therefore never ran on fresh installs and stale endpoints survived
+        # a WAN IP change. OnBootSec arms the first run independently.
+        OnBootSec = "5s";
         OnUnitInactiveSec = "${toString cfg.dynamicEndpointRefreshSeconds}s";
         Unit = "wg-home-endpoint.service";
       };

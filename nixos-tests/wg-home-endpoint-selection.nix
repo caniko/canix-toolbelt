@@ -70,6 +70,11 @@ in
         assertion = timer.timerConfig.Unit == "wg-home-endpoint.service";
         message = "one timer must own recurring endpoint selection";
       }
+      {
+        name = "selector-timer-arms-at-boot";
+        assertion = timer.timerConfig ? OnBootSec;
+        message = "the timer must self-arm at boot, independent of prior selector activation (OnUnitInactiveSec never fires for a never-activated unit)";
+      }
     ];
     runtimeScript = ''
       fake="$TMPDIR/fake"
