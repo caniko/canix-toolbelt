@@ -123,9 +123,9 @@
         checks =
           {
             forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+            garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             direct-link-eval = import ./nixos-tests/direct-link-eval.nix {inherit pkgs;};
-            garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
