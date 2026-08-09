@@ -55,6 +55,8 @@
       )
       + "\n";
 
+  s3ApiPort = lib.last (lib.splitString ":" cfg.settings.s3_api.api_bind_addr);
+
   optionalRpcPublicAddr = let
     v = cfg.settings.rpc_public_addr;
   in
@@ -123,6 +125,10 @@
       }
     ]}  '';
 in {
+  imports = [
+    ./garage-buckets-registry.nix
+  ];
+
   options.canix-toolbelt.services.garage = {
     enable = mkEnableOption "Garage Object Storage (S3 compatible)";
 
@@ -135,6 +141,16 @@ in {
       type = types.enum ["error" "warn" "info" "debug" "trace"];
       default = "info";
       description = "Garage log level.";
+    };
+
+    # Buckets to provision on start, keyed by their entry in
+    # canix-toolbelt.garageBuckets.registry. Each entry becomes bucket
+    # creation + key import + rw allow, using the registry-derived
+    # credentials. Only hosts actually running garage need this.
+    buckets = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Names of garage buckets to create and grant the registry key for.";
     };
 
     extraEnvironment = mkOption {
@@ -381,6 +397,37 @@ in {
           RUST_LOG = mkDefault "garage=${cfg.logLevel}";
         }
         // cfg.extraEnvironment;
+    };
+
+    systemd.services.garage-init-buckets = lib.mkIf (cfg.buckets != []) {
+      description = "Provision configured Garage buckets and their access keys";
+      after = ["garage.service"];
+      requires = ["garage.service"];
+      wantedBy = ["multi-user.target"];
+      script = let
+        provision = bucket: let
+          creds = config.canix-toolbelt.garageBuckets.credentials.${bucket};
+        in ''
+          ${cfg.package}/bin/garage bucket create ${bucket} || true
+          ${cfg.package}/bin/garage key import --yes -n ${bucket} \
+            "${creds.accessKeyId}" "${creds.secretAccessKey}" || true
+          ${cfg.package}/bin/garage bucket allow --read --write \
+            ${bucket} --key ${bucket} || true
+        '';
+      in ''
+        # Garage's S3 API returns 403 to GET / (no anonymous access),
+        # so we omit -f (--fail): any TCP-level response means the
+        # server is bound and ready.
+        while ! ${pkgs.curl}/bin/curl -s http://127.0.0.1:${toString s3ApiPort} >/dev/null 2>&1; do
+          sleep 1
+        done
+        ${lib.concatMapStringsSep "\n" provision cfg.buckets}
+      '';
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "root";
+      };
     };
 
     # Create data directories outside /var/lib/garage via tmpfiles.
