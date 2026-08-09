@@ -38,6 +38,7 @@
   dev-oom-guard = ./services/dev-oom-guard.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
   garage = ./services/garage.nix;
+  garage-buckets-registry = ./services/garage-buckets-registry.nix;
   host-registry = ./registry/hosts.nix;
   impure-files = ./registry/impure-files.nix;
   initrd-ssh = ./services/initrd-ssh.nix;
