@@ -8,26 +8,31 @@ import tempfile
 
 os.umask(0o077)
 
-config_dir = pathlib.Path(sys.argv[1])
-source_zones_dir = pathlib.Path(sys.argv[2])
-runtime_zones_dir = pathlib.Path(sys.argv[3])
-requested_zone_files = {
-    f"{zone[:-1] if zone.endswith('.') else zone}.yaml"
-    for zone in sys.argv[4:]
-    if zone and not zone.startswith("-")
-}
-source_zone_paths = {
-    str(source_zones_dir),
-    str(source_zones_dir.resolve()),
-}
-replacements = json.loads(pathlib.Path(sys.argv[5]).read_text())
-secret_dir = os.environ.get("CANIX_DNS_SECRET_DIR")
 decrypt_cache_dir = os.environ.get("CANIX_DNS_DECRYPT_CACHE_DIR")
 age_identities = [
     identity
     for identity in os.environ.get("CANIX_DNS_AGE_IDENTITIES", "").split(":")
     if identity
 ]
+
+decrypt_file_mode = len(sys.argv) == 3 and sys.argv[1] == "--decrypt-file"
+decrypt_target = pathlib.Path(sys.argv[2]) if decrypt_file_mode else None
+
+if not decrypt_file_mode:
+    config_dir = pathlib.Path(sys.argv[1])
+    source_zones_dir = pathlib.Path(sys.argv[2])
+    runtime_zones_dir = pathlib.Path(sys.argv[3])
+    requested_zone_files = {
+        f"{zone[:-1] if zone.endswith('.') else zone}.yaml"
+        for zone in sys.argv[4:]
+        if zone and not zone.startswith("-")
+    }
+    source_zone_paths = {
+        str(source_zones_dir),
+        str(source_zones_dir.resolve()),
+    }
+    replacements = json.loads(pathlib.Path(sys.argv[5]).read_text())
+    secret_dir = os.environ.get("CANIX_DNS_SECRET_DIR")
 
 
 def ensure_cache_dir():
@@ -91,6 +96,32 @@ def write_cached_secret(path, plaintext):
         raise
 
 
+def decrypt_agenix_file(path):
+    cached_secret = read_cached_secret(path)
+    if cached_secret is not None:
+        return cached_secret
+    secret_manager_bin = os.environ.get("SECRET_MANAGER_BIN")
+    if not secret_manager_bin:
+        print("SECRET_MANAGER_BIN is not set", file=sys.stderr)
+        sys.exit(1)
+    readable_identities = [
+        identity
+        for identity in age_identities
+        if pathlib.Path(identity).is_file() and os.access(identity, os.R_OK)
+    ]
+    cmd = [secret_manager_bin, "decrypt"]
+    for identity in readable_identities:
+        cmd.extend(["--identity", identity])
+    cmd.append(str(path))
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr, end="")
+        print(f"failed to decrypt DNS agenix source file: {path}", file=sys.stderr)
+        sys.exit(result.returncode)
+    write_cached_secret(path, result.stdout)
+    return result.stdout
+
+
 def read_secret(replacement):
     runtime_path = replacement.get("path")
     if runtime_path is not None:
@@ -108,30 +139,7 @@ def read_secret(replacement):
         if not path.exists():
             print(f"missing DNS agenix source file: {path}", file=sys.stderr)
             sys.exit(1)
-        cached_secret = read_cached_secret(path)
-        if cached_secret is not None:
-            return cached_secret.strip()
-        secret_manager_bin = os.environ.get("SECRET_MANAGER_BIN")
-        if not secret_manager_bin:
-            print("SECRET_MANAGER_BIN is not set", file=sys.stderr)
-            sys.exit(1)
-        readable_identities = [
-            identity
-            for identity in age_identities
-            if pathlib.Path(identity).is_file() and os.access(identity, os.R_OK)
-        ]
-        if readable_identities:
-            cmd = [secret_manager_bin, "decrypt"]
-            for identity in readable_identities:
-                cmd.extend(["--identity", identity])
-            cmd.append(str(path))
-            result = subprocess.run(cmd, check=False, text=True, capture_output=True)
-            if result.returncode == 0:
-                write_cached_secret(path, result.stdout)
-                return result.stdout.strip()
-            print(result.stderr, file=sys.stderr, end="")
-            print(f"failed to decrypt DNS agenix source file: {path}", file=sys.stderr)
-            sys.exit(result.returncode)
+        return decrypt_agenix_file(path).strip()
 
     missing = runtime_path or agenix_file
     print(f"missing DNS secret file: {missing}", file=sys.stderr)
@@ -142,6 +150,11 @@ def read_secret(replacement):
         )
     sys.exit(1)
 
+
+if decrypt_file_mode:
+    target = pathlib.Path(sys.argv[2])
+    sys.stdout.write(decrypt_agenix_file(target))
+    sys.exit(0)
 
 for path in config_dir.rglob("*.yaml"):
     text = path.read_text()
