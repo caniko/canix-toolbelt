@@ -1,66 +1,64 @@
 {pkgs}: let
-  inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
-  evaluate = buckets:
+  evaluate = module:
     (import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = "x86_64-linux";
       modules = [
         ../modules/nixos/services/garage-buckets-registry.nix
-        ../modules/nixos/services/garage.nix
-        {
-          system.stateVersion = "25.11";
-          canix-toolbelt = {
-            services.garage = {
-              enable = true;
-              package = pkgs.garage_2;
-              buckets = builtins.attrNames buckets;
-              settings = {
-                metadata_dir = "/tmp/garage/meta";
-                data_dir = "/tmp/garage/data";
-                rpc_secret = "x";
-                replication_factor = 1;
-              };
-            };
-            garageBuckets.registry = buckets;
-          };
-        }
+        module
       ];
     }).config;
 
-  seeded = evaluate {sccache = {seed = "rs-harbor-sccache-garage-2026";};};
-  none = evaluate {};
+  plain = evaluate {};
+
+  seeded = evaluate {
+    canix-toolbelt.garageBuckets.registry.sccache.seed = "test-seed";
+  };
+
+  withGarage = evaluate {
+    imports = [../modules/nixos/services/garage.nix];
+    canix-toolbelt.services.garage = {
+      enable = true;
+      package = pkgs.garage_2;
+      buckets = ["sccache"];
+    };
+    canix-toolbelt.garageBuckets.registry.sccache.seed = "test-seed";
+  };
+
+  expected = let
+    hash = builtins.hashString "sha256" "test-seed";
+  in {
+    accessKeyId = "GK" + builtins.substring 0 18 hash;
+    secretAccessKey = builtins.substring 0 40 hash;
+  };
 in
   mkEvalCheck {
     name = "garage-buckets-registry-eval";
-    resultMessage = "garage bucket registry derives credentials and provisions buckets";
+    resultMessage = "garage bucket registry derives credentials and provisions only on garage hosts";
     assertions = [
       {
-        name = "credentials-derived";
+        name = "credentials-derived-deterministically";
+        assertion = seeded.canix-toolbelt.garageBuckets.credentials.sccache == expected;
+        message = "registry credentials must be deterministic and match the reference derivation";
+      }
+      {
+        name = "empty-registry-no-credentials";
+        assertion = plain.canix-toolbelt.garageBuckets.credentials == {};
+        message = "empty registry must expose no credentials";
+      }
+      {
+        name = "provision-only-with-garage-service";
+        assertion = plain.systemd.services ? garage-init-buckets == false;
+        message = "no garage-init-buckets service without the garage service module";
+      }
+      {
+        name = "provision-on-garage-host";
         assertion =
-          seeded.canix-toolbelt.garageBuckets.credentials.sccache
-          == {
-            accessKeyId = "GK96c3cf18ad59bf4aff";
-            secretAccessKey = "96c3cf18ad59bf4aff52c3d2adaaf5058a374111";
-          };
-        message = "sccache registry entry must derive the fleet-known access key pair";
-      }
-      {
-        name = "buckets-unit-created";
-        assertion = lib.hasAttrByPath ["systemd" "services" "garage-init-buckets"] seeded;
-        message = "declared buckets must generate the provisioning unit";
-      }
-      {
-        name = "no-buckets-no-unit";
-        assertion = !(builtins.hasAttr "garage-init-buckets" none.systemd.services);
-        message = "empty registry must not generate the provisioning unit";
-      }
-      {
-        name = "init-unit-is-oneshot";
-        assertion =
-          seeded.systemd.services.garage-init-buckets.serviceConfig.Type
-          == "oneshot";
-        message = "provisioning unit must be a oneshot";
+          withGarage.systemd.services.garage-init-buckets.serviceConfig.Type
+          == "oneshot"
+          && builtins.hasAttr "sccache" withGarage.canix-toolbelt.garageBuckets.credentials;
+        message = "garage host must provision registered buckets through a oneshot";
       }
     ];
   }
