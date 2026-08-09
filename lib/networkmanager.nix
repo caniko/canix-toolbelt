@@ -1,9 +1,6 @@
-let
-  optionalAttrs = condition: attrs:
-    if condition
-    then attrs
-    else {};
-in rec {
+{lib}: rec {
+  inherit (lib) optionalAttrs;
+
   constants = {
     tunMode.tap = "2";
     wakeOnLan.magic = "64";

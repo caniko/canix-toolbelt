@@ -6,6 +6,40 @@
   hm = inputs.home-manager.lib;
   gooseInput = inputs.canix-toolbelt or inputs.self;
   defaultGooseModule = gooseInput.homeModules.goose;
+  mkGooseHome = {
+    extraModules ? [],
+    hostname ? "atlas",
+    gooseModule ? defaultGooseModule,
+    preModules ? [],
+  }:
+    hm.homeManagerConfiguration {
+      inherit pkgs;
+
+      extraSpecialArgs = {
+        inherit hostname inputs;
+      };
+
+      modules =
+        preModules
+        ++ [
+          gooseModule
+          {
+            home = {
+              username = "goose-test";
+              homeDirectory = "/home/goose-test";
+              stateVersion = "25.11";
+            };
+
+            programs.home-manager.enable = true;
+            manual = {
+              html.enable = false;
+              json.enable = false;
+              manpages.enable = false;
+            };
+          }
+        ]
+        ++ extraModules;
+    };
 in {
   mkGooseHome = {
     extraModules ? [],
@@ -81,40 +115,8 @@ in {
       if builtins.isList args
       then {extraModules = args;}
       else args;
-    extraModules = normalizedArgs.extraModules or [];
-    gooseModule = normalizedArgs.gooseModule or defaultGooseModule;
-    hostname = normalizedArgs.hostname or "atlas";
-    preModules = normalizedArgs.preModules or [];
   in
-    builtins.tryEval
-    (hm.homeManagerConfiguration {
-      inherit pkgs;
-
-      extraSpecialArgs = {
-        inherit hostname inputs;
-      };
-
-      modules =
-        preModules
-        ++ [
-          gooseModule
-          {
-            home = {
-              username = "goose-test";
-              homeDirectory = "/home/goose-test";
-              stateVersion = "25.11";
-            };
-
-            programs.home-manager.enable = true;
-            manual = {
-              html.enable = false;
-              json.enable = false;
-              manpages.enable = false;
-            };
-          }
-        ]
-        ++ extraModules;
-    }).activationPackage;
+    builtins.tryEval (mkGooseHome normalizedArgs).activationPackage;
 
   mkExpectedEvalFailureCheck = {
     name,

@@ -261,7 +261,7 @@
     inherit (intent) proxied comment;
   };
 
-  synthesizedRecordsByZone =
+  synthesizedByZone = intents:
     foldl'
     (acc: intent:
       acc
@@ -273,25 +273,19 @@
           ];
       })
     {}
-    (fleetixLib.services.serviceCnameIntents {topology = topologyForDnsIntents;});
+    intents;
 
-  # Synthesize project Pages CNAME records from the topology registry.
-  synthesizedPagesByZone =
-    foldl'
-    (acc: intent:
-      acc
-      // {
-        ${intent.zone} =
-          (acc.${intent.zone} or [])
-          ++ [
-            (cnameIntentToRecord intent)
-          ];
-      })
-    {}
-    (fleetixLib.services.pagesCnameIntents {
+  # Synthesize service and project Pages CNAME records from the topology registry.
+  synthesizedRecordsByZone = synthesizedByZone (
+    fleetixLib.services.serviceCnameIntents {topology = topologyForDnsIntents;}
+  );
+
+  synthesizedPagesByZone = synthesizedByZone (
+    fleetixLib.services.pagesCnameIntents {
       topology = topologyForDnsIntents;
       baseZone = cfg.pagesZone;
-    });
+    }
+  );
 
   effectiveRecordsForZone = zoneName: zone: let
     explicitKeys = builtins.listToAttrs (
@@ -567,64 +561,11 @@
 
       decrypt_agenix_file() {
         encrypted_file="$1"
-        ${lib.optionalString cacheEnabled ''
-        cache_dir="${validatedCacheDir}"
-        ${pkgs.coreutils}/bin/mkdir -p "$cache_dir"
-        ${pkgs.coreutils}/bin/chmod 0700 "$cache_dir" || {
-          echo "failed to set cache dir perms to 0700: $cache_dir" >&2
+        ${pkgs.python3}/bin/python ${./dns-octodns-cloudflare-substitute-secrets.py} --decrypt-file "$encrypted_file" || {
+          echo "failed to decrypt agenix source: $encrypted_file" >&2
+          echo "set CANIX_DNS_AGE_IDENTITIES to colon-separated age/ssh identity paths to decrypt agenix sources locally" >&2
           return 1
         }
-        cache_dir_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_dir")" || return 1
-        if [ "$cache_dir_mode" != 700 ]; then
-          echo "cache dir perms not 0700: $cache_dir" >&2
-          return 1
-        fi
-        cache_key="$(${pkgs.coreutils}/bin/sha256sum "$encrypted_file" | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
-        cache_file="$cache_dir/$cache_key"
-        if [ -r "$cache_file" ]; then
-          cache_file_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
-          if [ "$cache_file_mode" != 600 ]; then
-            echo "cache file perms not 0600: $cache_file" >&2
-            return 1
-          fi
-          ${pkgs.coreutils}/bin/cat "$cache_file"
-          return 0
-        fi
-      ''}
-        # Build --identity flags from CANIX_DNS_AGE_IDENTITIES
-        if [ -n "$CANIX_DNS_AGE_IDENTITIES" ]; then
-          old_ifs="$IFS"
-          IFS=:
-          set -- $CANIX_DNS_AGE_IDENTITIES
-          IFS="$old_ifs"
-          identity_args=""
-          for identity in "$@"; do
-            identity_args="$identity_args --identity $identity"
-          done
-          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt $identity_args "$encrypted_file")" || return 1
-        else
-          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt "$encrypted_file")" || return 1
-        fi
-        ${lib.optionalString cacheEnabled ''
-        tmp="$(${pkgs.coreutils}/bin/mktemp "$cache_dir/.tmp.XXXXXX")" || return 1
-        cleanup_tmp() {
-          ${pkgs.coreutils}/bin/rm -f "$tmp"
-        }
-        trap cleanup_tmp RETURN
-        ${pkgs.coreutils}/bin/chmod 0600 "$tmp" || return 1
-        printf '%s' "$plaintext" > "$tmp" || return 1
-        ${pkgs.coreutils}/bin/sync -f "$tmp" || return 1
-        ${pkgs.coreutils}/bin/mv -f "$tmp" "$cache_file" || return 1
-        trap - RETURN
-        ${pkgs.coreutils}/bin/chmod 0600 "$cache_file" || return 1
-        cache_file_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
-        if [ "$cache_file_mode" != 600 ]; then
-          echo "cache file perms not 0600: $cache_file" >&2
-          return 1
-        fi
-      ''}
-        printf '%s' "$plaintext"
-        return 0
       }
 
       if [ -z "''${CLOUDFLARE_API_TOKEN:-}" ]; then
