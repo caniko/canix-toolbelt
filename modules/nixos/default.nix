@@ -68,6 +68,9 @@
   gpu-backend-opengl-only = ./hardware/gpu/backend/opengl-only.nix;
   gpu-backend-vulkan = ./hardware/gpu/backend/vulkan.nix;
 
+  # GPU — explicit VA-API media-decode route (shared with homeModules)
+  gpu-media = ../gpu-media.nix;
+
   # GPU — vendors
   gpu-amd = ./hardware/gpu/amd.nix;
   gpu-mesa = ./hardware/gpu/mesa.nix;
