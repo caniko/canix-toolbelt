@@ -2,7 +2,7 @@
 provider = "actions"
 platform = "forgejo"
 runtime = "nix"
-runner = "codefloe-global"
+runner = "atlas-nix-trusted"
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"
