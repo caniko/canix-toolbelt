@@ -52,7 +52,8 @@
       };
 
       script = let
-        tokenFlag = lib.optionalString (authTokenFile != null)
+        tokenFlag =
+          lib.optionalString (authTokenFile != null)
           "-H \"Authorization: Bearer $(cat ${lib.escapeShellArg authTokenFile})\"";
       in ''
         set -euo pipefail
@@ -91,13 +92,15 @@
   in {
     ${pathUnitName} = {
       wantedBy = ["multi-user.target"];
-      pathConfig = {
-        PathExists = path;
-        # Unit= goes in the [Path] section for path units, not [Unit].
-        # systemd reads this to know which service to trigger.
-      } // lib.optionalAttrs (triggersService != null) {
-        Unit = triggersService;
-      };
+      pathConfig =
+        {
+          PathExists = path;
+          # Unit= goes in the [Path] section for path units, not [Unit].
+          # systemd reads this to know which service to trigger.
+        }
+        // lib.optionalAttrs (triggersService != null) {
+          Unit = triggersService;
+        };
     };
   };
 
@@ -126,16 +129,23 @@
     script,
     extraServiceConfig ? {},
   }:
-    assert builtins.isBool conditionExists;
-    {
+    assert builtins.isBool conditionExists; {
       ${name} = {
-        description = "${name} (conditional${if conditionExists then " — run when exists" else " — skip when exists"})";
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ConditionPathExists = if conditionExists then path else "!${path}";
-        }
-        // extraServiceConfig;
+        description = "${name} (conditional${
+          if conditionExists
+          then " — run when exists"
+          else " — skip when exists"
+        })";
+        serviceConfig =
+          {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ConditionPathExists =
+              if conditionExists
+              then path
+              else "!${path}";
+          }
+          // extraServiceConfig;
 
         inherit script;
       };

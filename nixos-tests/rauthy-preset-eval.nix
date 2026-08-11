@@ -120,7 +120,7 @@
   };
 
   rauthy = eval.config.services.rauthy;
-  provision = rauthy.provision;
+  inherit (rauthy) provision;
   hosts = eval.config.networking.hosts;
   stateFileProvision = stateFileEval.config.services.rauthy.provision;
 in

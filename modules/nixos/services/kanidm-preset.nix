@@ -156,7 +156,7 @@ in {
         server = {
           enable = true;
           settings = {
-            domain = cfg.domain;
+            inherit (cfg) domain;
             origin = "https://${cfg.domain}";
             bindaddress = "${cfg.listenAddress}:${toString cfg.httpsPort}";
             ldapbindaddress = cfg.ldapBindAddress;
@@ -177,7 +177,7 @@ in {
           extraJsonFile = cfg.provision.extraJsonFile;
         };
       }
-      // optionalAttrs (cfg.package != null) {package = cfg.package;};
+      // optionalAttrs (cfg.package != null) {inherit (cfg) package;};
 
     services.kanidm-credentials = mkIf cfg.credentials.enable ({
         enable = true;

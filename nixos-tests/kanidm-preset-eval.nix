@@ -67,7 +67,7 @@
   };
 
   kanidm = eval.config.services.kanidm;
-  provision = kanidm.provision;
+  inherit (kanidm) provision;
   credentials = eval.config.services."kanidm-credentials";
   hosts = eval.config.networking.hosts;
   firewallPorts = eval.config.networking.firewall.allowedTCPPorts;

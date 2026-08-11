@@ -1,7 +1,7 @@
 {pkgs}: let
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
-  lib = pkgs.lib;
-  dns = (import ../lib {inherit lib;}).dns;
+  inherit (pkgs) lib;
+  inherit ((import ../lib {inherit lib;})) dns;
   dynamicHosts = [
     {
       fqdn = "example.com";

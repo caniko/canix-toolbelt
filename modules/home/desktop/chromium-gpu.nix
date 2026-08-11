@@ -52,7 +52,6 @@
     else if igpuCfg.enable && igpuCfg.type != null
     then igpuCfg.type
     else renderingGpu;
-  isAmd = decodeVendor == "amd";
   isNvidia = decodeVendor == "nvidia";
 
   # Only route GL/Vulkan rendering through DRI_PRIME when the iGPU drives

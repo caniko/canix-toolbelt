@@ -303,7 +303,13 @@
           message = lib.concatStringsSep " " [
             (name + ": requirement " + requirementName + " is not satisfied.")
             requirement.summary
-            ("Producer: " + (if requirement.producerId != null then requirement.producerId else requirement.producer) + ".")
+            ("Producer: "
+              + (
+                if requirement.producerId != null
+                then requirement.producerId
+                else requirement.producer
+              )
+              + ".")
             ("Recovery: " + requirement.recovery + ".")
             ("Validation: " + requirement.validation + ".")
           ];

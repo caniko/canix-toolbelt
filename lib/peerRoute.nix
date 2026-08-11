@@ -85,7 +85,11 @@ let
     }
     else if !localAnchored
     then {
-      warning = "canix.sync.folders.${folder.id}: path `${folder.path}` is not anchored under ${hostname}'s dataRoot `${if selfHost.dataRoot or null != null then selfHost.dataRoot else "null"}`; cannot derive remotePath for peer `${peerName}`, skipping.";
+      warning = "canix.sync.folders.${folder.id}: path `${folder.path}` is not anchored under ${hostname}'s dataRoot `${
+        if selfHost.dataRoot or null != null
+        then selfHost.dataRoot
+        else "null"
+      }`; cannot derive remotePath for peer `${peerName}`, skipping.";
       peer = null;
     }
     else if (peer.dataRoot or null) == null

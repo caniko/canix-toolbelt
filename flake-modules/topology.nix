@@ -72,7 +72,7 @@
 
     wgServerDetector = lib.mkOption {
       type = lib.types.functionTo (lib.types.functionTo lib.types.bool);
-      default = name: hostData: let
+      default = _name: hostData: let
         role = ((hostData.links or {}).wg-home or {}).role or null;
         wg = hostData.network.wgHomeIp or null;
       in

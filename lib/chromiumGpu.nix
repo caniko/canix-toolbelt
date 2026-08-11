@@ -32,21 +32,21 @@
         })
       else basePackage;
     wrapped =
-      ((wrapper-manager.lib {
-          inherit pkgs;
-          modules = [
-            {
-              wrappers.${wrapperName} = {
-                basePackage = wrapperBasePackage;
-                prependFlags = ozoneFlags ozonePlatform ++ ["--use-gl=angle"] ++ extraFlags;
-                env = extraEnv;
-                programs = lib.genAttrs skipPrograms (_: {});
-              };
-            }
-          ];
-        }).config.wrappers.${
-          wrapperName
-        })
+      (wrapper-manager.lib {
+        inherit pkgs;
+        modules = [
+          {
+            wrappers.${wrapperName} = {
+              basePackage = wrapperBasePackage;
+              prependFlags = ozoneFlags ozonePlatform ++ ["--use-gl=angle"] ++ extraFlags;
+              env = extraEnv;
+              programs = lib.genAttrs skipPrograms (_: {});
+            };
+          }
+        ];
+      }).config.wrappers.${
+        wrapperName
+      }
           .wrapped;
   in
     wrapped

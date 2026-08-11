@@ -24,31 +24,29 @@
     ];
 
   contractStatus = {
-    name,
     enabled,
     requirements,
-  }:
-    let
-      failures = evaluationRequirements requirements;
-      unsatisfied = lib.any (requirement: !(requirement.satisfied or false)) (builtins.attrValues requirements);
-    in {
-      status =
-        if !enabled
-        then "disabled"
-        else if failures != {}
-        then "blocked"
-        else if unsatisfied
-        then "deferred"
-        else "ready";
-      declaredStatus =
-        if !enabled
-        then "disabled"
-        else if failures != {}
-        then "blocked"
-        else if unsatisfied
-        then "pending"
-        else "declared-ready";
-    };
+  }: let
+    failures = evaluationRequirements requirements;
+    unsatisfied = lib.any (requirement: !(requirement.satisfied or false)) (builtins.attrValues requirements);
+  in {
+    status =
+      if !enabled
+      then "disabled"
+      else if failures != {}
+      then "blocked"
+      else if unsatisfied
+      then "deferred"
+      else "ready";
+    declaredStatus =
+      if !enabled
+      then "disabled"
+      else if failures != {}
+      then "blocked"
+      else if unsatisfied
+      then "pending"
+      else "declared-ready";
+  };
 
   # The manifest is deliberately made only from declarative contract data.
   # It contains paths and identifiers, never secret contents.

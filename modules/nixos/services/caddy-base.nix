@@ -139,68 +139,88 @@ in {
       package = lib.mkDefault cfg.package;
       adapter = "''";
       configFile = pkgs.writeText "Caddyfile" (
-        builtins.toJSON ({
-          apps = {
-            http.servers.main = {
-              listen = [":443"];
+        builtins.toJSON {
+          apps =
+            {
+              http.servers.main = {
+                listen = [":443"];
 
-              inherit (cfg) routes;
-              errors.routes = cfg.blocks;
+                inherit (cfg) routes;
+                errors.routes = cfg.blocks;
 
-              logs = {
-                default_logger_name = defaultLoggerName;
-                logger_names =
-                  lib.mapAttrs' (name: value: {
-                    name = value;
-                    value = name;
-                  })
-                  hostnameMap;
+                logs = {
+                  default_logger_name = defaultLoggerName;
+                  logger_names =
+                    lib.mapAttrs' (name: value: {
+                      name = value;
+                      value = name;
+                    })
+                    hostnameMap;
+                };
+
+                metrics = {};
               };
 
-              metrics = {};
+              tls.automation.policies = cfg.tlsPolicies;
+            }
+            // lib.optionalAttrs (cfg.authProviders != {}) {
+              security.config = {
+                identity_providers =
+                  lib.mapAttrsToList (name: provider: {
+                    inherit name;
+                    kind =
+                      if provider.driver or "generic" == "generic"
+                      then "oauth"
+                      else provider.driver;
+                    params =
+                      {
+                        realm = name;
+                        key_verification_disabled = true;
+                        driver = provider.driver or "generic";
+                      }
+                      // lib.filterAttrs (n: _: n != "driver") provider;
+                  })
+                  cfg.authProviders;
+
+                authentication_portals =
+                  lib.mapAttrsToList (name: _provider: {
+                    inherit name;
+                    identity_providers = [name];
+                    cookie_config.domains = let
+                      authHostnames = lib.unique (lib.concatMap (
+                          route: let
+                            hasAuth = builtins.any (h: let hn = h.handler or ""; in hn == "authenticator" || hn == "http.handlers.authenticator") (route.handle or []);
+                          in
+                            lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
+                        )
+                        cfg.routes);
+                      cookieDomain =
+                        if authHostnames != []
+                        then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
+                        else "";
+                    in
+                      if cookieDomain != ""
+                      then {"${cookieDomain}" = {};}
+                      else {};
+                    ui.private_links = [];
+                  })
+                  cfg.authProviders;
+
+                authorization_policies =
+                  lib.mapAttrsToList (name: _provider: {
+                    inherit name;
+                    access_list_rules = [
+                      {
+                        conditions = ["match role authp/user"];
+                        action = "allow";
+                      }
+                    ];
+                    validate_bearer_header = true;
+                    pass_claims_with_headers = true;
+                  })
+                  cfg.authProviders;
+              };
             };
-
-            tls.automation.policies = cfg.tlsPolicies;
-          }
-          // lib.optionalAttrs (cfg.authProviders != {}) {
-            security.config = {
-              identity_providers = lib.mapAttrsToList (name: provider: {
-                inherit name;
-                kind = if provider.driver or "generic" == "generic" then "oauth" else provider.driver;
-                params = {realm = name; key_verification_disabled = true; driver = provider.driver or "generic";} // lib.filterAttrs (n: _: n != "driver") provider;
-              }) cfg.authProviders;
-
-              authentication_portals = lib.mapAttrsToList (name: _provider: {
-                inherit name;
-                identity_providers = [name];
-                cookie_config.domains =
-                  let
-                    authHostnames = lib.unique (lib.concatMap (route:
-                      let
-                        hasAuth = builtins.any (h: let hn = h.handler or ""; in hn == "authenticator" || hn == "http.handlers.authenticator") (route.handle or []);
-                      in
-                        lib.optionals hasAuth (lib.concatMap (m: m.host or []) (route.match or []))
-                    ) cfg.routes);
-                    cookieDomain =
-                      if authHostnames != []
-                      then lib.concatStringsSep "." (lib.drop 1 (lib.splitString "." (builtins.head authHostnames)))
-                      else "";
-                  in
-                    if cookieDomain != "" then {"${cookieDomain}" = {};} else {};
-                ui.private_links = [];
-              }) cfg.authProviders;
-
-              authorization_policies = lib.mapAttrsToList (name: _provider: {
-                inherit name;
-                access_list_rules = [{
-                  conditions = ["match role authp/user"];
-                  action = "allow";
-                }];
-                validate_bearer_header = true;
-                pass_claims_with_headers = true;
-              }) cfg.authProviders;
-            };
-          };
 
           logging.logs =
             {
@@ -215,82 +235,82 @@ in {
                   ];
               };
 
-            other = {
-              level = "INFO";
-              encoder.format = "json";
-              writer = {
-                output = "file";
-                filename = "${config.services.caddy.logDir}/other.log";
-                roll = true;
-                roll_size_mb = rollSizeMb;
-              };
-              include = ["http.log.access.${defaultLoggerName}"];
-            };
-
-            admin = {
-              level = "INFO";
-              encoder.format = "json";
-              writer = {
-                output = "file";
-                filename = "${config.services.caddy.logDir}/admin.log";
-                roll = true;
-                roll_size_mb = rollSizeMb;
-              };
-              include = ["admin"];
-            };
-
-            tls = {
-              level = "INFO";
-              encoder.format = "json";
-              writer = {
-                output = "file";
-                filename = "${config.services.caddy.logDir}/tls.log";
-                roll = true;
-                roll_size_mb = rollSizeMb;
-              };
-              include = ["tls"];
-            };
-
-            debug = {
-              level = "DEBUG";
-              encoder.format = "json";
-              writer = {
-                output = "file";
-                filename = "${config.services.caddy.logDir}/debug.log";
-                roll = true;
-                roll_keep = 1;
-                roll_size_mb = rollSizeMb;
-              };
-            };
-          }
-          // (lib.mapAttrs (name: _value: {
-              level = "INFO";
-              encoder.format = "json";
-              writer = {
-                output = "file";
-                filename = "${config.services.caddy.logDir}/${name}-access.log";
-                roll = true;
-                roll_size_mb = rollSizeMb;
-              };
-              include = ["http.log.access.${name}"];
-            })
-            hostnameMap)
-          // (lib.mapAttrs' (name: _value: {
-              name = "${name}-error";
-              value = {
-                level = "ERROR";
+              other = {
+                level = "INFO";
                 encoder.format = "json";
                 writer = {
                   output = "file";
-                  filename = "${config.services.caddy.logDir}/${name}-error.log";
+                  filename = "${config.services.caddy.logDir}/other.log";
+                  roll = true;
+                  roll_size_mb = rollSizeMb;
+                };
+                include = ["http.log.access.${defaultLoggerName}"];
+              };
+
+              admin = {
+                level = "INFO";
+                encoder.format = "json";
+                writer = {
+                  output = "file";
+                  filename = "${config.services.caddy.logDir}/admin.log";
+                  roll = true;
+                  roll_size_mb = rollSizeMb;
+                };
+                include = ["admin"];
+              };
+
+              tls = {
+                level = "INFO";
+                encoder.format = "json";
+                writer = {
+                  output = "file";
+                  filename = "${config.services.caddy.logDir}/tls.log";
+                  roll = true;
+                  roll_size_mb = rollSizeMb;
+                };
+                include = ["tls"];
+              };
+
+              debug = {
+                level = "DEBUG";
+                encoder.format = "json";
+                writer = {
+                  output = "file";
+                  filename = "${config.services.caddy.logDir}/debug.log";
+                  roll = true;
+                  roll_keep = 1;
+                  roll_size_mb = rollSizeMb;
+                };
+              };
+            }
+            // (lib.mapAttrs (name: _value: {
+                level = "INFO";
+                encoder.format = "json";
+                writer = {
+                  output = "file";
+                  filename = "${config.services.caddy.logDir}/${name}-access.log";
                   roll = true;
                   roll_size_mb = rollSizeMb;
                 };
                 include = ["http.log.access.${name}"];
-              };
-            })
-            hostnameMap);
-        })
+              })
+              hostnameMap)
+            // (lib.mapAttrs' (name: _value: {
+                name = "${name}-error";
+                value = {
+                  level = "ERROR";
+                  encoder.format = "json";
+                  writer = {
+                    output = "file";
+                    filename = "${config.services.caddy.logDir}/${name}-error.log";
+                    roll = true;
+                    roll_size_mb = rollSizeMb;
+                  };
+                  include = ["http.log.access.${name}"];
+                };
+              })
+              hostnameMap);
+        }
       );
     };
 

@@ -4,11 +4,11 @@
   lib,
   pkgs,
   crossbowBuildPkgs ? pkgs,
-  canixCrossPackage ? (_name: package: package),
   ...
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
+  canixCrossPackage = config._module.args.canixCrossPackage or (_name: package: package);
   secretManagerPkg = canixCrossPackage "secret-manager" inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
   inherit
@@ -302,8 +302,8 @@
       zone.records
     );
     synthesized =
-      lib.optional (cfg.autoSynthesizeServiceCnames) (synthesizedRecordsByZone.${zoneName} or [])
-      ++ lib.optional (cfg.autoSynthesizeCodebergPagesCnames) (synthesizedCodebergPagesByZone.${zoneName} or []);
+      lib.optional cfg.autoSynthesizeServiceCnames (synthesizedRecordsByZone.${zoneName} or [])
+      ++ lib.optional cfg.autoSynthesizeCodebergPagesCnames (synthesizedCodebergPagesByZone.${zoneName} or []);
     filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) (lib.flatten synthesized);
   in
     filteredSynthesized ++ zone.records;
@@ -428,7 +428,7 @@
         else (cfg.zones.${builtins.head (attrNames effectiveZones)}.defaultTtl or 3600);
       zones = mapAttrs zoneToExtraConfig effectiveZones;
     };
-    redirects = cfg.redirects;
+    inherit (cfg) redirects;
   };
 
   token =

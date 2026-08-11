@@ -17,7 +17,6 @@ in {
     upstreamScheme ? "http",
     tlsServerName ? null,
     portalName,
-    cookieDomain ? null,
   }: let
     proxyHandler =
       {
@@ -118,26 +117,26 @@ in {
   }: {
     match = [
       ({
-        host = [hostname];
-      }
-      // lib.optionalAttrs (path != null) {
-        path =
-          if builtins.isList path
-          then path
-          else [path];
-      }
-      // lib.optionalAttrs (queryNot != null) {
-        not = [{query = queryNot;}];
-      })
+          host = [hostname];
+        }
+        // lib.optionalAttrs (path != null) {
+          path =
+            if builtins.isList path
+            then path
+            else [path];
+        }
+        // lib.optionalAttrs (queryNot != null) {
+          not = [{query = queryNot;}];
+        })
     ];
     handle = [
       ({
-        handler = "static_response";
-        status_code = status;
-      }
-      // lib.optionalAttrs (location != null) {
-        headers.Location = [location];
-      })
+          handler = "static_response";
+          status_code = status;
+        }
+        // lib.optionalAttrs (location != null) {
+          headers.Location = [location];
+        })
     ];
   };
 

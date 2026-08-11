@@ -79,7 +79,7 @@
 
   oidcClients = builtins.listToAttrs (
     map (svc: {
-      name = svc.name;
+      inherit (svc) name;
       value = oidcClientFor svc;
     })
     kanidmAuthServices

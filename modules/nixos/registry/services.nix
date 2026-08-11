@@ -307,7 +307,7 @@ in {
         then config.canix-toolbelt.fleetix.topology
         else config.fleetix.topology;
       normalized = fleetixLib.projections.normalize {topology = ft;};
-      services = normalized.services;
+      inherit (normalized) services;
     in {
       canix-toolbelt.services = {
         inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;

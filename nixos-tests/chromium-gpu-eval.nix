@@ -3,8 +3,8 @@
   pkgs,
 }: let
   wrapper = import ../lib/chromiumGpu.nix {
-    lib = pkgs.lib;
-    wrapper-manager = inputs.wrapper-manager;
+    inherit (pkgs) lib;
+    inherit (inputs) wrapper-manager;
   };
   fakePackage = pkgs.symlinkJoin {
     name = "fake-chromium";

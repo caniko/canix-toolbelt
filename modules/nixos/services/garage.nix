@@ -23,7 +23,7 @@
   );
 
   parentDirs = let
-    parents = map (p: dirOf p) allDataPaths;
+    parents = map dirOf allDataPaths;
     outsideDefault = builtins.filter (p: !(isDefaultDir p)) parents;
   in
     lib.unique outsideDefault;
