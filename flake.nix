@@ -15,7 +15,7 @@
     # dns-manager owns reusable DNS schema/rendering/backend code. Toolbelt
     # keeps only host/service-registry integration and the canix DNS wrapper.
     dns-manager = {
-      url = "git+ssh://git@codeberg.org/caniko/dns-manager.git";
+      url = "git+https://codeberg.org/caniko/dns-manager.git";
       inputs = {
         nixpkgs.follows = "nixpkgs";
         treefmt-nix.follows = "treefmt-nix";
@@ -28,7 +28,7 @@
     # Transitional compatibility only: database-specific modules now live in
     # db-harbor and this input can be removed after consumers migrate.
     db-harbor = {
-      url = "git+ssh://git@codeberg.org/caniko/migrationix.git";
+      url = "git+https://codeberg.org/caniko/db-harbor.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     git-hooks = {
