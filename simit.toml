@@ -1,8 +1,9 @@
 [ci]
 provider = "actions"
-platform = "forgejo"
+platform = "github"
 runtime = "nix"
-runner = "atlas-nix-trusted"
+runner = "ubuntu-24.04"
+components = ["flake-evaluation"]
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"
