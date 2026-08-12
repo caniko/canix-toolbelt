@@ -4,11 +4,11 @@
   lib,
   pkgs,
   crossbowBuildPkgs ? pkgs,
-  canixCrossPackage ? (_name: package: package),
   ...
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
+  canixCrossPackage = config._module.args.canixCrossPackage or (_name: package: package);
   secretManagerPkg = canixCrossPackage "secret-manager" inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
   inherit
