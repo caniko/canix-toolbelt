@@ -137,6 +137,20 @@
         description = "Absolute path to this host's user-data filesystem root; the Projects directory convention is dataRoot/Projects.";
       };
 
+      projectStateRoot = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/data/ProjectState";
+        description = "Absolute path to mutable project state on this host.";
+      };
+
+      flakeRoot = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/data/can/canix";
+        description = "Absolute path to the host's canonical flake checkout.";
+      };
+
       gpuIgpu = mkOption {
         type = types.nullOr (types.enum ["amd" "intel"]);
         default = null;
@@ -241,6 +255,8 @@ in {
         hostNames = host.hostNames or [];
         deviceType = host.deviceType or null;
         dataRoot = host.dataRoot or null;
+        projectStateRoot = (host.storage or {}).projectStateRoot or null;
+        flakeRoot = (host.storage or {}).flakeRoot or null;
         users = host.users or {};
         gpuIgpu = (host.gpu or {}).igpu or null;
         gpuDgpu = (host.gpu or {}).dgpu or null;
@@ -248,11 +264,12 @@ in {
         lanBroadcast = host.network.lanBroadcast or null;
         lanInterface = host.network.lanInterface or null;
         wgHomeIp = host.network.wgHomeIp or host.links."wg-home".address or null;
-        wgHomePublicKey = host.network.wgHomePublicKey or (
-          if (host.links."wg-home".role or null) == "server"
-          then host.links."wg-home".publicKey or null
-          else null
-        );
+        wgHomePublicKey =
+          host.network.wgHomePublicKey or (
+            if (host.links."wg-home".role or null) == "server"
+            then host.links."wg-home".publicKey or null
+            else null
+          );
         macAddress = host.network.macAddress or null;
         directLinkIp = host.network.directLinkIp or null;
         directLinkMac = host.network.directLinkMac or null;

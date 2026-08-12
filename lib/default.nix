@@ -18,6 +18,7 @@ in
     nexus = import ./nexus.nix {inherit lib;};
     opencode = import ./opencode.nix {inherit lib;};
     opsShellPackages = import ./opsShellPackages.nix;
+    profiles = import ./profiles.nix {inherit lib;};
     peerRoute = import ./peerRoute.nix;
     projectTree = import ./projectTree.nix {inherit lib;};
     rbac = import ./rbac.nix;

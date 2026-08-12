@@ -61,6 +61,18 @@
     deviceType = "laptop";
     hostToggles = {};
   };
+
+  transitionScript = pkgs.writeText "profile-transition-check.sh" (toolbeltLib.profiles.mkTransitionCheck {
+    profile = "docked";
+    fromEnabled = true;
+    toEnabled = false;
+    currentSystemRoot = "$PWD/current";
+    body = ''
+      [ "$current" = true ]
+      [ "$next" = false ]
+      touch "$PWD/transition-ran"
+    '';
+  });
 in {
   nexus-profiles = pkgs.testers.nixosTest {
     name = "nexus-profiles";
@@ -112,4 +124,23 @@ in {
       printf '%s\n' ${lib.escapeShellArg (toString badEval)} > "$out/bad-eval-path"
     '';
   };
+
+  profile-transition-check =
+    pkgs.runCommand "profile-transition-check" {
+      inherit transitionScript;
+      nativeBuildInputs = [pkgs.bash];
+    } ''
+      set -euo pipefail
+      mkdir -p "$PWD/current/etc/canix-profiles" "$PWD/incoming/etc/canix-profiles"
+      printf 'true\n' > "$PWD/current/etc/canix-profiles/docked.enable"
+      printf 'false\n' > "$PWD/incoming/etc/canix-profiles/docked.enable"
+      bash "$transitionScript" "$PWD/incoming" switch
+      test -e "$PWD/transition-ran"
+      rm "$PWD/transition-ran"
+
+      printf 'false\n' > "$PWD/current/etc/canix-profiles/docked.enable"
+      bash "$transitionScript" "$PWD/incoming" switch
+      test ! -e "$PWD/transition-ran"
+      touch "$out"
+    '';
 }
