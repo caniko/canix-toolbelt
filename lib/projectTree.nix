@@ -20,7 +20,7 @@ in rec {
   inherit primaryClasses protectedClasses;
   layout = {
     primary = {
-      owned = "owned";
+      owned = "repos/owned";
       forks = "forks";
       upstream = "upstream";
     };
