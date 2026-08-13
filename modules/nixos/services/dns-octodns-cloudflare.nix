@@ -9,7 +9,6 @@
 }: let
   cfg = config.canix-toolbelt.dns;
   dnsManager = inputs.dns-manager;
-  secretManagerPkg = canixCrossPackage "secret-manager" inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
   inherit
     (lib)
@@ -34,6 +33,8 @@
     # the target.
     config._module.args.dnsManagerBuildPkgs or crossbowBuildPkgs;
   dnsGenerate = dnsManager.lib.generate effectiveDnsManagerBuildPkgs;
+  secretManagerPkg = canixCrossPackage "secret-manager" inputs.secret-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
+  localSecretManagerPkg = inputs.secret-manager.packages.${effectiveDnsManagerBuildPkgs.stdenv.hostPlatform.system}.default;
   caddyLib = import ../../../lib/caddy.nix {inherit lib;};
   fleetixLib = inputs.fleetix.lib;
 
@@ -277,21 +278,24 @@
   # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
   # to <repoName>.caniko.codeberg.page.
   synthesizedCodebergPagesByZone =
-    foldl'
-    (acc: intent:
-      acc
-      // {
-        ${intent.zone} =
-          (acc.${intent.zone} or [])
-          ++ [
-            (cnameIntentToRecord intent)
-          ];
+    if fleetixLib.services ? pagesCnameIntents
+    then
+      foldl'
+      (acc: intent:
+        acc
+        // {
+          ${intent.zone} =
+            (acc.${intent.zone} or [])
+            ++ [
+              (cnameIntentToRecord intent)
+            ];
+        })
+      {}
+      (fleetixLib.services.pagesCnameIntents {
+        topology = topologyForDnsIntents;
+        baseZone = cfg.codebergPagesZone;
       })
-    {}
-    (fleetixLib.services.pagesCnameIntents {
-      topology = topologyForDnsIntents;
-      baseZone = cfg.codebergPagesZone;
-    });
+    else {};
 
   effectiveRecordsForZone = zoneName: zone: let
     explicitKeys = builtins.listToAttrs (
@@ -324,7 +328,7 @@
 
   secretPlaceholderForRecord = record: "__CANIX_DNS_SECRET_${lib.hashString "sha256" "${normalizeName record.name}|${normalizeType record.type}|${toString record.secretPath}|${toString record.agenixFile}"}__";
 
-  secretReplacementsJson = pkgs.writeText "cloudflare-octodns-secret-records.json" (
+  secretReplacementsJson = effectiveDnsManagerBuildPkgs.writeText "cloudflare-octodns-secret-records.json" (
     builtins.toJSON (
       builtins.map (record: {
         placeholder = secretPlaceholderForRecord record;
@@ -506,6 +510,8 @@
     else throw (concatStringsSep "\n" validationErrors);
 
   mkOctodnsSync = {
+    runtimePkgs ? pkgs,
+    runtimeSecretManagerPkg ? secretManagerPkg,
     cache ? {
       enable = false;
       dir = null;
@@ -525,7 +531,7 @@
       else cacheDir;
     defaultAgeIdentities = concatStringsSep ":" (builtins.map toString cfg.agenix.identityPaths);
   in
-    pkgs.writeShellScript "cloudflare-octodns-sync" ''
+    runtimePkgs.writeShellScript "cloudflare-octodns-sync" ''
       set -euo pipefail
       if [ "$#" -lt 1 ]; then
         echo "usage: cloudflare-octodns-sync <config-dir> [octodns-sync args...]" >&2
@@ -534,16 +540,16 @@
       source_config="$1"
       shift
 
-      workdir="$(${pkgs.coreutils}/bin/mktemp -d)"
-      trap '${pkgs.coreutils}/bin/rm -rf "$workdir"' EXIT
-      ${pkgs.coreutils}/bin/cp -RL "$source_config"/. "$workdir/config"
-      ${pkgs.coreutils}/bin/chmod -R u+w "$workdir/config"
-      export SECRET_MANAGER_BIN=${secretManagerPkg}/bin/secret-manager
+      workdir="$(${runtimePkgs.coreutils}/bin/mktemp -d)"
+      trap '${runtimePkgs.coreutils}/bin/rm -rf "$workdir"' EXIT
+      ${runtimePkgs.coreutils}/bin/cp -RL "$source_config"/. "$workdir/config"
+      ${runtimePkgs.coreutils}/bin/chmod -R u+w "$workdir/config"
+      export SECRET_MANAGER_BIN=${runtimeSecretManagerPkg}/bin/secret-manager
       export CANIX_DNS_AGE_IDENTITIES="''${CANIX_DNS_AGE_IDENTITIES:-${defaultAgeIdentities}}"
       ${lib.optionalString cacheEnabled ''
         export CANIX_DNS_DECRYPT_CACHE_DIR="${validatedCacheDir}"
       ''}
-      ${pkgs.python3}/bin/python ${./dns-octodns-cloudflare-substitute-secrets.py} \
+      ${runtimePkgs.python3}/bin/python ${./dns-octodns-cloudflare-substitute-secrets.py} \
         "$workdir/config" "$source_config/zones" "$workdir/config/zones" \
         - ${secretReplacementsJson} "$@"
 
@@ -551,25 +557,25 @@
         encrypted_file="$1"
         ${lib.optionalString cacheEnabled ''
         cache_dir="${validatedCacheDir}"
-        ${pkgs.coreutils}/bin/mkdir -p "$cache_dir"
-        ${pkgs.coreutils}/bin/chmod 0700 "$cache_dir" || {
+        ${runtimePkgs.coreutils}/bin/mkdir -p "$cache_dir"
+        ${runtimePkgs.coreutils}/bin/chmod 0700 "$cache_dir" || {
           echo "failed to set cache dir perms to 0700: $cache_dir" >&2
           return 1
         }
-        cache_dir_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_dir")" || return 1
+        cache_dir_mode="$(${runtimePkgs.coreutils}/bin/stat -c %a "$cache_dir")" || return 1
         if [ "$cache_dir_mode" != 700 ]; then
           echo "cache dir perms not 0700: $cache_dir" >&2
           return 1
         fi
-        cache_key="$(${pkgs.coreutils}/bin/sha256sum "$encrypted_file" | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
+        cache_key="$(${runtimePkgs.coreutils}/bin/sha256sum "$encrypted_file" | ${runtimePkgs.coreutils}/bin/cut -d' ' -f1)"
         cache_file="$cache_dir/$cache_key"
         if [ -r "$cache_file" ]; then
-          cache_file_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
+          cache_file_mode="$(${runtimePkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
           if [ "$cache_file_mode" != 600 ]; then
             echo "cache file perms not 0600: $cache_file" >&2
             return 1
           fi
-          ${pkgs.coreutils}/bin/cat "$cache_file"
+          ${runtimePkgs.coreutils}/bin/cat "$cache_file"
           return 0
         fi
       ''}
@@ -583,23 +589,23 @@
           for identity in "$@"; do
             identity_args="$identity_args --identity $identity"
           done
-          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt $identity_args "$encrypted_file")" || return 1
+          plaintext="$(${runtimeSecretManagerPkg}/bin/secret-manager decrypt $identity_args "$encrypted_file")" || return 1
         else
-          plaintext="$(${secretManagerPkg}/bin/secret-manager decrypt "$encrypted_file")" || return 1
+          plaintext="$(${runtimeSecretManagerPkg}/bin/secret-manager decrypt "$encrypted_file")" || return 1
         fi
         ${lib.optionalString cacheEnabled ''
-        tmp="$(${pkgs.coreutils}/bin/mktemp "$cache_dir/.tmp.XXXXXX")" || return 1
+        tmp="$(${runtimePkgs.coreutils}/bin/mktemp "$cache_dir/.tmp.XXXXXX")" || return 1
         cleanup_tmp() {
-          ${pkgs.coreutils}/bin/rm -f "$tmp"
+          ${runtimePkgs.coreutils}/bin/rm -f "$tmp"
         }
         trap cleanup_tmp RETURN
-        ${pkgs.coreutils}/bin/chmod 0600 "$tmp" || return 1
+        ${runtimePkgs.coreutils}/bin/chmod 0600 "$tmp" || return 1
         printf '%s' "$plaintext" > "$tmp" || return 1
-        ${pkgs.coreutils}/bin/sync -f "$tmp" || return 1
-        ${pkgs.coreutils}/bin/mv -f "$tmp" "$cache_file" || return 1
+        ${runtimePkgs.coreutils}/bin/sync -f "$tmp" || return 1
+        ${runtimePkgs.coreutils}/bin/mv -f "$tmp" "$cache_file" || return 1
         trap - RETURN
-        ${pkgs.coreutils}/bin/chmod 0600 "$cache_file" || return 1
-        cache_file_mode="$(${pkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
+        ${runtimePkgs.coreutils}/bin/chmod 0600 "$cache_file" || return 1
+        cache_file_mode="$(${runtimePkgs.coreutils}/bin/stat -c %a "$cache_file")" || return 1
         if [ "$cache_file_mode" != 600 ]; then
           echo "cache file perms not 0600: $cache_file" >&2
           return 1
@@ -611,10 +617,10 @@
 
       if [ -z "''${CLOUDFLARE_API_TOKEN:-}" ]; then
         if [ -n "''${CLOUDFLARE_API_TOKEN_FILE:-}" ] && [ -r "$CLOUDFLARE_API_TOKEN_FILE" ]; then
-          export CLOUDFLARE_API_TOKEN="$(${pkgs.coreutils}/bin/cat "$CLOUDFLARE_API_TOKEN_FILE")"
+          export CLOUDFLARE_API_TOKEN="$(${runtimePkgs.coreutils}/bin/cat "$CLOUDFLARE_API_TOKEN_FILE")"
         ${lib.optionalString (cfg.cloudflareToken.secretPath != null) ''
         elif [ -r ${lib.escapeShellArg (toString cfg.cloudflareToken.secretPath)} ]; then
-          export CLOUDFLARE_API_TOKEN="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg (toString cfg.cloudflareToken.secretPath)})"
+          export CLOUDFLARE_API_TOKEN="$(${runtimePkgs.coreutils}/bin/cat ${lib.escapeShellArg (toString cfg.cloudflareToken.secretPath)})"
       ''}
         ${lib.optionalString (cfg.cloudflareToken.agenixFile != null) ''
         elif [ -r ${lib.escapeShellArg (toString cfg.cloudflareToken.agenixFile)} ]; then
@@ -632,7 +638,7 @@
         fi
       fi
 
-      exec ${pkgs.octodns.withProviders (_: [pkgs.octodns-providers.cloudflare])}/bin/octodns-sync --config-file "$workdir/config/config.yaml" "$@"
+      exec ${runtimePkgs.octodns-providers.cloudflare}/bin/octodns-sync --config-file "$workdir/config/config.yaml" "$@"
     '';
 
   octodnsSync = mkOctodnsSync {};
@@ -646,7 +652,7 @@
   octodnsConfig = mkOctodnsConfig;
   caddyRedirectRoutes = builtins.map caddyLib.mkRedirectRoute cfg.redirects;
 
-  octodnsConfigLocal = pkgs.linkFarm "cloudflare-octodns-local" [
+  octodnsConfigLocal = effectiveDnsManagerBuildPkgs.linkFarm "cloudflare-octodns-local" [
     {
       name = "config.yaml";
       path = "${mkOctodnsConfig}/config.yaml";
@@ -657,11 +663,15 @@
     }
     {
       name = "octodns-sync-cloudflare";
-      path = mkOctodnsSync {cache = cfg.localCache;};
+      path = mkOctodnsSync {
+        runtimePkgs = effectiveDnsManagerBuildPkgs;
+        runtimeSecretManagerPkg = localSecretManagerPkg;
+        cache = cfg.localCache;
+      };
     }
   ];
 
-  reconcilerEnabled = cfg.enable && cfg.cloudflareToken.secretPath != null;
+  reconcilerEnabled = cfg.enable && cfg.reconciler.enable && cfg.cloudflareToken.secretPath != null;
   applyExtraArgs =
     concatStringsSep " "
     (["--doit"] ++ lib.optional cfg.reconciler.applyForce "--force" ++ cfg.reconciler.extraApplyArgs);
@@ -763,6 +773,12 @@ in {
     };
 
     reconciler = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Run octoDNS reconciliation services on this host. Disable when reconciliation is performed from a local flake app.";
+      };
+
       user = mkOption {
         type = types.str;
         default = "cloudflare-octodns";
