@@ -62,7 +62,7 @@ in
             namespace = "caniko";
             repository = "demo";
           }
-          == "owned/demo";
+          == "repos/owned/demo";
         message = "owned project paths must follow class/repository";
       }
       {
