@@ -62,8 +62,17 @@ in
             namespace = "caniko";
             repository = "demo";
           }
-          == "owned/demo";
-        message = "owned project paths must follow class/repository";
+          == "repos/owned/demo";
+        message = "owned project paths must be flat under repos/owned";
+      }
+      {
+        name = "owned-repository-is-a-leaf";
+        assertion =
+          !(builtins.tryEval (projectTree.projectPath {
+            class = "owned";
+            repository = "codeberg.org/caniko/demo";
+          })).success;
+        message = "forge and namespace must not become owned checkout path components";
       }
       {
         name = "worktree-path";

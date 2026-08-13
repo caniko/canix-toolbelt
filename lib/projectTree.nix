@@ -20,7 +20,7 @@ in rec {
   inherit primaryClasses protectedClasses;
   layout = {
     primary = {
-      owned = "owned";
+      owned = "repos/owned";
       forks = "forks";
       upstream = "upstream";
     };
@@ -42,6 +42,8 @@ in rec {
   }:
     if !builtins.elem class primaryClasses
     then throw "canix-toolbelt projectTree: unsupported primary class ${class}"
+    else if class == "owned" && lib.hasInfix "/" repository
+    then throw "canix-toolbelt projectTree: owned repository must be one path segment"
     else "${layout.primary.${class}}/${clean "repository" repository}";
 
   worktreePath = {
