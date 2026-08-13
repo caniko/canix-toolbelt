@@ -44,12 +44,16 @@
   };
 
   wg = plain.networking.wireguard.interfaces.wg0;
+  setupScript = plain.systemd.services.netns-vpn-setup.serviceConfig.ExecStart;
   qbitFwd = plain.systemd.services."netns-vpn-forward-qbittorrent".serviceConfig.ExecStart;
   socksFwdExists = plain.systemd.services ? "netns-vpn-forward-microsocks";
 in
   mkEvalCheck {
     name = "vpn-netns-eval";
     resultMessage = "vpn-netns module wires netns, wireguard, forwards and wrapped apps";
+    runtimeScript = ''
+      grep -q '^#!' ${setupScript}
+    '';
     assertions = [
       {
         name = "wireguard-in-namespace";

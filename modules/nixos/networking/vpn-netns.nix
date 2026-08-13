@@ -286,7 +286,7 @@ in {
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
-            ExecStart = pkgs.writeScript "vpn-netns-setup" ''
+            ExecStart = pkgs.writeShellScript "vpn-netns-setup" ''
               set -eu
               ${pkgs.iproute2}/bin/ip -n ${cfg.name} link set lo up
               ${pkgs.iproute2}/bin/ip -n ${cfg.name} route replace default dev ${wgIface}
