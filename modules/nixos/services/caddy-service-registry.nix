@@ -1,303 +1,169 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }: let
-  inherit (lib) mkIf mkMerge mkOption nameValuePair types;
   caddyLib = import ../../../lib/caddy.nix {inherit lib;};
   cfg = config.canix-toolbelt.services.caddy;
   serviceCfg = config.canix-toolbelt.services;
-  oidcCfg = cfg.oidc;
+  hostname = config.networking.hostName;
 
-  dialAddress = svc: targetHost: let
-    isLocal =
-      if svc.local != null
-      then svc.local
-      else targetHost == config.networking.hostName;
+  resolveEndpoint = endpointName: let
+    source = serviceCfg.endpoints.${endpointName} or (throw "canix-toolbelt Caddy registry: unknown endpoint `${endpointName}`");
+    selectedName =
+      if source.bind == "loopback" && source.targetHost != hostname
+      then source.remoteVia or (throw "canix-toolbelt Caddy registry: loopback endpoint `${endpointName}` has no remoteVia endpoint for ingress host `${hostname}`")
+      else endpointName;
+    selected = serviceCfg.endpoints.${selectedName} or (throw "canix-toolbelt Caddy registry: endpoint `${endpointName}` references missing remoteVia endpoint `${selectedName}`");
+    target = config.canix-toolbelt.hosts.${selected.targetHost} or {};
+    address =
+      if selected.bind == "loopback"
+      then "127.0.0.1"
+      else target.lanIp or (throw "canix-toolbelt Caddy registry: LAN endpoint `${selectedName}` target `${selected.targetHost}` has no lanIp");
   in
-    if isLocal
-    then "127.0.0.1"
-    else config.canix-toolbelt.hosts.${targetHost}.lanIp;
-
-  serviceRoutes = svc:
-    if svc.routes == []
-    then [
-      {
-        paths = [];
-        targetHost = svc.targetHost;
-        port =
-          if svc.proxied
-          then 80
-          else svc.port;
-        upstreamScheme = svc.upstreamScheme;
-        tlsServerName = svc.tlsServerName;
-        stripPrefix = null;
-      }
-    ]
-    else svc.routes;
-
-  reverseProxyRoute = svc: route: let
-    targetHost =
-      if route.targetHost != null
-      then route.targetHost
-      else svc.targetHost;
-    paths = route.paths;
-    port =
-      if route.port != null
-      then route.port
-      else if svc.proxied
-      then 80
-      else svc.port;
-    upstreamScheme =
-      if route.upstreamScheme != null
-      then route.upstreamScheme
-      else svc.upstreamScheme;
-    tlsServerName =
-      if route.tlsServerName != null
-      then route.tlsServerName
-      else svc.tlsServerName;
-    stripPrefix = route.stripPrefix;
-  in
-    if svc.auth.enable
-    then
-      caddyLib.mkAuthServiceRoute {
-        inherit (svc) hostname;
-        inherit paths stripPrefix port upstreamScheme tlsServerName;
-        host = dialAddress svc targetHost;
-        portalName = svc.name;
-      }
-    else
-      caddyLib.mkReverseProxyRoute {
-        inherit (svc) hostname;
-        inherit paths stripPrefix port upstreamScheme tlsServerName;
-        host = dialAddress svc targetHost;
-        inherit (cfg) goatcounterUrl;
-        injectAnalytics = cfg.goatcounterUrl != null;
-      };
-
-  staticFileRoute = svc: let
-    root =
-      if svc.staticRootName != null
-      then cfg.staticRoots.${svc.staticRootName}
-      else svc.staticRoot;
-  in
-    caddyLib.mkStaticFileRoute {
-      inherit (svc) hostname;
-      inherit root;
+    selected
+    // {
+      name = selectedName;
+      sourceEndpoint = endpointName;
+      inherit address;
     };
 
-  proxyServices = let
-    all = serviceCfg.reverseProxyServices;
+  renderRoute = site: route:
+    caddyLib.mkHttpRoute {
+      inherit (site) hostname;
+      inherit route;
+      endpoint =
+        if route.action.type == "proxy"
+        then resolveEndpoint route.action.endpoint
+        else null;
+      staticRoots = cfg.staticRoots;
+    };
+
+  sitesForGroup = groupName:
+    lib.filterAttrs (_: site: site.ingress == groupName) serviceCfg.httpSites;
+
+  groupIsActive = groupName: group:
+    builtins.elem hostname group.hosts
+    && (cfg.ingressListeners.${groupName} or []) != [];
+
+  ingressServers = lib.mapAttrs' (groupName: group: let
+    sites = sitesForGroup groupName;
+    siteValues = builtins.attrValues sites;
+    cloudflareSites = builtins.filter (site: site.access == "cloudflare") siteValues;
+    directHosts = map (site: site.hostname) (builtins.filter (site: site.access == "direct") siteValues);
   in
-    if cfg.excludeVpnOnly
-    then lib.filter (svc: !svc.vpnOnly) all
-    else all;
+    lib.nameValuePair groupName {
+      listen = cfg.ingressListeners.${groupName};
+      routes = lib.concatMap (site: map (renderRoute site) site.routes) siteValues;
+      cidrAllowlist = lib.optionals (group.scope == "public" && cloudflareSites != []) cfg.cloudflareCidrs;
+      cidrExemptHosts = lib.optionals (group.scope == "public") directHosts;
+    }) (lib.filterAttrs groupIsActive serviceCfg.ingressGroups);
 
-  staticServices = let
-    all = serviceCfg.staticFileServices;
+  relayUses = lib.concatMap (siteName: let
+    site = serviceCfg.httpSites.${siteName};
   in
-    if cfg.excludeVpnOnly
-    then lib.filter (svc: !svc.vpnOnly) all
-    else all;
+    lib.concatMap (route:
+      if route.action.type != "proxy"
+      then []
+      else let
+        source = serviceCfg.endpoints.${route.action.endpoint} or null;
+      in
+        lib.optional (source != null && source.bind == "loopback" && source.remoteVia != null && source.targetHost == hostname) {
+          inherit site source;
+          sourceName = route.action.endpoint;
+          relayName = source.remoteVia;
+        })
+    site.routes) (builtins.attrNames serviceCfg.httpSites);
 
-  caddyRoutes =
-    (lib.concatMap (svc: map (reverseProxyRoute svc) (serviceRoutes svc)) proxyServices)
-    ++ (map staticFileRoute staticServices);
+  relayNames = lib.unique (map (use: use.relayName) relayUses);
+  relayServers = builtins.listToAttrs (map (relayName: let
+    relay = serviceCfg.endpoints.${relayName} or (throw "canix-toolbelt Caddy registry: missing relay endpoint `${relayName}`");
+    relayHost = config.canix-toolbelt.hosts.${relay.targetHost} or {};
+    address =
+      if relay.targetHost != hostname || relay.bind != "lan"
+      then throw "canix-toolbelt Caddy registry: relay endpoint `${relayName}` must be LAN-bound on `${hostname}`"
+      else relayHost.lanIp or (throw "canix-toolbelt Caddy registry: relay endpoint `${relayName}` target `${relay.targetHost}` has no lanIp");
+    uses = builtins.filter (use: use.relayName == relayName) relayUses;
+  in
+    lib.nameValuePair "relay-${relayName}" {
+      listen = ["${address}:${toString relay.port}"];
+      routes = lib.unique (map (use:
+        caddyLib.mkRelayRoute {
+          hostname = use.site.hostname;
+          endpoint =
+            use.source
+            // {
+              name = use.sourceName;
+              address = "127.0.0.1";
+            };
+        })
+      uses);
+      metrics = false;
+    })
+  relayNames);
 
-  nonCloudflareHostnames = lib.unique (
-    map (svc: svc.hostname) (
-      lib.filter (svc: !svc.cloudflareProxied) (
-        proxyServices ++ staticServices
-      )
-    )
-  );
-
-  hasAuthServices = lib.any (svc: svc.auth.enable) proxyServices;
-  kanidmAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider == "kanidm") proxyServices;
-  unsupportedAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider != "kanidm") proxyServices;
-
+  activeSites = builtins.attrValues (lib.filterAttrs (_: site: let
+    group = serviceCfg.ingressGroups.${site.ingress} or null;
+  in
+    group != null && groupIsActive site.ingress group)
+  serviceCfg.httpSites);
+  activeRoutes = lib.concatMap (site: site.routes) activeSites;
+  authPolicies = lib.unique (builtins.filter (policy: policy != null) (map (route: route.authPolicy) activeRoutes));
   caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
 
-  secretAttrName = name: "${name}-oidc-client-secret";
-  secretPlaintextName = name: builtins.replaceStrings ["-"] ["_"] (secretAttrName name);
-  envVarName = name: lib.toUpper (builtins.replaceStrings ["-" "."] ["_" "_"] (secretAttrName name));
-
-  oidcClientFor = svc: {
-    clientSecretFile = config.age.secrets.${secretAttrName svc.name}.path;
-    envVar = envVarName svc.name;
-  };
-
-  oidcClients = builtins.listToAttrs (
-    map (svc: {
-      name = svc.name;
-      value = oidcClientFor svc;
+  siteAssertions =
+    lib.mapAttrsToList (siteName: site: let
+      group = serviceCfg.ingressGroups.${site.ingress} or null;
+    in {
+      assertion =
+        group
+        != null
+        && ((site.access == "vpn") == (group.scope == "vpn"));
+      message = "canix-toolbelt Caddy registry: site `${siteName}` must reference an ingress group whose scope matches access `${site.access}`";
     })
-    kanidmAuthServices
-  );
+    serviceCfg.httpSites;
 
-  oidcEnvFile = "/run/canix-caddy-oidc/env";
-  oidcEnvService = "canix-caddy-oidc-env";
-  renderOidcEnv = let
-    renderOne = svc: ''
-      val="$(tr -d '\n' < ${lib.escapeShellArg oidcClients.${svc.name}.clientSecretFile})"
-      printf '%s=%s\n' ${lib.escapeShellArg oidcClients.${svc.name}.envVar} "$val" >> "$tmp"
-    '';
-  in ''
-    set -eu
-    umask 077
-    tmp="${oidcEnvFile}.tmp"
-    : > "$tmp"
-    ${lib.concatMapStrings renderOne kanidmAuthServices}
-    chmod 0400 "$tmp"
-    mv "$tmp" ${lib.escapeShellArg oidcEnvFile}
-  '';
+  routeAssertions = lib.concatMap (siteName: let
+    site = serviceCfg.httpSites.${siteName};
+  in
+    map (route: let
+      endpoint =
+        if route.action.type == "proxy"
+        then serviceCfg.endpoints.${route.action.endpoint} or null
+        else null;
+    in {
+      assertion =
+        route.action.type
+        != "proxy"
+        || (endpoint != null && endpoint.transport != "tcp");
+      message = "canix-toolbelt Caddy registry: site `${siteName}` proxy routes require a non-TCP endpoint";
+    })
+    site.routes) (builtins.attrNames serviceCfg.httpSites);
 in {
-  imports = [
-    ./caddy-base.nix
-  ];
+  imports = [./caddy-base.nix];
 
-  options.canix-toolbelt.services.caddy = {
-    useServiceRegistry = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Whether to synthesize Caddy routes from the canix-toolbelt service registry.";
-    };
+  config = lib.mkIf cfg.enable {
+    assertions =
+      siteAssertions
+      ++ routeAssertions
+      ++ map (policy: {
+        assertion = builtins.hasAttr policy cfg.authProviders;
+        message = "canix-toolbelt Caddy registry: authPolicy `${policy}` is missing from canix-toolbelt.services.caddy.authProviders";
+      })
+      authPolicies
+      ++ lib.mapAttrsToList (groupName: group: {
+        assertion =
+          !groupIsActive groupName group
+          || group.scope != "public"
+          || (builtins.filter (site: site.access == "cloudflare") (builtins.attrValues (sitesForGroup groupName))) == []
+          || cfg.cloudflareCidrs != [];
+        message = "canix-toolbelt Caddy registry: public ingress group `${groupName}` serves Cloudflare sites but cloudflareCidrs is empty";
+      })
+      serviceCfg.ingressGroups;
 
-    excludeVpnOnly = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Whether to drop vpnOnly services from synthesized Caddy routes. Use on a standby ingress host that must not proxy VPN-only backends.";
-    };
-
-    staticRoots = mkOption {
-      type = types.attrsOf types.path;
-      default = {};
-      description = "Named static content roots referenced by staticFileServices.staticRootName.";
-    };
-
-    oidc = {
-      enable = mkOption {
-        type = types.bool;
-        default = cfg.useServiceRegistry;
-        defaultText = lib.literalExpression "config.canix-toolbelt.services.caddy.useServiceRegistry";
-        description = "Whether to synthesize OIDC clients for authenticated service-registry routes.";
-      };
-
-      kanidmDomain = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Kanidm domain used for synthesized Caddy OIDC provider metadata URLs.";
-      };
-
-      secretPath = mkOption {
-        type = types.functionTo types.path;
-        default = name: throw "canix-toolbelt.services.caddy.oidc.secretPath is required for authenticated OIDC service ${name}";
-        description = "Function mapping a service name to its agenix source file.";
-      };
-
-      clients = mkOption {
-        type = types.attrsOf (types.submodule {
-          options = {
-            clientSecretFile = mkOption {
-              type = types.str;
-              description = "Runtime path to the generated OIDC client secret.";
-            };
-
-            envVar = mkOption {
-              type = types.str;
-              description = "Environment variable used by caddy-security for this client secret.";
-            };
-          };
-        });
-        default = {};
-        description = "Generated Caddy OIDC client metadata keyed by service name.";
-      };
-
-      environmentFile = mkOption {
-        type = types.str;
-        default = oidcEnvFile;
-        readOnly = true;
-        description = "Runtime Caddy EnvironmentFile containing generated OIDC client secrets.";
-      };
+    canix-toolbelt.services.caddy = {
+      servers = ingressServers // relayServers;
+      plugins = lib.mkIf (cfg.authProviders != {}) (lib.mkBefore [caddySecurityPlugin]);
     };
   };
-
-  config = mkIf cfg.useServiceRegistry (mkMerge [
-    {
-      assertions = [
-        {
-          assertion = !oidcCfg.enable || kanidmAuthServices == [] || oidcCfg.kanidmDomain != null;
-          message = "canix-toolbelt.services.caddy.oidc.kanidmDomain is required when authenticated Kanidm service-registry routes are enabled.";
-        }
-        {
-          assertion = !oidcCfg.enable || unsupportedAuthServices == [];
-          message = "canix-toolbelt.services.caddy.oidc only supports auth.provider = \"kanidm\"; unsupported authenticated services: ${lib.concatMapStringsSep ", " (svc: "${svc.name} (${svc.auth.provider})") unsupportedAuthServices}";
-        }
-      ];
-
-      canix-toolbelt.services.caddy = {
-        routes = caddyRoutes;
-        cidrExemptHosts = nonCloudflareHostnames;
-
-        # Auto-add caddy-security plugin when any service uses auth.
-        plugins = mkIf hasAuthServices (lib.mkBefore [caddySecurityPlugin]);
-      };
-    }
-    (mkIf (oidcCfg.enable && kanidmAuthServices != []) {
-      age.secrets = builtins.listToAttrs (
-        map (svc:
-          nameValuePair (secretAttrName svc.name) {
-            name = secretPlaintextName svc.name;
-            rekeyFile = oidcCfg.secretPath svc.name;
-            generator.script = "alnum";
-            owner = "root";
-            group = "kanidm";
-            mode = "0440";
-          })
-        kanidmAuthServices
-      );
-
-      canix-toolbelt.services.caddy = {
-        oidc.clients = oidcClients;
-        authProviders = builtins.listToAttrs (
-          map (svc:
-            nameValuePair svc.name {
-              driver = "generic";
-              client_id = svc.name;
-              metadata_url = "https://${oidcCfg.kanidmDomain}/oauth2/openid/${svc.name}/.well-known/openid-configuration";
-              scopes = [
-                "openid"
-                "profile"
-                "email"
-              ];
-              client_secret = "{env.${oidcClients.${svc.name}.envVar}}";
-            })
-          kanidmAuthServices
-        );
-      };
-
-      systemd.services.${oidcEnvService} = {
-        description = "Render Caddy OIDC client secret environment";
-        before = ["caddy.service"];
-        wantedBy = ["caddy.service"];
-        path = [pkgs.coreutils];
-
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          RuntimeDirectory = "canix-caddy-oidc";
-          RuntimeDirectoryMode = "0700";
-        };
-
-        script = renderOidcEnv;
-      };
-
-      systemd.services.caddy = {
-        requires = ["${oidcEnvService}.service"];
-        after = ["${oidcEnvService}.service"];
-        serviceConfig.EnvironmentFile = oidcCfg.environmentFile;
-      };
-    })
-  ]);
 }

@@ -147,8 +147,7 @@
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
-            caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
-            caddy-ingress-ha-eval = import ./nixos-tests/caddy-ingress-ha-eval.nix {inherit pkgs;};
+            service-topology-v2-eval = import ./nixos-tests/service-topology-v2-eval.nix {inherit inputs pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
