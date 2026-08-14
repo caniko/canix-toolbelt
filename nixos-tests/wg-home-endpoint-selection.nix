@@ -33,6 +33,7 @@
               enableDns = false;
               privateKeyFile = "/run/secrets/wg-home";
               ipv6RetryCooldownSeconds = 900;
+              additionalAllowedIPs = ["192.168.178.1/32"];
             };
           };
         };
@@ -54,6 +55,16 @@ in
         name = "nixpkgs-refresh-disabled";
         assertion = peer.endpoint == null && peer.dynamicEndpointRefreshSeconds == 0;
         message = "the peer must start without hostname resolution or nixpkgs refresh";
+      }
+      {
+        name = "additional-routes-are-declarative";
+        assertion = peer.allowedIPs == ["10.123.0.0/24" "192.168.178.1/32"];
+        message = "additional destination CIDRs must be appended to the VPN CIDR";
+      }
+      {
+        name = "additional-routes-use-wireguard-routes";
+        assertion = evaluated.config.networking.wireguard.interfaces.wg-home.allowedIPsAsRoutes;
+        message = "additional destination CIDRs must use NixOS WireGuard route lifecycle";
       }
       {
         name = "selector-owns-persistent-state";

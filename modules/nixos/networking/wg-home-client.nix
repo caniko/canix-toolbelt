@@ -323,6 +323,12 @@ in {
       description = "Seconds to wait before restarting the wg-home endpoint selection service after failure.";
     };
 
+    additionalAllowedIPs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      description = "Additional destination CIDRs routed through the wg-home server.";
+    };
+
     ipv6RetryCooldownSeconds = lib.mkOption {
       type = lib.types.ints.positive;
       default = 900;
@@ -371,7 +377,7 @@ in {
         peers = [
           {
             publicKey = wgServerPublicKey;
-            allowedIPs = [config.canix-toolbelt.networking.links.wg-home.cidr];
+            allowedIPs = [config.canix-toolbelt.networking.links.wg-home.cidr] ++ cfg.additionalAllowedIPs;
             endpoint = null;
             dynamicEndpointRefreshSeconds = 0;
             persistentKeepalive = 25;
