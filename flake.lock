@@ -834,11 +834,11 @@
         "rev": "a45718d96cdde0101ef8c20942fada0b188745f0",
         "revCount": 1,
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       },
       "original": {
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       }
     },
     "nix-opencode-lsp_2": {
@@ -857,11 +857,11 @@
         "rev": "a45718d96cdde0101ef8c20942fada0b188745f0",
         "revCount": 1,
         "type": "git",
-        "url": "https://codeberg.org/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       }
     },
     "nixpkgs": {
