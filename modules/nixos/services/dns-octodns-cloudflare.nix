@@ -513,6 +513,10 @@
   }: let
     cacheEnabled = cache.enable or false;
     cacheDir = cache.dir or null;
+    octodnsEnv = pkgs.python3.withPackages (_: [
+      pkgs.octodns
+      pkgs.octodns-providers.cloudflare
+    ]);
     validatedCacheDir =
       if !cacheEnabled
       then null
@@ -632,7 +636,7 @@
         fi
       fi
 
-      exec ${pkgs.octodns.withProviders (_: [pkgs.octodns-providers.cloudflare])}/bin/octodns-sync --config-file "$workdir/config/config.yaml" "$@"
+      exec ${octodnsEnv}/bin/octodns-sync --config-file "$workdir/config/config.yaml" "$@"
     '';
 
   octodnsSync = mkOctodnsSync {};
