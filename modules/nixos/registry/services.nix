@@ -270,6 +270,11 @@
         default = null;
         description = "Directory served as the static file root";
       };
+      staticRootName = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Name of a named root from canix-toolbelt.services.caddy.staticRoots; takes precedence over staticRoot.";
+      };
       cloudflareProxied = mkOption {
         type = types.bool;
         default = true;
@@ -378,18 +383,6 @@ in {
         inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;
       };
     }))
-
-    (let
-      localPorts = lib.unique (lib.concatMap (
-          service:
-            map (route: routePort service route) (
-              filter (route: routeTargetHost service route == config.networking.hostName) (serviceRoutes service)
-            )
-        )
-        config.canix-toolbelt.services.reverseProxyServices);
-    in {
-      networking.firewall.allowedTCPPorts = localPorts;
-    })
 
     (let
       hostname = config.networking.hostName;
