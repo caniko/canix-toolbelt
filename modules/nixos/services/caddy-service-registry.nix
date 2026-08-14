@@ -76,27 +76,46 @@
         injectAnalytics = cfg.goatcounterUrl != null;
       };
 
-  staticFileRoute = svc:
+  staticFileRoute = svc: let
+    root =
+      if svc.staticRootName != null
+      then cfg.staticRoots.${svc.staticRootName}
+      else svc.staticRoot;
+  in
     caddyLib.mkStaticFileRoute {
       inherit (svc) hostname;
-      root = svc.staticRoot;
+      inherit root;
     };
 
+  proxyServices = let
+    all = serviceCfg.reverseProxyServices;
+  in
+    if cfg.excludeVpnOnly
+    then lib.filter (svc: !svc.vpnOnly) all
+    else all;
+
+  staticServices = let
+    all = serviceCfg.staticFileServices;
+  in
+    if cfg.excludeVpnOnly
+    then lib.filter (svc: !svc.vpnOnly) all
+    else all;
+
   caddyRoutes =
-    (lib.concatMap (svc: map (reverseProxyRoute svc) (serviceRoutes svc)) serviceCfg.reverseProxyServices)
-    ++ (map staticFileRoute serviceCfg.staticFileServices);
+    (lib.concatMap (svc: map (reverseProxyRoute svc) (serviceRoutes svc)) proxyServices)
+    ++ (map staticFileRoute staticServices);
 
   nonCloudflareHostnames = lib.unique (
     map (svc: svc.hostname) (
       lib.filter (svc: !svc.cloudflareProxied) (
-        serviceCfg.reverseProxyServices ++ serviceCfg.staticFileServices
+        proxyServices ++ staticServices
       )
     )
   );
 
-  hasAuthServices = lib.any (svc: svc.auth.enable) serviceCfg.reverseProxyServices;
-  kanidmAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider == "kanidm") serviceCfg.reverseProxyServices;
-  unsupportedAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider != "kanidm") serviceCfg.reverseProxyServices;
+  hasAuthServices = lib.any (svc: svc.auth.enable) proxyServices;
+  kanidmAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider == "kanidm") proxyServices;
+  unsupportedAuthServices = lib.filter (svc: svc.auth.enable && svc.auth.provider != "kanidm") proxyServices;
 
   caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
 
@@ -143,6 +162,18 @@ in {
       type = types.bool;
       default = false;
       description = "Whether to synthesize Caddy routes from the canix-toolbelt service registry.";
+    };
+
+    excludeVpnOnly = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Whether to drop vpnOnly services from synthesized Caddy routes. Use on a standby ingress host that must not proxy VPN-only backends.";
+    };
+
+    staticRoots = mkOption {
+      type = types.attrsOf types.path;
+      default = {};
+      description = "Named static content roots referenced by staticFileServices.staticRootName.";
     };
 
     oidc = {
