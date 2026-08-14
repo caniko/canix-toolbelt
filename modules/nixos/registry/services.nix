@@ -4,369 +4,296 @@
   lib,
   ...
 }: let
-  inherit (lib) filter mkIf mkMerge mkOption types;
+  inherit (lib) mkIf mkMerge mkOption types;
   fleetixLib = inputs.fleetix.lib or (throw "canix-toolbelt service-registry: inputs.fleetix.lib is required when canix-toolbelt.fleetix.enable = true");
 
-  serviceRoutes = service:
-    if service.routes == []
-    then [
-      {
-        targetHost = service.targetHost;
-        port = service.port;
-      }
-    ]
-    else service.routes;
-
-  routeTargetHost = service: route:
-    if route.targetHost != null
-    then route.targetHost
-    else service.targetHost;
-
-  routePort = service: route:
-    if route.port != null
-    then route.port
-    else service.port;
-
-  authSubmodule = types.submodule {
+  pathMatchSubmodule = types.submodule {
     options = {
-      enable = lib.mkEnableOption "OIDC authentication via caddy-security";
-
-      provider = mkOption {
-        type = types.enum ["kanidm" "rauthy"];
-        default = "kanidm";
-        description = "OIDC identity provider backend.";
+      type = mkOption {
+        type = types.enum ["exact" "prefix"];
+        description = "Path match kind.";
       };
-    };
-  };
-
-  metricEndpointSubmodule = types.submodule {
-    options = {
-      port = mkOption {
-        type = types.port;
-        description = "Metrics endpoint port.";
-      };
-      path = mkOption {
+      value = mkOption {
         type = types.str;
-        default = "/metrics";
-        description = "Metrics endpoint HTTP path.";
-      };
-      scheme = mkOption {
-        type = types.enum ["http" "https"];
-        default = "http";
-        description = "Metrics endpoint scheme.";
+        description = "HTTP path value.";
       };
     };
   };
 
-  monitoringSubmodule = types.submodule {
-    options = {
-      probe = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional blackbox probe kind override.";
-      };
-      metrics = mkOption {
-        type = types.listOf metricEndpointSubmodule;
-        default = [];
-        description = "Metrics endpoints associated with this service.";
-      };
-      alert = mkOption {
-        type = types.nullOr types.bool;
-        default = null;
-        description = "Optional alerting intent for this service.";
-      };
-    };
-  };
-
-  reverseProxyRouteSubmodule = types.submodule {
+  httpMatchSubmodule = types.submodule {
     options = {
       paths = mkOption {
+        type = types.listOf pathMatchSubmodule;
+        default = [];
+        description = "Ordered exact or prefix path matches.";
+      };
+      absentQueryParams = mkOption {
         type = types.listOf types.str;
         default = [];
-        description = "Ordered Caddy path matchers; an empty list is the fallback route.";
+        description = "Query parameters that must be absent.";
       };
-      targetHost = mkOption {
+    };
+  };
+
+  actionSubmodule = types.submodule {
+    options = {
+      type = mkOption {
+        type = types.enum ["proxy" "files" "redirect" "respond"];
+        description = "HTTP action tag.";
+      };
+      endpoint = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "Optional route-specific backend host.";
-      };
-      port = mkOption {
-        type = types.nullOr types.port;
-        default = null;
-        description = "Optional route-specific backend port.";
-      };
-      upstreamScheme = mkOption {
-        type = types.nullOr (types.enum ["http" "https"]);
-        default = null;
-        description = "Optional route-specific backend scheme.";
-      };
-      tlsServerName = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional route-specific upstream TLS SNI.";
+        description = "Endpoint registry key.";
       };
       stripPrefix = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "Optional path prefix to strip before proxying.";
+        description = "Optional path prefix stripped before proxying.";
       };
-      monitoringIdentity = mkOption {
+      rootRef = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "Stable monitoring identity for this backend route.";
+        description = "Host-local Caddy static root key.";
+      };
+      indexNames = mkOption {
+        type = types.listOf types.str;
+        default = ["index.html"];
+        description = "Ordered index file names.";
+      };
+      to = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Redirect target.";
+      };
+      status = mkOption {
+        type = types.nullOr (types.ints.between 100 599);
+        default = null;
+        description = "Redirect or response status.";
+      };
+      preserveUri = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Append the original request URI to the target.";
+      };
+      body = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Optional response body.";
       };
     };
   };
 
-  reverseProxyServiceSubmodule = types.submodule {
+  routeSubmodule = types.submodule {
     options = {
-      name = mkOption {
-        type = types.str;
-        description = "Service identifier";
+      match = mkOption {
+        type = httpMatchSubmodule;
+        description = "HTTP request match.";
       };
+      action = mkOption {
+        type = actionSubmodule;
+        description = "Tagged HTTP route action.";
+      };
+      authPolicy = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Opaque key in canix-toolbelt.services.caddy.authProviders.";
+      };
+      responseHeaders = mkOption {
+        type = types.attrsOf (types.listOf types.str);
+        default = {};
+        description = "Response headers set by this route.";
+      };
+    };
+  };
 
-      auth = mkOption {
-        type = authSubmodule;
-        default = {enable = false;};
-        description = "OIDC authentication configuration for this service route.";
-      };
-      hostname = mkOption {
+  endpointSubmodule = types.submodule {
+    options = {
+      targetHost = mkOption {
         type = types.str;
-        description = "Public hostname for reverse proxy";
+        description = "Host running the endpoint.";
       };
       port = mkOption {
         type = types.port;
-        description = "Port the service listens on";
+        description = "Endpoint TCP port.";
       };
-      upstreamScheme = mkOption {
-        type = types.enum ["http" "https"];
-        default = "http";
-        description = ''
-          Transport scheme Caddy uses to dial the upstream. "https" makes Caddy
-          re-encrypt to a TLS-terminating backend (e.g. kanidm on 127.0.0.1:8443),
-          emitting reverse_proxy transport.protocol="http" with a tls block.
-        '';
+      transport = mkOption {
+        type = types.enum ["tcp" "http" "https" "h2c"];
+        description = "Endpoint transport.";
+      };
+      bind = mkOption {
+        type = types.enum ["loopback" "lan"];
+        description = "Endpoint bind scope.";
+      };
+      remoteVia = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "LAN endpoint used to relay remote access to this loopback endpoint.";
       };
       tlsServerName = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = ''
-          SNI / tls.server_name sent to an upstreamScheme="https" backend.
-          Defaults to the public hostname when null.
-        '';
+        description = "Optional upstream TLS SNI.";
       };
-      local = mkOption {
-        type = types.nullOr types.bool;
-        default = null;
-        description = ''
-          Override loopback dialing. When null (default) it is computed: a
-          service whose targetHost equals this Caddy host's networking.hostName
-          dials 127.0.0.1 instead of the host lanIp, matching hand-written
-          loopback routes (and avoiding localhost→IPv6 mismatches). Set
-          true/false to force.
-        '';
-      };
-      targetHost = mkOption {
-        type = types.str;
-        description = "Hostname where the service runs (key from canix-toolbelt.hosts)";
-      };
-      lanExposed = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Whether to open the service port on the target host's LAN interface.";
-      };
-      serviceHost = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional service-host label for DNS or routing metadata.";
-      };
-      zone = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional DNS zone associated with this service.";
-      };
-      proxied = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Whether the service binds to localhost and needs a local reverse proxy";
-      };
-      cloudflareProxied = mkOption {
+      tcpProbe = mkOption {
         type = types.bool;
         default = true;
-        description = "Whether traffic goes through Cloudflare proxy. If false, the hostname is exempt from the Cloudflare CIDR allowlist.";
-      };
-      publishCname = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Whether the canix.dns synthesizer should emit a public CNAME
-          for this service's hostname. Set false for services that are
-          reverse-proxied locally but not externally addressable by name
-          (admin-only, behind another auth layer, etc.).
-        '';
-      };
-      vpnOnly = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Whether this service is only reachable via VPN DNS (vpn.candee.baby zone).";
-      };
-      dnsComment = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional provider-side comment for synthesized public DNS records.";
-      };
-      monitoring = mkOption {
-        type = monitoringSubmodule;
-        default = {};
-        description = "Monitoring metadata for this service.";
-      };
-      routes = mkOption {
-        type = types.listOf reverseProxyRouteSubmodule;
-        default = [];
-        description = "Ordered route backends; an empty list preserves the legacy service route.";
+        description = "Whether TCP health probing is enabled.";
       };
     };
   };
 
-  internalServiceSubmodule = types.submodule {
+  siteSubmodule = types.submodule {
     options = {
-      name = mkOption {
-        type = types.str;
-        description = "Internal service identifier";
-      };
-      port = mkOption {
-        type = types.port;
-        description = "Port the internal service listens on";
-      };
-      targetHost = mkOption {
-        type = types.str;
-        description = "Hostname where the service runs";
-      };
-      description = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Human-readable service description.";
-      };
-      monitoring = mkOption {
-        type = monitoringSubmodule;
-        default = {};
-        description = "Monitoring metadata for this service.";
-      };
-    };
-  };
-
-  staticFileServiceSubmodule = types.submodule {
-    options = {
-      name = mkOption {
-        type = types.str;
-        description = "Static file service identifier";
-      };
       hostname = mkOption {
         type = types.str;
-        description = "Public hostname for the static file route";
+        description = "HTTP site hostname.";
       };
-      staticRoot = mkOption {
-        type = types.nullOr types.path;
-        default = null;
-        description = "Directory served as the static file root";
+      ingress = mkOption {
+        type = types.str;
+        description = "Ingress group key.";
       };
-      staticRootName = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Name of a named root from canix-toolbelt.services.caddy.staticRoots; takes precedence over staticRoot.";
+      access = mkOption {
+        type = types.enum ["cloudflare" "direct" "vpn"];
+        description = "Site access policy.";
       };
-      cloudflareProxied = mkOption {
-        type = types.bool;
-        default = true;
-        description = "Whether traffic goes through Cloudflare proxy. If false, the hostname is exempt from the Cloudflare CIDR allowlist.";
+      dnsPublication = mkOption {
+        type = types.enum ["managed" "external" "none"];
+        description = "DNS publication policy.";
       };
-      vpnOnly = mkOption {
-        type = types.bool;
-        default = false;
-        description = "Whether this service is only reachable via VPN DNS (vpn.candee.baby zone).";
-      };
-      dnsComment = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional provider-side comment for synthesized public DNS records.";
-      };
-      zone = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional DNS zone associated with this service.";
-      };
-      kind = mkOption {
-        type = types.nullOr types.str;
-        default = "static";
-        description = "Kind of static file service (e.g. 'static-file' for Caddy file_server routes).";
-      };
-      monitoring = mkOption {
-        type = monitoringSubmodule;
-        default = {};
-        description = "Monitoring metadata for this service.";
+      routes = mkOption {
+        type = types.listOf routeSubmodule;
+        description = "Ordered HTTP routes.";
       };
     };
   };
+
+  ingressGroupSubmodule = types.submodule {
+    options = {
+      scope = mkOption {
+        type = types.enum ["public" "vpn"];
+        description = "Ingress network scope.";
+      };
+      hosts = mkOption {
+        type = types.listOf types.str;
+        description = "Hosts serving this ingress group.";
+      };
+    };
+  };
+
+  cfg = config.canix-toolbelt.services;
+  hostname = config.networking.hostName;
+  host = config.canix-toolbelt.hosts.${hostname} or {};
+  lanInterface = host.lanInterface or null;
+
+  actionAssertions = lib.concatMap (siteName:
+    map (route: let
+      action = route.action;
+      valid =
+        if action.type == "proxy"
+        then action.endpoint != null
+        else if action.type == "files"
+        then action.rootRef != null
+        else if action.type == "redirect"
+        then action.to != null && action.status != null && action.status >= 300 && action.status <= 399
+        else action.status != null;
+    in {
+      assertion = valid;
+      message = "canix-toolbelt service-registry: site `${siteName}` has an incomplete `${action.type}` action";
+    })
+    cfg.httpSites.${siteName}.routes) (builtins.attrNames cfg.httpSites);
+
+  endpointAssertions =
+    lib.mapAttrsToList (name: endpoint: let
+      relay =
+        if endpoint.remoteVia == null
+        then null
+        else cfg.endpoints.${endpoint.remoteVia} or null;
+    in {
+      assertion =
+        endpoint.remoteVia
+        == null
+        || (endpoint.bind == "loopback" && relay != null && relay.bind == "lan" && relay.targetHost == endpoint.targetHost);
+      message = "canix-toolbelt service-registry: endpoint `${name}` remoteVia must reference a LAN endpoint on the same target host";
+    })
+    cfg.endpoints;
+
+  proxyUses = lib.concatMap (siteName: let
+    site = cfg.httpSites.${siteName};
+  in
+    map (route: {
+      inherit siteName site route;
+      endpointName = route.action.endpoint;
+    }) (builtins.filter (route: route.action.type == "proxy") site.routes)) (builtins.attrNames cfg.httpSites);
+
+  directEndpointNames = lib.unique (map (use: use.endpointName) proxyUses);
+  relayNames = lib.unique (builtins.filter (name: name != null) (map (use: let
+    endpoint = cfg.endpoints.${use.endpointName} or null;
+  in
+    if endpoint == null
+    then null
+    else endpoint.remoteVia)
+  proxyUses));
+  relayOnlyNames = builtins.filter (name: !(builtins.elem name directEndpointNames)) relayNames;
+
+  lanPorts = lib.unique (map (name: cfg.endpoints.${name}.port) (builtins.filter (name: let
+    endpoint = cfg.endpoints.${name};
+  in
+    endpoint.targetHost
+    == hostname
+    && endpoint.bind == "lan"
+    && !(builtins.elem name relayOnlyNames)) (builtins.attrNames cfg.endpoints)));
+
+  relaySourceIps = relayName:
+    lib.unique (builtins.filter (ip: ip != null) (lib.concatMap (use: let
+      endpoint = cfg.endpoints.${use.endpointName} or null;
+      group = cfg.ingressGroups.${use.site.ingress} or null;
+    in
+      if endpoint == null || endpoint.remoteVia != relayName || group == null
+      then []
+      else map (ingressHost: (config.canix-toolbelt.hosts.${ingressHost} or {}).lanIp or null) (builtins.filter (ingressHost: ingressHost != hostname) group.hosts))
+    proxyUses));
+
+  relayRules = lib.concatMapStringsSep "\n" (relayName: let
+    endpoint = cfg.endpoints.${relayName};
+    sourceIps = relaySourceIps relayName;
+  in
+    lib.optionalString (endpoint.targetHost == hostname && sourceIps != [] && lanInterface != null) ''
+      iifname "${lanInterface}" ip saddr { ${lib.concatStringsSep ", " sourceIps} } tcp dport ${toString endpoint.port} accept
+    '')
+  relayOnlyNames;
 in {
   options.canix-toolbelt.services = {
-    sshPort = mkOption {
-      type = types.port;
-      default = 1337;
-      description = "Canonical SSH port for hosts in this registry.";
-    };
-
-    hostSshKeyPath = mkOption {
-      type = types.str;
-      default = "/etc/ssh/id_ed25519";
-      description = "Canonical host SSH private key path.";
-    };
-
-    hostSshPubKeyPath = mkOption {
-      type = types.str;
-      default = "/etc/ssh/id_ed25519.pub";
-      description = "Canonical host SSH public key path.";
-    };
-
-    reverseProxyServices = mkOption {
-      type = types.listOf reverseProxyServiceSubmodule;
-      default = [];
-      description = "Services that need reverse proxy routing and firewall rules";
-    };
-
-    staticFileServices = mkOption {
-      type = types.listOf staticFileServiceSubmodule;
-      default = [];
-      description = "Static file services rendered as Caddy file_server routes";
-    };
-
-    internalServices = mkOption {
-      type = types.listOf internalServiceSubmodule;
-      default = [];
-      description = "Internal service registry entries that are not public reverse-proxy routes.";
-    };
-
-    emailIdentities = mkOption {
-      type = types.attrsOf types.str;
+    endpoints = mkOption {
+      type = types.attrsOf endpointSubmodule;
       default = {};
-      description = "Fleet-level service email identities.";
+      description = "Fleetix v2 service endpoints.";
     };
 
-    localServices = mkOption {
-      type = types.listOf reverseProxyServiceSubmodule;
-      readOnly = true;
-      default =
-        filter (svc: svc.targetHost == config.networking.hostName)
-        config.canix-toolbelt.services.reverseProxyServices;
-      description = "Services running on this host (computed from reverseProxyServices)";
+    httpSites = mkOption {
+      type = types.attrsOf siteSubmodule;
+      default = {};
+      description = "Fleetix v2 HTTP sites.";
     };
 
-    proxiedLocalServices = mkOption {
-      type = types.listOf reverseProxyServiceSubmodule;
+    ingressGroups = mkOption {
+      type = types.attrsOf ingressGroupSubmodule;
+      default = {};
+      description = "Fleetix v2 deployment ingress groups.";
+    };
+
+    endpointsForHost = mkOption {
+      type = types.attrsOf endpointSubmodule;
       readOnly = true;
-      default =
-        filter (svc: svc.proxied)
-        config.canix-toolbelt.services.localServices;
-      description = "Local services that need a local reverse proxy (proxied = true)";
+      default = lib.filterAttrs (_: endpoint: endpoint.targetHost == hostname) cfg.endpoints;
+      description = "Endpoints running on this host.";
+    };
+
+    sitesForCurrentHost = mkOption {
+      type = types.attrsOf siteSubmodule;
+      readOnly = true;
+      default = lib.filterAttrs (_: site: builtins.elem hostname (cfg.ingressGroups.${site.ingress}.hosts or [])) cfg.httpSites;
+      description = "HTTP sites assigned to an ingress group served by this host.";
     };
   };
 
@@ -377,27 +304,28 @@ in {
         then config.canix-toolbelt.fleetix.topology
         else config.fleetix.topology;
       normalized = fleetixLib.projections.normalize {topology = ft;};
-      services = normalized.services;
     in {
+      assertions = [
+        {
+          assertion = (normalized.topology.schemaVersion or null) == 2;
+          message = "canix-toolbelt service-registry requires Fleetix topology.schemaVersion = 2";
+        }
+      ];
+
       canix-toolbelt.services = {
-        inherit (services) sshPort hostSshKeyPath hostSshPubKeyPath reverseProxyServices staticFileServices internalServices emailIdentities;
+        inherit (normalized.services) endpoints httpSites;
+        ingressGroups = normalized.topology.deployment.ingressGroups or {};
       };
     }))
 
-    (let
-      hostname = config.networking.hostName;
-      host = config.canix-toolbelt.hosts.${hostname} or {};
-      lanInterface = host.lanInterface or null;
-      lanExposedPorts = lib.unique (lib.concatMap (
-        service:
-          map (route: routePort service route) (
-            filter (route: routeTargetHost service route == hostname) (serviceRoutes service)
-          )
-      ) (filter (service: service.lanExposed or false) config.canix-toolbelt.services.reverseProxyServices));
-    in {
-      networking.firewall.interfaces = lib.optionalAttrs (lanInterface != null) {
-        ${lanInterface}.allowedTCPPorts = lanExposedPorts;
+    {
+      assertions = actionAssertions ++ endpointAssertions;
+      networking.firewall = {
+        interfaces = lib.optionalAttrs (lanInterface != null && lanPorts != []) {
+          ${lanInterface}.allowedTCPPorts = lanPorts;
+        };
+        extraInputRules = lib.mkAfter relayRules;
       };
-    })
+    }
   ];
 }

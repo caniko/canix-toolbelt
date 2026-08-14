@@ -32,8 +32,26 @@
       canixCrossPackage = _name: package: package;
     };
     modules = [
+      ../modules/nixos/registry/hosts.nix
+      ../modules/nixos/registry/services.nix
       ../modules/nixos/services/dns-octodns-cloudflare.nix
       {
+        canix-toolbelt.services.httpSites = {
+          app = {
+            hostname = "app.example.com";
+            ingress = "public";
+            access = "cloudflare";
+            dnsPublication = "managed";
+            routes = [];
+          };
+          direct = {
+            hostname = "direct.example.com";
+            ingress = "public";
+            access = "direct";
+            dnsPublication = "managed";
+            routes = [];
+          };
+        };
         canix-toolbelt.dns = {
           enable = true;
           autoSynthesizeCodebergPagesCnames = false;
@@ -45,6 +63,11 @@
               type = "A";
               data = "192.0.2.1";
             }
+            {
+              name = "direct";
+              type = "CNAME";
+              data = "explicit.example.net";
+            }
           ];
         };
 
@@ -54,6 +77,7 @@
   };
 
   services = moduleResult.config.systemd.services;
+  managedZone = moduleResult.config.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.com";
   planExec = services.cloudflare-octodns.serviceConfig.ExecStart;
   applyExec = services.cloudflare-octodns-apply.serviceConfig.ExecStart;
 
@@ -124,13 +148,23 @@
   optimizationRedirectRoute = builtins.head (
     builtins.filter
     (route: route.match or [] != [] && (builtins.head route.match).host or [] == ["example.com"])
-    optimizationResult.config.canix-toolbelt.services.caddy.routes
+    optimizationResult.config.canix-toolbelt.services.caddy.servers.public.routes
   );
 in
   mkEvalCheck {
     name = "dns-octodns-apply-force";
     resultMessage = "octoDNS apply force option and dns-manager build-pkgs optimization are stable";
     assertions = [
+      {
+        name = "managed-service-cname";
+        assertion = managedZone.app.cname.data == "example.com" && managedZone.app.cname.proxied;
+        message = "managed Cloudflare sites must synthesize a proxied zone-apex CNAME";
+      }
+      {
+        name = "explicit-record-precedence";
+        assertion = managedZone.direct.cname.data == "explicit.example.net" && !managedZone.direct.cname.proxied;
+        message = "explicit DNS records must override managed service CNAME intents";
+      }
       {
         name = "dry-run-has-no-force";
         assertion = builtins.match ".*--force.*" planExec == null;

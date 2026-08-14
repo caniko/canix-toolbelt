@@ -240,13 +240,15 @@
     domains = {
       zones = zoneNames;
       managedZones = zoneNames;
-      codebergPagesSites = cfg.codebergPagesSites or [];
+      pagesSites =
+        map (site: {
+          inherit (site) subdomain;
+          repository = site.targetRepo;
+          cnameTarget = "${lib.last (lib.splitString "/" site.targetRepo)}.caniko.codeberg.page";
+        })
+        cfg.codebergPagesSites;
     };
-    services = {
-      reverseProxyServices = config.canix-toolbelt.services.reverseProxyServices or [];
-      staticFileServices = config.canix-toolbelt.services.staticFileServices or [];
-      internalServices = [];
-    };
+    services.httpSites = config.canix-toolbelt.services.httpSites or {};
   };
 
   cnameIntentToRecord = intent: {
@@ -272,7 +274,7 @@
           ];
       })
     {}
-    (fleetixLib.services.serviceCnameIntents {topology = topologyForDnsIntents;});
+    (fleetixLib.services.managedDnsCnameIntents {topology = topologyForDnsIntents;});
 
   # Synthesize CNAME records for Codeberg Pages sites from the topology registry.
   # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
@@ -711,6 +713,12 @@ in {
       description = "HTTP redirect intents projected to Caddy routes without invoking the dns-manager renderer.";
     };
 
+    redirectIngress = mkOption {
+      type = types.str;
+      default = "public";
+      description = "Caddy server that receives DNS redirect routes.";
+    };
+
     cloudflareToken = {
       secretPath = mkOption {
         type = types.nullOr types.path;
@@ -867,7 +875,7 @@ in {
       agenix.records = agenixSecretRecords;
     };
 
-    canix-toolbelt.services.caddy.routes = lib.mkAfter caddyRedirectRoutes;
+    canix-toolbelt.services.caddy.servers.${cfg.redirectIngress}.routes = lib.mkAfter caddyRedirectRoutes;
 
     users.groups = lib.mkIf reconcilerEnabled {
       ${cfg.reconciler.user} = {};
