@@ -10,6 +10,10 @@
       || lib.any (segment: builtins.elem segment ["" "." ".."]) (lib.splitString "/" value)
     then throw "canix-toolbelt projectTree: ${label} must be a non-empty relative segment/path"
     else value;
+  cleanSegment = label: value:
+    if value == "." || value == ".." || builtins.match "[^/]+" value == null
+    then throw "canix-toolbelt projectTree: ${label} must be one non-empty path segment"
+    else value;
   coordinate = {
     forge,
     namespace,
@@ -20,7 +24,7 @@ in rec {
   inherit primaryClasses protectedClasses;
   layout = {
     primary = {
-      owned = "owned";
+      owned = "repos/owned";
       forks = "forks";
       upstream = "upstream";
     };
@@ -42,11 +46,11 @@ in rec {
   }:
     if !builtins.elem class primaryClasses
     then throw "canix-toolbelt projectTree: unsupported primary class ${class}"
-    else "${layout.primary.${class}}/${clean "repository" repository}";
+    else "${layout.primary.${class}}/${cleanSegment "repository" repository}";
 
   worktreePath = {
     repository,
     purpose,
     ...
-  }: "${layout.worktrees}/${clean "repository" repository}/${clean "purpose" purpose}";
+  }: "${layout.worktrees}/${cleanSegment "repository" repository}/${clean "purpose" purpose}";
 }
