@@ -40,15 +40,19 @@
       displayGpu = null;
       igpuHasDisplay = false;
     };
-  wrapPkg = pkg: let
+  # Wrap a package's executables with a pinned env var (DRI_PRIME for
+  # iGPU rendering offload, LIBVA_DRIVER_NAME for VA-API decode offload),
+  # preserving pname/version/meta/override so the result still acts as a
+  # drop-in package.
+  wrapPkg' = envName: envValue: suffix: pkg: let
     wrapped = pkgs.symlinkJoin {
-      name = "${pkg.pname or pkg.name}-igpu";
+      name = "${pkg.pname or pkg.name}-${suffix}";
       paths = [pkg];
       nativeBuildInputs = [pkgs.makeWrapper];
       postBuild = ''
         for f in $out/bin/*; do
           if [ -f "$f" ] && [ -x "$f" ]; then
-            wrapProgram "$f" --set DRI_PRIME "${cfg.driPrimeValue}"
+            wrapProgram "$f" --set ${envName} "${envValue}"
           fi
         done
       '';
@@ -62,36 +66,7 @@
       passthru = pkg.passthru or {};
       override =
         lib.setFunctionArgs
-        (args: wrapPkg (pkg.override args))
-        (lib.functionArgs pkg.override);
-    };
-  # Wrap a package with LIBVA_DRIVER_NAME pinned to the iGPU's VA-API
-  # driver. This helps GStreamer, ffmpeg, and other libva consumers
-  # route hardware video decode to the iGPU. Browser-level decode
-  # flags (--render-node-override, etc.) come from chromiumGpu.wrap.
-  wrapPkgDecode = pkg: let
-    wrapped = pkgs.symlinkJoin {
-      name = "${pkg.pname or pkg.name}-igpu-decode";
-      paths = [pkg];
-      nativeBuildInputs = [pkgs.makeWrapper];
-      postBuild = ''
-        for f in $out/bin/*; do
-          if [ -f "$f" ] && [ -x "$f" ]; then
-            wrapProgram "$f" --set LIBVA_DRIVER_NAME "${cfg.decodeDriver}"
-          fi
-        done
-      '';
-    };
-  in
-    wrapped
-    // {
-      pname = pkg.pname or pkg.name;
-      version = pkg.version or "";
-      meta = pkg.meta or {};
-      passthru = pkg.passthru or {};
-      override =
-        lib.setFunctionArgs
-        (args: wrapPkgDecode (pkg.override args))
+        (args: wrapPkg' envName envValue suffix (pkg.override args))
         (lib.functionArgs pkg.override);
     };
 in {
@@ -197,12 +172,12 @@ in {
 
     canix-toolbelt.igpu.wrap = pkg:
       if cfg.enable && cfg.igpuHasDisplay
-      then wrapPkg pkg
+      then wrapPkg' "DRI_PRIME" cfg.driPrimeValue "igpu" pkg
       else pkg;
 
     canix-toolbelt.igpu.wrapDecode = pkg:
       if cfg.enable && cfg.renderNode != null && cfg.decodeDriver != null
-      then wrapPkgDecode pkg
+      then wrapPkg' "LIBVA_DRIVER_NAME" cfg.decodeDriver "igpu-decode" pkg
       else pkg;
 
     canix-toolbelt.igpu.decodeDriver =

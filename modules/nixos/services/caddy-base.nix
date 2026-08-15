@@ -93,6 +93,25 @@ in {
   config = lib.mkIf cfg.enable (let
     defaultLoggerName = "other";
     rollSizeMb = 25;
+    mkLog = {
+      filename,
+      include ? null,
+      level ? "INFO",
+      rollKeep ? null,
+    }: {
+      inherit level;
+      encoder.format = "json";
+      writer =
+        {
+          output = "file";
+          inherit filename;
+          mode = "0640";
+          roll = true;
+          roll_size_mb = rollSizeMb;
+        }
+        // lib.optionalAttrs (rollKeep != null) {inherit rollKeep;}
+        // lib.optionalAttrs (include != null) {inherit include;};
+    };
 
     getHostnameFromMatch = match:
       if lib.hasAttr "host" match
@@ -235,87 +254,47 @@ in {
                   ];
               };
 
-              other = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/other.log";
-                  mode = "0640";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
+              other = mkLog {
+                filename = "${config.services.caddy.logDir}/other.log";
                 include = ["http.log.access.${defaultLoggerName}"];
               };
 
-              admin = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/admin.log";
-                  mode = "0640";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
+              admin = mkLog {
+                filename = "${config.services.caddy.logDir}/admin.log";
                 include = ["admin"];
               };
 
-              tls = {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/tls.log";
-                  mode = "0640";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
+              tls = mkLog {
+                filename = "${config.services.caddy.logDir}/tls.log";
                 include = ["tls"];
               };
 
-              debug = {
+              debug = mkLog {
+                filename = "${config.services.caddy.logDir}/debug.log";
                 level = "DEBUG";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/debug.log";
-                  mode = "0640";
-                  roll = true;
-                  roll_keep = 1;
-                  roll_size_mb = rollSizeMb;
-                };
+                rollKeep = 1;
               };
             }
-            // (lib.mapAttrs (name: _value: {
-                level = "INFO";
-                encoder.format = "json";
-                writer = {
-                  output = "file";
-                  filename = "${config.services.caddy.logDir}/${name}-access.log";
-                  mode = "0640";
-                  roll = true;
-                  roll_size_mb = rollSizeMb;
-                };
-                include = ["http.log.access.${name}"];
-              })
-              hostnameMap)
-            // (lib.mapAttrs' (name: _value: {
-                name = "${name}-error";
-                value = {
-                  level = "ERROR";
-                  encoder.format = "json";
-                  writer = {
-                    output = "file";
-                    filename = "${config.services.caddy.logDir}/${name}-error.log";
-                    mode = "0640";
-                    roll = true;
-                    roll_size_mb = rollSizeMb;
+            // builtins.listToAttrs (
+              lib.concatMap (name: [
+                {
+                  inherit name;
+                  value = mkLog {
+                    filename = "${config.services.caddy.logDir}/${name}-access.log";
+                    include = ["http.log.access.${name}"];
                   };
-                  include = ["http.log.access.${name}"];
-                };
-              })
-              hostnameMap);
+                }
+                {
+                  name = "${name}-error";
+                  value = mkLog {
+                    filename = "${config.services.caddy.logDir}/${name}-error.log";
+                    include = ["http.log.access.${name}"];
+                    level = "ERROR";
+                  };
+                }
+              ])
+              (builtins.attrNames hostnameMap)
+            );
         }
       );
     };

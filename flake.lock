@@ -152,11 +152,11 @@
         "rev": "7e6b6ea537db2e7a2c46d61209f84a029a68bca8",
         "revCount": 5,
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/migrationix.git"
+        "url": "https://codeberg.org/caniko/db-harbor.git"
       },
       "original": {
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/migrationix.git"
+        "url": "https://codeberg.org/caniko/db-harbor.git"
       }
     },
     "dns-manager": {
@@ -194,11 +194,11 @@
         "rev": "c4abb508275cb1f105363953047bf22f015c0292",
         "revCount": 4,
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/dns-manager.git"
+        "url": "https://codeberg.org/caniko/dns-manager.git"
       },
       "original": {
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/dns-manager.git"
+        "url": "https://codeberg.org/caniko/dns-manager.git"
       }
     },
     "flake-compat": {
@@ -326,24 +326,6 @@
     "flake-utils_11": {
       "inputs": {
         "systems": "systems_12"
-      },
-      "locked": {
-        "lastModified": 1731533236,
-        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "flake-utils_12": {
-      "inputs": {
-        "systems": "systems_13"
       },
       "locked": {
         "lastModified": 1731533236,
@@ -611,29 +593,6 @@
       "original": {
         "owner": "hercules-ci",
         "repo": "gitignore.nix",
-        "type": "github"
-      }
-    },
-    "goose": {
-      "inputs": {
-        "flake-utils": "flake-utils_9",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "rust-overlay": "rust-overlay_5"
-      },
-      "locked": {
-        "lastModified": 1780133732,
-        "narHash": "sha256-wCcFN7OM56okgfpH6vWfYhCod9kgLqmEV+E4gYyQ+DQ=",
-        "owner": "caniko",
-        "repo": "goose",
-        "rev": "d860965bcf1d80fd8471fcd12127807730a8c0e0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "caniko",
-        "ref": "nix/flake-integration",
-        "repo": "goose",
         "type": "github"
       }
     },
@@ -1047,7 +1006,7 @@
     },
     "osxcross_4": {
       "inputs": {
-        "flake-utils": "flake-utils_12",
+        "flake-utils": "flake-utils_11",
         "nixpkgs": [
           "secret-manager",
           "rs-harbor",
@@ -1100,11 +1059,11 @@
     "plinth_2": {
       "inputs": {
         "crane": "crane_6",
-        "flake-utils": "flake-utils_10",
+        "flake-utils": "flake-utils_9",
         "nixpkgs": [
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_6"
+        "rust-overlay": "rust-overlay_5"
       },
       "locked": {
         "lastModified": 1781641179,
@@ -1134,7 +1093,7 @@
           "rs-harbor",
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_7"
+        "rust-overlay": "rust-overlay_6"
       },
       "locked": {
         "lastModified": 1780921919,
@@ -1159,7 +1118,6 @@
         "flake-parts": "flake-parts_2",
         "fleetix": "fleetix",
         "git-hooks": "git-hooks_2",
-        "goose": "goose",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_3",
         "plinth": "plinth_2",
@@ -1255,11 +1213,11 @@
     "rs-harbor_4": {
       "inputs": {
         "crane": "crane_7",
-        "flake-utils": "flake-utils_11",
+        "flake-utils": "flake-utils_10",
         "nixpkgs": "nixpkgs_4",
         "osxcross": "osxcross_4",
         "plinth": "plinth_3",
-        "rust-overlay": "rust-overlay_8"
+        "rust-overlay": "rust-overlay_7"
       },
       "locked": {
         "lastModified": 1780988052,
@@ -1365,27 +1323,6 @@
     "rust-overlay_5": {
       "inputs": {
         "nixpkgs": [
-          "goose",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1768445213,
-        "narHash": "sha256-y0BglISgDr61vvdb35m0O4npuqh1pojlBNDILo9j8AI=",
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "rev": "1cd63408e71cc0e6a89ff2cb7c4107214e2523cc",
-        "type": "github"
-      },
-      "original": {
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "type": "github"
-      }
-    },
-    "rust-overlay_6": {
-      "inputs": {
-        "nixpkgs": [
           "plinth",
           "nixpkgs"
         ]
@@ -1404,7 +1341,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_7": {
+    "rust-overlay_6": {
       "inputs": {
         "nixpkgs": [
           "secret-manager",
@@ -1427,7 +1364,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_8": {
+    "rust-overlay_7": {
       "inputs": {
         "nixpkgs": [
           "secret-manager",
@@ -1538,21 +1475,6 @@
       }
     },
     "systems_12": {
-      "locked": {
-        "lastModified": 1681028828,
-        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
-        "owner": "nix-systems",
-        "repo": "default",
-        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-systems",
-        "repo": "default",
-        "type": "github"
-      }
-    },
-    "systems_13": {
       "locked": {
         "lastModified": 1681028828,
         "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
