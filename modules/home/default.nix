@@ -3,10 +3,7 @@
 # Mirrors modules/nixos, but is a *function* of the flake inputs the modules
 # need: chromium-gpu builds its wrappers with wrapper-manager, which is closed
 # over here so consumers don't have to pass `inputs.wrapper-manager` themselves.
-{
-  wrapper-manager,
-  goose,
-}: {
+{wrapper-manager}: {
   # Shared readiness contracts for Home Manager features with activation
   # hooks, runtime credentials, or mutable external state.
   activation-contracts = ./activation-contracts.nix;
@@ -23,7 +20,4 @@
   chromium-gpu = import ./desktop/chromium-gpu.nix {inherit wrapper-manager;};
   # COSMIC — switch keyboard layouts when more than one is configured
   keyboard-layout-shortcut = ./desktop/keyboard-layout-shortcut.nix;
-  # AI — goose: the upstream Home Manager module plus canix's opinionated
-  # defaults (enhanced CLI build with shell completions + man pages).
-  goose = import ./ai/goose/default.nix {gooseFlake = goose;};
 }

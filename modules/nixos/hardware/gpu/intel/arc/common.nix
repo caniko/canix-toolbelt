@@ -23,17 +23,12 @@ in {
         vkbasalt
         vpl-gpu-rt
         vulkan-loader
-        vulkan-tools
-        vulkan-validation-layers
       ];
     };
 
     environment = {
       systemPackages = with pkgs; [
         clinfo
-        libva-utils
-        mangohud
-        vulkan-tools
       ];
 
       variables = {

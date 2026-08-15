@@ -65,6 +65,10 @@
       description = "Terminal multiplexer";
       package = pkgs.tmux;
     };
+    zellij = {
+      description = "Terminal multiplexer";
+      package = pkgs.zellij;
+    };
     dust = {
       description = "Disk usage analyzer";
       package = pkgs.dust;

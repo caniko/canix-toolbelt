@@ -14,9 +14,8 @@ in
     homeActivation = import ./homeActivation.nix {inherit lib;};
     hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
-    networkmanager = import ./networkmanager.nix;
+    networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};
-    opencode = import ./opencode.nix {inherit lib;};
     opsShellPackages = import ./opsShellPackages.nix;
     peerRoute = import ./peerRoute.nix;
     projectTree = import ./projectTree.nix {inherit lib;};

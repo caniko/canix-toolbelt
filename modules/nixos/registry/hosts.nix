@@ -137,18 +137,6 @@
         description = "Absolute path to this host's user-data filesystem root; the Projects directory convention is dataRoot/Projects.";
       };
 
-      gpuIgpu = mkOption {
-        type = types.nullOr (types.enum ["amd" "intel"]);
-        default = null;
-        description = "Integrated GPU vendor.";
-      };
-
-      gpuDgpu = mkOption {
-        type = types.nullOr (types.enum ["amd" "intel" "nvidia"]);
-        default = null;
-        description = "Discrete GPU vendor.";
-      };
-
       users = mkOption {
         type = types.attrsOf hostUserSubmodule;
         default = {};
@@ -242,8 +230,6 @@ in {
         deviceType = host.deviceType or null;
         dataRoot = host.dataRoot or null;
         users = host.users or {};
-        gpuIgpu = (host.gpu or {}).igpu or null;
-        gpuDgpu = (host.gpu or {}).dgpu or null;
         lanIp = host.network.lanIp or null;
         lanBroadcast = host.network.lanBroadcast or null;
         lanInterface = host.network.lanInterface or null;
