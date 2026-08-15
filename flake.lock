@@ -152,11 +152,11 @@
         "rev": "7e6b6ea537db2e7a2c46d61209f84a029a68bca8",
         "revCount": 5,
         "type": "git",
-        "url": "https://codeberg.org/caniko/db-harbor.git"
+        "url": "https://github.com/caniko/db-harbor.git"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/caniko/db-harbor.git"
+        "url": "https://github.com/caniko/db-harbor.git"
       }
     },
     "dns-manager": {
@@ -194,11 +194,11 @@
         "rev": "c4abb508275cb1f105363953047bf22f015c0292",
         "revCount": 4,
         "type": "git",
-        "url": "https://codeberg.org/caniko/dns-manager.git"
+        "url": "https://github.com/caniko/dns-manager.git"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/caniko/dns-manager.git"
+        "url": "https://github.com/caniko/dns-manager.git"
       }
     },
     "flake-compat": {
@@ -1422,11 +1422,11 @@
         "rev": "543c0203ac39ff5558f7039b2736ce65efffa5aa",
         "revCount": 16,
         "type": "git",
-        "url": "https://codeberg.org/caniko/secret-manager.git"
+        "url": "https://github.com/caniko/secret-manager.git"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/caniko/secret-manager.git"
+        "url": "https://github.com/caniko/secret-manager.git"
       }
     },
     "systems": {
