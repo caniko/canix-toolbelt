@@ -411,8 +411,8 @@ in
       }
       {
         name = "relay-generation";
-        assertion = backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.listen == ["192.0.2.30:9100"] && (handler "reverse_proxy" relayRoute).upstreams == [{dial = "127.0.0.1:9000";}] && (handler "reverse_proxy" relayRoute).transport.tls.server_name == "app.internal";
-        message = "the endpoint target must serve a host-matched relay to its loopback source";
+        assertion = backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.listen == ["192.0.2.30:9100"] && (handler "reverse_proxy" relayRoute).upstreams == [{dial = "127.0.0.1:9000";}] && (handler "reverse_proxy" relayRoute).transport.tls.server_name == "app.internal" && !backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.automaticHttps && edge1Servers.public.automaticHttps;
+        message = "the endpoint target must serve a host-matched relay to its loopback source, with HTTPS disabled on the relay but enabled on ingress servers";
       }
       {
         name = "h2c-transport";

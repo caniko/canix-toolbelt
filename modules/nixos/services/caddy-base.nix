@@ -38,6 +38,11 @@
         default = true;
         description = "Whether to enable Caddy metrics for this server.";
       };
+      automaticHttps = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether this server serves HTTPS. Disable for plain-HTTP relay servers so Caddy does not try to provision certificates for relayed hostnames.";
+      };
     };
   };
 in {
@@ -187,6 +192,9 @@ in {
             })
             serverHostnameMap;
         };
+      }
+      // lib.optionalAttrs (!server.automaticHttps) {
+        automatic_https.disable = true;
       }
       // lib.optionalAttrs server.metrics {metrics = {};};
 
