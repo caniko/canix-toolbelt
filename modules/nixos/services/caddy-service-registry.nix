@@ -99,6 +99,7 @@
         })
       uses);
       metrics = false;
+      automaticHttps = false;
     })
   relayNames);
 
