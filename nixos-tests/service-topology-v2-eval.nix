@@ -350,6 +350,7 @@
               }
             ];
           };
+          canix-toolbelt.services.ingressGroups.public.sourceIps = ["192.0.2.240"];
           canix-toolbelt.networking.vpn-dns = {
             enable = hostName == "hub";
             domain = "example.test";
@@ -461,8 +462,8 @@ in
       }
       {
         name = "relay-firewall-source-scope";
-        assertion = lib.hasInfix ''iifname "lan0"'' backend.config.networking.firewall.extraInputRules && lib.hasInfix "ip saddr { 192.0.2.11, 192.0.2.12 }" backend.config.networking.firewall.extraInputRules && lib.hasInfix "tcp dport 9100 accept" backend.config.networking.firewall.extraInputRules;
-        message = "relay firewall access must be interface- and ingress-source-scoped";
+        assertion = lib.hasInfix ''iifname "lan0"'' backend.config.networking.firewall.extraInputRules && lib.hasInfix "ip saddr { 192.0.2.11, 192.0.2.12, 192.0.2.240 }" backend.config.networking.firewall.extraInputRules && lib.hasInfix "tcp dport 9100 accept" backend.config.networking.firewall.extraInputRules;
+        message = "relay firewall access must be interface- and ingress-source-scoped, including failover VIPs";
       }
     ];
   }

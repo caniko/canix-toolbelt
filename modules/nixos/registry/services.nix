@@ -178,6 +178,11 @@
         type = types.listOf types.str;
         description = "Hosts serving this ingress group.";
       };
+      sourceIps = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Additional source IPs used by ingress hosts, such as a failover VIP.";
+      };
     };
   };
 
@@ -251,7 +256,9 @@
     in
       if endpoint == null || endpoint.remoteVia != relayName || group == null
       then []
-      else map (ingressHost: (config.canix-toolbelt.hosts.${ingressHost} or {}).lanIp or null) (builtins.filter (ingressHost: ingressHost != hostname) group.hosts))
+      else
+        map (ingressHost: (config.canix-toolbelt.hosts.${ingressHost} or {}).lanIp or null) (builtins.filter (ingressHost: ingressHost != hostname) group.hosts)
+        ++ group.sourceIps)
     proxyUses));
 
   relayRules = lib.concatMapStringsSep "\n" (relayName: let
