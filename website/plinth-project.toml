@@ -10,11 +10,11 @@ href = "#overview"
 
 [[nav]]
 label = "Source"
-href = "git@codeberg.org:caniko/canix-toolbelt.git"
+href = "git@github.com:caniko/canix-toolbelt.git"
 
 [[footer_links]]
 label = "Source"
-href = "git@codeberg.org:caniko/canix-toolbelt.git"
+href = "git@github.com:caniko/canix-toolbelt.git"
 
 [[pages]]
 slug = "index"
@@ -29,7 +29,7 @@ subtitle = "Composable modules, flake-parts helpers, and reusable Codeberg Pages
 
 [[pages.sections.ctas]]
 label = "View source"
-href = "git@codeberg.org:caniko/canix-toolbelt.git"
+href = "git@github.com:caniko/canix-toolbelt.git"
 primary = true
 
 [[pages.sections]]

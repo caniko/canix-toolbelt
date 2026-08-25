@@ -20,7 +20,7 @@ Two output families:
 
 ```nix
 {
-  inputs.canix-toolbelt.url = "git+ssh://git@codeberg.org/caniko/canix-toolbelt.git";
+  inputs.canix-toolbelt.url = "git+ssh://git@github.com/caniko/canix-toolbelt.git";
 
   outputs = {nixpkgs, canix-toolbelt, ...}: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
@@ -50,7 +50,7 @@ Two output families:
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    canix-toolbelt.url = "git+ssh://git@codeberg.org/caniko/canix-toolbelt.git";
+    canix-toolbelt.url = "git+ssh://git@github.com/caniko/canix-toolbelt.git";
   };
 
   outputs = inputs @ {flake-parts, canix-toolbelt, ...}:

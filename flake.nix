@@ -22,7 +22,7 @@
       };
     };
     fleetix = {
-      url = "git+https://codeberg.org/caniko/fleetix.git";
+      url = "git+https://github.com/caniko/fleetix.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Transitional compatibility only: database-specific modules now live in
@@ -41,7 +41,7 @@
     # call site), so there is nothing to `follows`.
     wrapper-manager.url = "github:viperML/wrapper-manager/51ad0422b925d830bf4af36979fed51209f79c0a";
     plinth = {
-      url = "git+https://codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
+      url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     secret-manager = {
