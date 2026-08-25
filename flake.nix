@@ -28,7 +28,7 @@
     # Transitional compatibility only: database-specific modules now live in
     # db-harbor and this input can be removed after consumers migrate.
     db-harbor = {
-      url = "git+https://github.com/caniko/db-harbor.git";
+      url = "git+https://github.com/caniko/harbor-db.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     git-hooks = {
