@@ -333,7 +333,7 @@
         "lastModified": 1787508307,
         "narHash": "sha256-35CM6Wnfh+ysotI+y7NciF4v3OUXv7rb85+n+qXbczM=",
         "ref": "refs/heads/trunk",
-        "rev": "effa65f7619b3808c46be860b004b640d5152527",
+        "rev": "b02aad2e6925c2349a023f77dd6922d1287d358c",
         "revCount": 19,
         "type": "git",
         "url": "https://github.com/caniko/harbor-db.git"
@@ -370,7 +370,7 @@
         "lastModified": 1787617209,
         "narHash": "sha256-ShJM3FdKZY7Dai5Ku9xK8n9qdCuNWaQ9NbQEKA3rWAY=",
         "ref": "refs/heads/trunk",
-        "rev": "657d1a96c3ec24212e72284a93cc71f08ace80bd",
+        "rev": "d9af9946de117a63f96328d430b649e691011a1d",
         "revCount": 26,
         "type": "git",
         "url": "https://github.com/caniko/dns-manager.git"
@@ -1613,7 +1613,7 @@
         "lastModified": 1787616773,
         "narHash": "sha256-MVhOykExMJIwTi2D2VDcO1iOwKMOL/PdXpJRCvBCfsY=",
         "ref": "refs/heads/trunk",
-        "rev": "a38669f9fe490891c73abb8a94aebb7d0e906af3",
+        "rev": "b68fa5e2d50e752dc6decf4a78bd323e571ea10f",
         "revCount": 54,
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
@@ -1726,7 +1726,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1752,7 +1752,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1778,7 +1778,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1803,7 +1803,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1827,7 +1827,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1853,7 +1853,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1879,7 +1879,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1904,7 +1904,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1928,7 +1928,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1952,7 +1952,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -1977,7 +1977,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -2002,7 +2002,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -2026,7 +2026,7 @@
         "lastModified": 1787224113,
         "narHash": "sha256-7Xz0gzc0Gg1DKamnT/eoytl6xUyGIfY1nZUTjQcaXjA=",
         "ref": "trunk",
-        "rev": "519bc9305b5ba78f37c3226a9d8427c8f635afb8",
+        "rev": "b1a2cf038f39b0d496baad5be7403fea0b15ac13",
         "revCount": 7,
         "type": "git",
         "url": "https://github.com/caniko/meta-harbor.git"
@@ -2359,7 +2359,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -2386,7 +2386,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -2408,7 +2408,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -2434,7 +2434,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -2456,7 +2456,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -2483,7 +2483,7 @@
         "lastModified": 1787616319,
         "narHash": "sha256-dI/7TrVkvdeynos1Ck/zCNm/gcyJM1H0SEMq9FvhTpc=",
         "ref": "trunk",
-        "rev": "652d8efae1312c038368f5f0ca5046fb968a75b7",
+        "rev": "3039f46f286ad5988730553c3040b6a83530216f",
         "revCount": 76,
         "type": "git",
         "url": "https://github.com/caniko/nix-cache-pin.git"
@@ -5209,7 +5209,7 @@
         "lastModified": 1787617245,
         "narHash": "sha256-lj6YrK40P+DnoJTgjUxafI5Z9PHL2hXoktkfA0FWB5E=",
         "ref": "refs/heads/trunk",
-        "rev": "a53296c449fa3dd003933f27ee5284703198a5d3",
+        "rev": "a1fd052a529977b9c43f1e9e41df4f8dd5d432c4",
         "revCount": 78,
         "type": "git",
         "url": "https://github.com/caniko/secret-manager.git"
