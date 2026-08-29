@@ -2,24 +2,14 @@
 #
 # Normalizes a `{igpu?, dgpu?}` record (vendors from `{"amd", "intel",
 # "nvidia"}`) into a uniform structure usable by NixOS modules, Home Manager
-# modules, and pkgs builders. Also tracks which GPU drives the display
-# (displayGpu) so downstream consumers (iGPU offload, Chromium GPU flags)
-# can conditionally skip DRI_PRIME wrapping when the iGPU is headless.
+# modules, and pkgs builders.
 #
-# Example:
-#
-#   let gpu = canix-toolbelt.lib.gpu.normalize {
-#         igpu = "amd"; dgpu = "nvidia"; deviceType = "laptop";
-#       };
-#   in gpu.has.nvidia       # => true
-#      gpu.mainGpu          # => "nvidia"  (dgpu wins over igpu)
-#      gpu.displayGpu       # => "igpu"    (laptops display through iGPU)
-#      gpu.igpuHasDisplay   # => true
-#      gpu.isHybrid         # => true
-#      gpu.vendors          # => ["amd" "nvidia"]
-#
-# The legacy aliases (`mainGpu`, `hasAmd`, etc.) are kept for backward
-# compatibility with consumers that haven't moved to `main`/`has.<vendor>`.
+# This is *inventory data only*: it picks package sets and answers "which GPUs
+# exist". It does not pick the active renderer (that is the compositor's job on
+# Wayland) and it does not carry the media-decode route (that is
+# canix-toolbelt.gpuMedia). The legacy aliases (`mainGpu`, `hasAmd`, etc.) are
+# kept for backward compatibility with consumers that haven't moved to
+# `main`/`has.<vendor>`.
 let
   vendors = ["amd" "intel" "nvidia"];
 
@@ -27,21 +17,13 @@ let
     igpu = gpuData.igpu or null;
     dgpu = gpuData.dgpu or null;
     deviceType = gpuData.deviceType or null;
-    displayGpu =
-      gpuData.displayGpu or (
-        if deviceType == "laptop"
-        then "igpu"
-        else if dgpu != null
-        then "dgpu"
-        else igpu
-      );
     main =
       if dgpu != null
       then dgpu
       else igpu;
     has = vendor: igpu == vendor || dgpu == vendor;
   in {
-    inherit dgpu igpu main deviceType displayGpu;
+    inherit dgpu igpu main deviceType;
     isHybrid = igpu != null && dgpu != null;
     vendors = builtins.filter has vendors;
     has = {
@@ -49,8 +31,6 @@ let
       intel = has "intel";
       nvidia = has "nvidia";
     };
-    igpuHasDisplay = igpu != null && displayGpu == "igpu";
-    dgpuHasDisplay = dgpu != null && displayGpu == "dgpu";
 
     # Legacy aliases.
     mainGpu = main;

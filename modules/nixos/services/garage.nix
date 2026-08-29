@@ -60,7 +60,13 @@
     // lib.optionalAttrs (dropNulls cfg.settings.kubernetes != {}) {kubernetes = dropNulls cfg.settings.kubernetes;};
 
   garageToml = toml.generate "garage.toml" settingsForToml;
+
+  s3ApiPort = lib.last (lib.splitString ":" cfg.settings.s3_api.api_bind_addr);
 in {
+  imports = [
+    ./garage-buckets-registry.nix
+  ];
+
   options.canix-toolbelt.services.garage = {
     enable = mkEnableOption "Garage Object Storage (S3 compatible)";
 
@@ -73,6 +79,12 @@ in {
       type = types.enum ["error" "warn" "info" "debug" "trace"];
       default = "info";
       description = "Garage log level.";
+    };
+
+    buckets = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Names of registry-backed Garage buckets to provision.";
     };
 
     extraEnvironment = mkOption {
@@ -319,6 +331,34 @@ in {
           RUST_LOG = mkDefault "garage=${cfg.logLevel}";
         }
         // cfg.extraEnvironment;
+    };
+
+    systemd.services.garage-init-buckets = lib.mkIf (cfg.buckets != []) {
+      description = "Provision configured Garage buckets and their access keys";
+      after = ["garage.service"];
+      requires = ["garage.service"];
+      wantedBy = ["multi-user.target"];
+      script = let
+        provision = bucket: let
+          creds = config.canix-toolbelt.garageBuckets.credentials.${bucket};
+        in ''
+          ${cfg.package}/bin/garage bucket create ${bucket} || true
+          ${cfg.package}/bin/garage key import --yes -n ${bucket} \
+            "${creds.accessKeyId}" "${creds.secretAccessKey}" || true
+          ${cfg.package}/bin/garage bucket allow --read --write \
+            ${bucket} --key ${bucket} || true
+        '';
+      in ''
+        while ! ${pkgs.curl}/bin/curl -s http://127.0.0.1:${toString s3ApiPort} >/dev/null 2>&1; do
+          sleep 1
+        done
+        ${lib.concatMapStringsSep "\n" provision cfg.buckets}
+      '';
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "root";
+      };
     };
 
     # Create data directories outside /var/lib/garage via tmpfiles.

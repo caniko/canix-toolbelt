@@ -10,8 +10,8 @@
     to = "https://new.example.com";
     preservePath = false;
   };
-  inherit
-    ((inputs.fleetix.lib.projections.normalize {
+  domains =
+    (inputs.fleetix.lib.projections.normalize {
       topology = {
         hosts = {};
         links = {};
@@ -25,9 +25,7 @@
         ];
         services = {};
       };
-    }))
-    domains
-    ;
+    }).domains;
 
   moduleResult = inputs.nixpkgs.lib.nixosSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
@@ -40,7 +38,7 @@
       {
         canix-toolbelt.dns = {
           enable = true;
-          inherit (domains) redirects;
+          redirects = domains.redirects;
         };
 
         system.stateVersion = "25.11";
@@ -48,7 +46,7 @@
     ];
   };
 
-  routes = moduleResult.config.canix-toolbelt.services.caddy.routes;
+  routes = moduleResult.config.canix-toolbelt.services.caddy.servers.public.routes;
   redirectRoutes = builtins.filter (route:
     route.match or []
     != []

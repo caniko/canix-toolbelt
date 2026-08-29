@@ -56,8 +56,9 @@ in
           && lib.hasInfix "/bin/sleep infinity" serviceConfig.ExecStart
           && serviceConfig.Delegate == true
           && serviceConfig.KillMode == "control-group"
+          && serviceConfig.Restart == "on-failure"
           && serviceConfig.Slice == "dev-agents.slice";
-        message = "the agent service must keep a stable cgroup anchor and kill its group together";
+        message = "the agent service must keep and restart a stable cgroup anchor";
       }
     ];
   }

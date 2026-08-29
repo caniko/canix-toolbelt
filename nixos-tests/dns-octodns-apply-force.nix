@@ -6,7 +6,7 @@
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
   fakeBuildPkgs = {
     stdenv.hostPlatform.system = "marker-build-system";
-    inherit (pkgs) runCommand;
+    runCommand = pkgs.runCommand;
   };
   fakeInputs =
     inputs
@@ -32,25 +32,41 @@
       canixCrossPackage = _name: package: package;
     };
     modules = [
+      ../modules/nixos/registry/hosts.nix
+      ../modules/nixos/registry/services.nix
       ../modules/nixos/services/dns-octodns-cloudflare.nix
       {
+        canix-toolbelt.services.httpSites = {
+          app = {
+            hostname = "app.example.com";
+            ingress = "public";
+            access = "cloudflare";
+            dnsPublication = "managed";
+            routes = [];
+          };
+          direct = {
+            hostname = "direct.example.com";
+            ingress = "public";
+            access = "direct";
+            dnsPublication = "managed";
+            routes = [];
+          };
+        };
         canix-toolbelt.dns = {
           enable = true;
+          autoSynthesizeCodebergPagesCnames = false;
           cloudflareToken.secretPath = "/run/secrets/cloudflare-token";
           reconciler.applyForce = true;
-          pagesZone = "example.com";
-          pagesSites = [
-            {
-              subdomain = "docs";
-              repository = "caniko/docs";
-              cnameTarget = "caniko.github.io";
-            }
-          ];
           zones."example.com".records = [
             {
               name = "www";
               type = "A";
               data = "192.0.2.1";
+            }
+            {
+              name = "direct";
+              type = "CNAME";
+              data = "explicit.example.net";
             }
           ];
         };
@@ -61,9 +77,37 @@
   };
 
   services = moduleResult.config.systemd.services;
-  pagesRecord = moduleResult.config.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.com".docs.cname;
+  managedZone = moduleResult.config.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.com";
   planExec = services.cloudflare-octodns.serviceConfig.ExecStart;
   applyExec = services.cloudflare-octodns-apply.serviceConfig.ExecStart;
+
+  localOnlyResult = inputs.nixpkgs.lib.nixosSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    specialArgs = {
+      inherit inputs;
+      crossbowBuildPkgs = pkgs;
+      canixCrossPackage = _name: package: package;
+    };
+    modules = [
+      ../modules/nixos/services/dns-octodns-cloudflare.nix
+      {
+        canix-toolbelt.dns = {
+          enable = true;
+          autoSynthesizeCodebergPagesCnames = false;
+          reconciler.enable = false;
+          cloudflareToken.secretPath = "/run/secrets/cloudflare-token";
+          zones."example.com".records = [
+            {
+              name = "www";
+              type = "A";
+              data = "192.0.2.1";
+            }
+          ];
+        };
+        system.stateVersion = "25.11";
+      }
+    ];
+  };
 
   optimizationResult = inputs.nixpkgs.lib.nixosSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
@@ -79,6 +123,7 @@
 
         canix-toolbelt.dns = {
           enable = true;
+          autoSynthesizeCodebergPagesCnames = false;
           redirects = [
             {
               from = "example.com";
@@ -103,48 +148,23 @@
   optimizationRedirectRoute = builtins.head (
     builtins.filter
     (route: route.match or [] != [] && (builtins.head route.match).host or [] == ["example.com"])
-    optimizationResult.config.canix-toolbelt.services.caddy.routes
-  );
-  collisionResult = inputs.nixpkgs.lib.nixosSystem {
-    inherit (pkgs.stdenv.hostPlatform) system;
-    specialArgs = {
-      inputs = fakeInputs;
-      crossbowBuildPkgs = pkgs;
-      canixCrossPackage = _name: package: package;
-    };
-    modules = [
-      ../modules/nixos/services/dns-octodns-cloudflare.nix
-      {
-        canix-toolbelt.dns = {
-          enable = true;
-          pagesZone = "example.com";
-          pagesSites = [
-            {
-              subdomain = "docs";
-              repository = "caniko/docs";
-              cnameTarget = "caniko.github.io";
-            }
-          ];
-          zones."example.com".records = [
-            {
-              name = "Docs";
-              type = "A";
-              data = "192.0.2.1";
-            }
-          ];
-        };
-        system.stateVersion = "25.11";
-      }
-    ];
-  };
-  collisionEvaluation = builtins.tryEval (
-    builtins.deepSeq collisionResult.config.canix-toolbelt.dns.dnsConfig true
+    optimizationResult.config.canix-toolbelt.services.caddy.servers.public.routes
   );
 in
   mkEvalCheck {
     name = "dns-octodns-apply-force";
     resultMessage = "octoDNS apply force option and dns-manager build-pkgs optimization are stable";
     assertions = [
+      {
+        name = "managed-service-cname";
+        assertion = managedZone.app.cname.data == "example.com" && managedZone.app.cname.proxied;
+        message = "managed Cloudflare sites must synthesize a proxied zone-apex CNAME";
+      }
+      {
+        name = "explicit-record-precedence";
+        assertion = managedZone.direct.cname.data == "explicit.example.net" && !managedZone.direct.cname.proxied;
+        message = "explicit DNS records must override managed service CNAME intents";
+      }
       {
         name = "dry-run-has-no-force";
         assertion = builtins.match ".*--force.*" planExec == null;
@@ -161,16 +181,6 @@ in
         message = "cloudflare-octodns-apply must pass --force when reconciler.applyForce is true";
       }
       {
-        name = "github-pages-cname-is-synthesized";
-        assertion = pagesRecord.data == "caniko.github.io";
-        message = "Pages topology must synthesize the configured provider CNAME target";
-      }
-      {
-        name = "cname-collisions-fail-evaluation";
-        assertion = !collisionEvaluation.success;
-        message = "CNAME records must not coexist with another record type at the same name";
-      }
-      {
         name = "dns-manager-uses-build-pkgs";
         assertion = builtins.match ".*dns-manager-build-pkgs-marker-build-system.*" optimizationOctodnsConfig != null;
         message = "dns-manager render derivations must use dnsManagerBuildPkgs when provided";
@@ -179,6 +189,16 @@ in
         name = "redirect-routes-avoid-dns-manager-renderer";
         assertion = (builtins.head optimizationRedirectRoute.handle).headers.Location == ["https://www.example.com{http.request.uri}"];
         message = "Caddy redirect routes must be rendered locally without dnsGenerate.caddyRoutes";
+      }
+      {
+        name = "local-only-has-no-runtime-services";
+        assertion = !(localOnlyResult.config.systemd.services ? cloudflare-octodns) && !(localOnlyResult.config.systemd.services ? cloudflare-octodns-apply);
+        message = "reconciler.enable = false must keep octoDNS services out of the host configuration";
+      }
+      {
+        name = "local-only-has-no-runtime-user";
+        assertion = !(localOnlyResult.config.users.users ? cloudflare-octodns);
+        message = "reconciler.enable = false must keep the octoDNS user out of the host configuration";
       }
     ];
   }

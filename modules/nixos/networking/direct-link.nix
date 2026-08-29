@@ -11,7 +11,7 @@
 }: let
   cfg = config.canix-toolbelt.networking.directLink;
   hostname = config.networking.hostName;
-  nm = import ../../../lib/networkmanager.nix;
+  nm = import ../../../lib/networkmanager.nix {inherit lib;};
 
   selfHost = config.canix-toolbelt.hosts.${hostname} or null;
   topologyRole =

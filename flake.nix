@@ -83,6 +83,10 @@
               inherit (nixpkgs) lib;
               inherit (inputs) wrapper-manager;
             };
+            firefoxGpu = import ./lib/firefoxGpu.nix {
+              lib = nixpkgs.lib;
+              wrapper-manager = inputs.wrapper-manager;
+            };
           };
         nixosModules =
           (import ./modules/nixos)
@@ -126,8 +130,9 @@
       in {
         checks =
           {
-            forgejo-runner-tls = import ./nixos-tests/forgejo-runner-tls.nix {inherit pkgs;};
+            garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
+            gpu-media-eval = import ./nixos-tests/gpu-media-eval.nix {inherit inputs pkgs;};
             direct-link-eval = import ./nixos-tests/direct-link-eval.nix {inherit pkgs;};
             gpu-backends-eval = import ./nixos-tests/gpu-backends-eval.nix {inherit inputs pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
@@ -145,10 +150,12 @@
             dev-oom-guard-protection = import ./nixos-tests/dev-oom-guard-protection.nix {inherit pkgs;};
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
-            caddy-service-registry-oidc = import ./nixos-tests/caddy-service-registry-oidc.nix {inherit pkgs;};
+            wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
+            service-topology-v2-eval = import ./nixos-tests/service-topology-v2-eval.nix {inherit inputs pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
+            vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 

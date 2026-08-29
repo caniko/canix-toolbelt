@@ -4,7 +4,7 @@
   options,
   ...
 }: let
-  nm = import ../../../lib/networkmanager.nix;
+  nm = import ../../../lib/networkmanager.nix {inherit lib;};
   hostname = config.networking.hostName;
   hostData = config.canix-toolbelt.hosts.${hostname} or {};
   wakeOnLanInterface = hostData.wakeOnLanInterface or null;

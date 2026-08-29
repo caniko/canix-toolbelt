@@ -68,10 +68,10 @@ in {
         inherit (cfg) domain;
 
         address =
-          # Service records: *.vpn.example -> hub WG IP. Caddy proxies to backends.
-          (map (svc: "/${svc.hostname}/${hubWgIpForConfig}")
-            (lib.filter (svc: lib.hasSuffix cfg.domain svc.hostname)
-              config.canix-toolbelt.services.reverseProxyServices))
+          # VPN sites resolve to the hub WG IP. Caddy proxies to backends.
+          (lib.mapAttrsToList (_: site: "/${site.hostname}/${hubWgIpForConfig}")
+            (lib.filterAttrs (_: site: site.access == "vpn")
+              config.canix-toolbelt.services.httpSites))
           ++
           # Host records: <hostname>.vpn.example -> host WG IP.
           (lib.mapAttrsToList (name: host: "/${name}.${cfg.domain}/${host.wgHomeIp}")

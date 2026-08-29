@@ -137,6 +137,32 @@
         description = "Absolute path to this host's user-data filesystem root; the Projects directory convention is dataRoot/Projects.";
       };
 
+      projectStateRoot = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/data/ProjectState";
+        description = "Absolute path to mutable project state on this host.";
+      };
+
+      flakeRoot = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/data/can/canix";
+        description = "Absolute path to the host's canonical flake checkout.";
+      };
+
+      gpuIgpu = mkOption {
+        type = types.nullOr (types.enum ["amd" "intel"]);
+        default = null;
+        description = "Integrated GPU vendor.";
+      };
+
+      gpuDgpu = mkOption {
+        type = types.nullOr (types.enum ["amd" "intel" "nvidia"]);
+        default = null;
+        description = "Discrete GPU vendor.";
+      };
+
       users = mkOption {
         type = types.attrsOf hostUserSubmodule;
         default = {};
@@ -229,7 +255,11 @@ in {
         hostNames = host.hostNames or [];
         deviceType = host.deviceType or null;
         dataRoot = host.dataRoot or null;
+        projectStateRoot = (host.storage or {}).projectStateRoot or null;
+        flakeRoot = (host.storage or {}).flakeRoot or null;
         users = host.users or {};
+        gpuIgpu = (host.gpu or {}).igpu or null;
+        gpuDgpu = (host.gpu or {}).dgpu or null;
         lanIp = host.network.lanIp or null;
         lanBroadcast = host.network.lanBroadcast or null;
         lanInterface = host.network.lanInterface or null;

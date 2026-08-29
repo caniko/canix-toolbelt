@@ -14,10 +14,12 @@
   agent-safety = ./agent-safety.nix;
   project-tree = ./project-tree.nix;
 
-  # GPU — iGPU render offload (DRI_PRIME) + VA-API decode-device selection
-  igpu = ./desktop/igpu.nix;
+  # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
+  gpu-media = ../gpu-media.nix;
   # GPU — Chromium VA-API acceleration flags/env wrapper
   chromium-gpu = import ./desktop/chromium-gpu.nix {inherit wrapper-manager;};
+  # GPU — Firefox/Floorp VA-API decode wrapper (MOZ_DRM_DEVICE + libva)
+  firefox-gpu = import ./desktop/firefox-gpu.nix {inherit wrapper-manager;};
   # COSMIC — switch keyboard layouts when more than one is configured
   keyboard-layout-shortcut = ./desktop/keyboard-layout-shortcut.nix;
 }

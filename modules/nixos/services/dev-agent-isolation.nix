@@ -79,6 +79,7 @@ in {
         Delegate = true;
         KillMode = "control-group";
         OOMPolicy = "continue";
+        Restart = "on-failure";
       };
     };
   };

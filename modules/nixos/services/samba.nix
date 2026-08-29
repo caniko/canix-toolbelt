@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }: let
   cfg = config.canix-toolbelt.services;
@@ -53,9 +52,6 @@ in {
         default = {};
       };
     };
-
-    localReverseProxy.enable =
-      lib.mkEnableOption "local HTTP reverse proxy for localhost-bound services";
   };
 
   config = lib.mkMerge [
@@ -108,29 +104,5 @@ in {
         })
       );
     }))
-
-    (lib.mkIf cfg.localReverseProxy.enable {
-      services.caddy = {
-        enable = true;
-        package = pkgs.caddy;
-
-        virtualHosts = lib.listToAttrs (
-          map (svc: {
-            name = "http://${svc.hostname}";
-            value = {
-              extraConfig = "reverse_proxy localhost:${toString svc.port}";
-              logFormat = ''
-                output file ${config.services.caddy.logDir}/access-http:__${svc.hostname}.log {
-                  mode 0640
-                }
-              '';
-            };
-          })
-          config.canix-toolbelt.services.proxiedLocalServices
-        );
-      };
-
-      networking.firewall.allowedTCPPorts = [80];
-    })
   ];
 }

@@ -38,6 +38,7 @@
   dev-oom-guard = ./services/dev-oom-guard.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
   garage = ./services/garage.nix;
+  garage-buckets-registry = ./services/garage-buckets-registry.nix;
   host-registry = ./registry/hosts.nix;
   impure-files = ./registry/impure-files.nix;
   initrd-ssh = ./services/initrd-ssh.nix;
@@ -50,7 +51,6 @@
   service-registry = ./registry/services.nix;
   wol-relay = ./services/wol-relay.nix;
 
-  forgejo-runner = ./services/forgejo-runner.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   direct-link = ./networking/direct-link.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
@@ -59,11 +59,15 @@
   vpn-dns = ./networking/vpn-dns.nix;
   wg-home-client = ./networking/wg-home-client.nix;
   wg-home-shared = ./networking/wg-home-shared.nix;
+  vpn-netns = ./networking/vpn-netns.nix;
 
   # GPU — backends
   gpu-backend = ./hardware/gpu/backend/common.nix;
   gpu-backend-opengl-only = ./hardware/gpu/backend/opengl-only.nix;
   gpu-backend-vulkan = ./hardware/gpu/backend/vulkan.nix;
+
+  # GPU — explicit VA-API media-decode route (shared with homeModules)
+  gpu-media = ../gpu-media.nix;
 
   # GPU — vendors
   gpu-amd = ./hardware/gpu/amd.nix;
