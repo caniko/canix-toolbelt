@@ -1,26 +1,18 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }: let
   cfg = config.canix-toolbelt.services.devAgentIsolation;
   sliceName = lib.removeSuffix ".slice" cfg.slice;
-  unitName = lib.removeSuffix ".service" cfg.unit;
 in {
   options.canix-toolbelt.services.devAgentIsolation = {
     enable = lib.mkEnableOption "a dedicated user cgroup for agent workloads";
 
-    unit = lib.mkOption {
-      type = lib.types.strMatching "[A-Za-z0-9_.@:-]+\\.service";
-      default = "dev-agent-workloads.service";
-      description = "User service whose cgroup receives attached agent processes.";
-    };
-
     slice = lib.mkOption {
       type = lib.types.strMatching "[A-Za-z0-9_.@:-]+\\.slice";
       default = "dev-agents.slice";
-      description = "User slice containing the agent workload service.";
+      description = "User slice containing transient agent workload scopes.";
     };
 
     memoryHigh = lib.mkOption {
@@ -66,21 +58,5 @@ in {
       // lib.optionalAttrs (cfg.memoryHigh != null) {MemoryHigh = cfg.memoryHigh;}
       // lib.optionalAttrs (cfg.memoryMax != null) {MemoryMax = cfg.memoryMax;}
       // lib.optionalAttrs (cfg.memorySwapMax != null) {MemorySwapMax = cfg.memorySwapMax;};
-
-    systemd.user.services.${unitName} = {
-      description = "Cgroup anchor for agent descendants";
-      wantedBy = ["default.target"];
-      serviceConfig = {
-        # Keep an anchor process alive so AttachProcessesToUnit has a stable
-        # service cgroup before the first agent attaches.
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/sleep infinity";
-        Slice = cfg.slice;
-        Delegate = true;
-        KillMode = "control-group";
-        OOMPolicy = "continue";
-        Restart = "on-failure";
-      };
-    };
   };
 }

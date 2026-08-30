@@ -28,11 +28,16 @@
   };
 
   sliceConfig = evaluated.config.systemd.user.slices.dev-agents.sliceConfig;
-  serviceConfig = evaluated.config.systemd.user.services.dev-agent-workloads.serviceConfig;
+  wrapper = (import ../lib/dev-agent-isolation.nix {inherit lib;}).mkScopeExecWrapper {
+    inherit pkgs;
+    name = "dev-agent-scope-eval";
+    slice = "dev-agents.slice";
+    targetPath = "${pkgs.coreutils}/bin/true";
+  };
 in
   mkEvalCheck {
     name = "dev-agent-isolation-eval";
-    resultMessage = "agent cgroup limits and attach anchor evaluated correctly";
+    resultMessage = "agent slice limits and scope wrapper evaluated correctly";
     assertions = [
       {
         name = "slice-memory-limits";
@@ -49,16 +54,26 @@ in
         message = "the agent slice must carry the configured CPU and I/O weights";
       }
       {
-        name = "stable-service-anchor";
-        assertion =
-          serviceConfig.Type
-          == "simple"
-          && lib.hasInfix "/bin/sleep infinity" serviceConfig.ExecStart
-          && serviceConfig.Delegate == true
-          && serviceConfig.KillMode == "control-group"
-          && serviceConfig.Restart == "on-failure"
-          && serviceConfig.Slice == "dev-agents.slice";
-        message = "the agent service must keep and restart a stable cgroup anchor";
+        name = "no-attach-anchor";
+        assertion = !(evaluated.config.systemd.user.services ? dev-agent-workloads);
+        message = "the retired attach-anchor service must not be generated";
       }
     ];
+    runtimeScript = ''
+      grep -F -- '--scope' ${wrapper}
+      grep -F -- '--quiet' ${wrapper}
+      grep -F -- '--collect' ${wrapper}
+      grep -F -- '--same-dir' ${wrapper}
+      grep -F -- '--expand-environment=no' ${wrapper}
+      grep -F 'dev-agents.slice' ${wrapper}
+      grep -F systemd-run ${wrapper}
+      if grep -F AttachProcessesToUnit ${wrapper}; then
+        echo "scope wrapper still contains AttachProcessesToUnit" >&2
+        exit 1
+      fi
+      if grep -F 'sleep infinity' ${wrapper}; then
+        echo "scope wrapper still contains sleep infinity" >&2
+        exit 1
+      fi
+    '';
   }

@@ -146,6 +146,7 @@
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
             keyboard-layout-shortcut-eval = import ./nixos-tests/keyboard-layout-shortcut-eval.nix {inherit pkgs;};
             dev-agent-isolation-eval = import ./nixos-tests/dev-agent-isolation-eval.nix {inherit pkgs;};
+            dev-agent-isolation-scope = import ./nixos-tests/dev-agent-isolation-scope.nix {inherit pkgs;};
             dev-oom-guard-pause-eval = import ./nixos-tests/dev-oom-guard-pause-eval.nix {inherit pkgs;};
             dev-oom-guard-protection = import ./nixos-tests/dev-oom-guard-protection.nix {inherit pkgs;};
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
