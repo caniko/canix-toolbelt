@@ -34,7 +34,19 @@
               provider = "gitlab";
               host = "gitlab.example.test";
               namespace = "team/nested";
+              kind = "group";
+              authentication = {
+                required = true;
+                method = "glab";
+              };
               includeSubgroups = true;
+            }
+          ];
+          repositoryPolicies = [
+            {
+              repository = "demo";
+              canonical = "gitlab.example.test/team/nested/demo";
+              mirrors = ["codeberg.example.test/team/demo"];
             }
           ];
           exclusions = [
@@ -88,13 +100,24 @@ in
       }
       {
         name = "rendered-schema";
-        assertion = rendered.schemaVersion == 1 && rendered.root == "/srv/projects";
+        assertion = rendered.schemaVersion == 2 && rendered.root == "/srv/projects";
         message = "the Home Manager module must render schema version and root";
       }
       {
         name = "rendered-source";
-        assertion = (builtins.head rendered.sources).namespace == "team/nested";
+        assertion =
+          (builtins.head rendered.sources).namespace
+          == "team/nested"
+          && (builtins.head rendered.sources).kind == "group"
+          && (builtins.head rendered.sources).authentication.method == "glab";
         message = "multi-segment namespaces must survive rendering";
+      }
+      {
+        name = "rendered-repository-policy";
+        assertion =
+          (builtins.head rendered.repositoryPolicies).canonical
+          == "gitlab.example.test/team/nested/demo";
+        message = "canonical repository and mirror policy must survive rendering";
       }
     ];
   }

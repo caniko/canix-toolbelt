@@ -16,7 +16,7 @@
     repository,
   }: "${clean "forge" forge}/${clean "namespace" namespace}/${clean "repository" repository}";
 in rec {
-  schemaVersion = 1;
+  schemaVersion = 2;
   inherit primaryClasses protectedClasses;
   layout = {
     primary = {
