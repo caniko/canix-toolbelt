@@ -43,6 +43,79 @@
     };
   };
 
+  plural =
+    (import "${pkgs.path}/nixos/lib/eval-config.nix" {
+      system = "x86_64-linux";
+      modules = [
+        ../modules/nixos/networking/vpn-netns.nix
+        {
+          system.stateVersion = "25.11";
+          canix-toolbelt.networking.vpnNamespaces = {
+            can = {
+              profile = {
+                provider = "Example VPN";
+                owner = "can";
+                dnsServers = ["10.2.0.1"];
+                connection = {
+                  type = "wireguard";
+                  addresses = ["10.2.0.2/32"];
+                  privateKeyRef = "vpn/can/private-key";
+                  peers = [
+                    {
+                      publicKey = "can-peer-key";
+                      endpoint = "can.example.test:51820";
+                      allowedIps = ["0.0.0.0/0"];
+                      dynamicEndpointRefreshSeconds = 30;
+                      dynamicEndpointRefreshRestartSeconds = 5;
+                    }
+                  ];
+                };
+                portForwarding = {
+                  type = "nat-pmp";
+                  gateway = "10.2.0.1";
+                };
+              };
+              privateKeyFile = "/test/can-key";
+              boundServices = ["can-service"];
+              portForwards.qbittorrent = 8085;
+              socks.enable = true;
+              wrappedApps.qbittorrent = {
+                bin = "${pkgs.coreutils}/bin/true";
+                allowedUsers = ["can"];
+              };
+              renewal.command = "${pkgs.coreutils}/bin/true";
+            };
+            dejana = {
+              profile = {
+                provider = "Example VPN";
+                owner = "dejana";
+                dnsServers = ["10.3.0.1"];
+                connection = {
+                  type = "wireguard";
+                  addresses = ["10.3.0.2/32"];
+                  privateKeyRef = "vpn/dejana/private-key";
+                  peers = [
+                    {
+                      publicKey = "dejana-peer-key";
+                      endpoint = "dejana.example.test:51820";
+                      allowedIps = ["0.0.0.0/0"];
+                    }
+                  ];
+                };
+              };
+              privateKeyFile = "/test/dejana-key";
+              boundServices = ["dejana-service"];
+              portForwards.qbittorrent = 8086;
+            };
+          };
+          systemd.services = {
+            can-service.serviceConfig.ExecStart = "${pkgs.coreutils}/bin/true";
+            dejana-service.serviceConfig.ExecStart = "${pkgs.coreutils}/bin/true";
+          };
+        }
+      ];
+    }).config;
+
   wg = plain.networking.wireguard.interfaces.wg0;
   setupScript = plain.systemd.services.netns-vpn-setup.serviceConfig.ExecStart;
   qbitFwd = plain.systemd.services."netns-vpn-forward-qbittorrent".serviceConfig.ExecStart;
@@ -121,6 +194,53 @@ in
           && lib.any (c: lib.hasInfix "vpn-exec" c.command) r.commands)
         withApps.security.sudo.extraRules;
         message = "sudo NOPASSWD rule must exist for vpn-exec";
+      }
+      {
+        name = "plural-wireguard-namespaces";
+        assertion =
+          plural.networking.wireguard.interfaces.wg-can.interfaceNamespace
+          == "vpn-can"
+          && plural.networking.wireguard.interfaces.wg-dejana.interfaceNamespace == "vpn-dejana"
+          && plural.systemd.services.can-service.serviceConfig.NetworkNamespacePath == "/run/netns/vpn-can"
+          && plural.systemd.services.dejana-service.serviceConfig.NetworkNamespacePath == "/run/netns/vpn-dejana";
+        message = "plural VPN instances must create isolated interfaces and bind their own services";
+      }
+      {
+        name = "plural-socks-loopback-only";
+        assertion = lib.hasInfix "bind=127.0.0.1" plural.systemd.services."netns-vpn-can-forward-socks".serviceConfig.ExecStart;
+        message = "plural SOCKS forwards must bind to host loopback by default";
+      }
+      {
+        name = "plural-dynamic-endpoint-refresh";
+        assertion = let
+          peer = builtins.head plural.networking.wireguard.interfaces.wg-can.peers;
+        in
+          peer.dynamicEndpointRefreshSeconds
+          == 30
+          && peer.dynamicEndpointRefreshRestartSeconds == 5;
+        message = "dynamic endpoint refresh settings must flow into the wireguard peer";
+      }
+      {
+        name = "plural-app-sudo-users";
+        assertion = lib.any (rule:
+          rule.users
+          == ["can"]
+          && lib.any (command: lib.hasInfix "vpn-can-qbittorrent" command.command) rule.commands)
+        plural.security.sudo.extraRules;
+        message = "plural app launchers must restrict sudo access to their declared users";
+      }
+      {
+        name = "plural-renewal-timer";
+        assertion =
+          plural.systemd.timers."netns-vpn-can-renewal".wantedBy
+          == ["timers.target"]
+          && plural.systemd.services."netns-vpn-can-renewal".environment.VPN_NAMESPACE == "vpn-can"
+          && plural.systemd.services."netns-vpn-can-renewal".environment.VPN_PORT_FORWARDING_PROFILE
+          == builtins.toJSON {
+            type = "nat-pmp";
+            gateway = "10.2.0.1";
+          };
+        message = "NAT-PMP renewal must run in the selected namespace with its profile data";
       }
     ];
   }
