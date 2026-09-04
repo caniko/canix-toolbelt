@@ -122,7 +122,7 @@
         description = "Endpoint transport.";
       };
       bind = mkOption {
-        type = types.enum ["loopback" "lan"];
+        type = types.enum ["loopback" "lan" "vpn"];
         description = "Endpoint bind scope.";
       };
       remoteVia = mkOption {

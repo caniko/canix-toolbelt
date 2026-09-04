@@ -83,6 +83,12 @@
           transport = "h2c";
           bind = "lan";
         };
+        private-cache = {
+          targetHost = "hub";
+          port = 9300;
+          transport = "http";
+          bind = "vpn";
+        };
       };
       httpSites = {
         app = {
@@ -382,8 +388,13 @@ in
     assertions = [
       {
         name = "fleetix-populates-v2-registry";
-        assertion = edge1.config.canix-toolbelt.services.endpoints.app.port == 9000 && edge1.config.canix-toolbelt.services.ingressGroups.public.scope == "public";
+        assertion = edge1.config.canix-toolbelt.services.endpoints.app.port == 9000 && hub.config.canix-toolbelt.services.endpoints.private-cache.bind == "vpn" && edge1.config.canix-toolbelt.services.ingressGroups.public.scope == "public";
         message = "expected Fleetix v2 endpoints and ingress groups to populate the registry";
+      }
+      {
+        name = "vpn-endpoint-not-lan-exposed";
+        assertion = !(builtins.elem 9300 (hub.config.networking.firewall.interfaces.lan0.allowedTCPPorts or []));
+        message = "VPN-bound endpoint ports must not be exposed on the LAN firewall";
       }
       {
         name = "public-vpn-disjoint";

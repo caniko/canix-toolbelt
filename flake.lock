@@ -287,11 +287,11 @@
     },
     "crane_9": {
       "locked": {
-        "lastModified": 1783203018,
-        "narHash": "sha256-G6R9IT/xwFuu+CYBWDUAok6AdC4ERC4ZfPPFtEpxnZE=",
+        "lastModified": 1787326676,
+        "narHash": "sha256-lWhBbBvC05/xwivKBBiM2YNizpmgqCgyOIzomvRuwxs=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "80db5bdc391be8a1794f6d8a2d56e3a84ebcede2",
+        "rev": "692f7e9ef2ece8125b466f66f2af532b3edaed0d",
         "type": "github"
       },
       "original": {
@@ -1610,11 +1610,11 @@
         "rust-overlay": "rust-overlay_6"
       },
       "locked": {
-        "lastModified": 1787616773,
-        "narHash": "sha256-MVhOykExMJIwTi2D2VDcO1iOwKMOL/PdXpJRCvBCfsY=",
+        "lastModified": 1788495618,
+        "narHash": "sha256-EqeSFUhU/sg7oPqarRFGXFuG8sTEZQWEEwUH7ASTNG0=",
         "ref": "refs/heads/trunk",
-        "rev": "b68fa5e2d50e752dc6decf4a78bd323e571ea10f",
-        "revCount": 54,
+        "rev": "400a4c55b644b6d3201a3f1d97a3860aa513d6b3",
+        "revCount": 58,
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       },
@@ -5098,11 +5098,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783404876,
-        "narHash": "sha256-DAh1CfiRVwr8Szkj5PiHmsqh10NHPb8SKPx7w/B+l9E=",
+        "lastModified": 1787540965,
+        "narHash": "sha256-48/4bbmK3W3Av3YPnrFb/tVQXPvBwU6kyM3Pb13VVD8=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "3c161f20193bd91a73913b417e5b06d41860336d",
+        "rev": "ab450d47a3f906d19de1b332915bfc6e5b29c853",
         "type": "github"
       },
       "original": {
