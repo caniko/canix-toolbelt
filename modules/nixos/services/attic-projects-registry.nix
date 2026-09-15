@@ -2,7 +2,7 @@
 #
 # A project entry of the shape:
 #
-#   "<name>" = { consumers = [ "atlas" ]; runner = "atlas"; }
+#   "<name>" = { consumers = [ "hub" ]; runner = "hub"; }
 #
 # becomes `age.secrets.attic-<name>-token` on every host listed in
 # `consumers`. On the host named by `runner`, plaintext token files are

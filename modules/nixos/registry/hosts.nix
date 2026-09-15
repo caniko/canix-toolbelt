@@ -37,7 +37,7 @@
       hostNames = mkOption {
         type = types.listOf types.str;
         default = [];
-        example = ["myhost" "myhost.local" "192.168.1.1"];
+        example = ["myhost" "myhost.local" "192.0.2.1"];
         description = "Additional hostnames/IPs for SSH known_hosts.";
       };
 

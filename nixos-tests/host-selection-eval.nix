@@ -8,18 +8,18 @@
       ../flake-modules/host-selection.nix
       {
         canix-toolbelt.host-selection.bar.enable = false;
-        canix-toolbelt.host-selection.atlas.enable = true;
+        canix-toolbelt.host-selection.hub.enable = true;
       }
     ];
   };
   policy = evaluated.config.canix-toolbelt.host-selection;
   fixture = {
-    atlas = {value = "kept";};
+    hub = {value = "kept";};
     bar = {value = throw "disabled host payload was forced";};
   };
   disabled = hostSelection.filterEnabled policy fixture;
   restored = hostSelection.filterEnabled (policy // {bar.enable = true;}) fixture;
-  unknown = hostSelection.unknownHosts policy ["atlas" "bar"];
+  unknown = hostSelection.unknownHosts policy ["hub" "bar"];
 in
   mkEvalCheck {
     name = "host-selection-eval";
@@ -32,17 +32,17 @@ in
       }
       {
         name = "default-enable";
-        assertion = policy.atlas.enable == true;
+        assertion = policy.hub.enable == true;
         message = "explicitly enabled hosts must remain enabled";
       }
       {
         name = "lazy-filter";
-        assertion = builtins.deepSeq disabled (builtins.attrNames disabled == ["atlas"]);
+        assertion = builtins.deepSeq disabled (builtins.attrNames disabled == ["hub"]);
         message = "disabled host payloads must not be forced by filtering";
       }
       {
         name = "restore";
-        assertion = builtins.attrNames restored == ["atlas" "bar"];
+        assertion = builtins.attrNames restored == ["hub" "bar"];
         message = "setting enable back to true must restore the host";
       }
       {
@@ -52,7 +52,7 @@ in
       }
       {
         name = "unknown-hosts";
-        assertion = hostSelection.unknownHosts (policy // {typo.enable = false;}) ["atlas" "bar"] == ["typo"];
+        assertion = hostSelection.unknownHosts (policy // {typo.enable = false;}) ["hub" "bar"] == ["typo"];
         message = "the policy validator must report misspelled host names";
       }
     ];
