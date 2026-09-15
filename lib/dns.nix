@@ -112,7 +112,7 @@
   };
 
   # Brevo (sendinblue) DKIM CNAMEs. `dkimZone` is the brevo-side zone-style
-  # identifier they hand out, for example "tartanoglu-com".
+  # identifier they hand out, for example "example-com".
   brevoDkim = {dkimZone}: [
     {
       name = "brevo1._domainkey";

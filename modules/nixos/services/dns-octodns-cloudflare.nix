@@ -306,8 +306,8 @@
     managedDnsCnameIntents;
 
   # Synthesize CNAME records for Codeberg Pages sites from the topology registry.
-  # Each entry in codebergPagesSites produces a CNAME from <subdomain>.tartanoglu.com
-  # to <repoName>.caniko.codeberg.page.
+  # Each entry in codebergPagesSites produces a CNAME from <subdomain>.<zone>
+  # to <repoName>.codeberg.page.
   synthesizedCodebergPagesByZone =
     if fleetixLib.services ? pagesCnameIntents
     then
@@ -785,9 +785,9 @@ in {
     };
 
     codebergPagesZone = mkOption {
-      type = types.str;
-      default = "tartanoglu.com";
-      description = "Zone under which Codeberg Pages CNAME records are synthesized.";
+      type = types.nullOr types.str;
+      default = null;
+      description = "Zone under which Codeberg Pages CNAME records are synthesized. Null falls back to the first declared zone; set explicitly when that is ambiguous.";
     };
 
     codebergPagesSites = mkOption {
@@ -801,11 +801,11 @@ in {
           };
           subdomain = mkOption {
             type = types.str;
-            description = "Subdomain for the Codeberg Pages site (e.g. 'myproject' for myproject.tartanoglu.com).";
+            description = "Subdomain for the Codeberg Pages site (e.g. 'myproject' for myproject.example.com).";
           };
           targetRepo = mkOption {
             type = types.str;
-            description = "Codeberg repository (e.g. 'caniko/myproject').";
+            description = "Codeberg repository (e.g. 'example/myproject').";
           };
         };
       });
