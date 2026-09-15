@@ -42,7 +42,7 @@ in
       }
       {
         name = "restore";
-        assertion = builtins.attrNames restored == ["hub" "bar"];
+        assertion = builtins.attrNames restored == ["bar" "hub"];
         message = "setting enable back to true must restore the host";
       }
       {
@@ -52,7 +52,7 @@ in
       }
       {
         name = "unknown-hosts";
-        assertion = hostSelection.unknownHosts (policy // {typo.enable = false;}) ["hub" "bar"] == ["typo"];
+        assertion = hostSelection.unknownHosts (policy // {typo.enable = false;}) ["bar" "hub"] == ["typo"];
         message = "the policy validator must report misspelled host names";
       }
     ];

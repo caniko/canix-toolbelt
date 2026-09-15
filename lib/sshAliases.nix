@@ -13,7 +13,9 @@
 #
 # Tunnel aliases (i<t>/t<t>) encode consumer routing policy: pass the VPN
 # alias of the jump host explicitly, e.g. jumpHostAlias = "vhub". Null
-# disables tunnel aliases entirely (fail closed). Empty result is valid —
+# disables tunnel aliases entirely (fail closed). The initrd alias (i<t>)
+# additionally requires allowRelaxedInitrdCheck: it disables host-key
+# verification and must never be enabled silently. Empty result is valid —
 # caller may warn if reachable set is empty.
 {
   lib,
@@ -27,6 +29,7 @@
   jumpHostAlias ? null,
   jumpExcludedHost ? null,
   enableInitrdAlias ? true,
+  allowRelaxedInitrdCheck ? false,
   initrdPort ? 2222,
 }: let
   inherit (builtins) attrNames elem filter foldl';
@@ -93,6 +96,8 @@
       "i${targetName}" = mkBlock t.lanIp ({
           Port = initrdPort;
           ProxyJump = tunnelVia;
+        }
+        // lib.optionalAttrs allowRelaxedInitrdCheck {
           StrictHostKeyChecking = "no";
           UserKnownHostsFile = "/dev/null";
         }
