@@ -139,6 +139,7 @@
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
+            dns-pages-zone-eval = import ./nixos-tests/dns-pages-zone-eval.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};

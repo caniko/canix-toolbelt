@@ -242,9 +242,7 @@
       managedZones = zoneNames;
       pagesSites =
         map (site: {
-          inherit (site) subdomain;
-          repository = site.targetRepo;
-          cnameTarget = "${lib.last (lib.splitString "/" site.targetRepo)}.caniko.codeberg.page";
+          inherit (site) subdomain repository cnameTarget;
         })
         cfg.codebergPagesSites;
     };
@@ -533,7 +531,13 @@
       ++ lib.optional (!(redirect.status >= 300 && redirect.status <= 399)) "${ctx}: status must be a 3xx HTTP status code")
     cfg.redirects;
 
-  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors;
+  pagesZoneErrors =
+    lib.optional (cfg.autoSynthesizeCodebergPagesCnames && cfg.codebergPagesSites != [] && cfg.codebergPagesZone == null)
+    "codebergPagesZone must be set explicitly when autoSynthesizeCodebergPagesCnames is enabled with a non-empty codebergPagesSites registry (no implicit first-zone fallback)"
+    ++ lib.optional (cfg.autoSynthesizeCodebergPagesCnames && cfg.codebergPagesZone != null && !(builtins.elem cfg.codebergPagesZone zoneNames))
+    "codebergPagesZone '${cfg.codebergPagesZone}' is not a declared zone (${toString zoneNames}); refusing to synthesize Pages records into nowhere";
+
+  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors ++ pagesZoneErrors;
 
   validatedDnsConfig =
     if validationErrors == []
@@ -801,16 +805,20 @@ in {
           };
           subdomain = mkOption {
             type = types.str;
-            description = "Subdomain for the Codeberg Pages site (e.g. 'myproject' for myproject.example.com).";
+            description = "Subdomain for the Pages site (e.g. 'myproject' for myproject.example.com).";
           };
-          targetRepo = mkOption {
+          repository = mkOption {
             type = types.str;
-            description = "Codeberg repository (e.g. 'example/myproject').";
+            description = "Repository associated with the Pages site (e.g. 'example/myproject'). Informational; the record target below is authoritative.";
+          };
+          cnameTarget = mkOption {
+            type = types.str;
+            description = "Explicit DNS CNAME target for the Pages provider (e.g. 'example.codeberg.page'). Never derived from the repository owner.";
           };
         };
       });
       default = [];
-      description = "Registry of Codeberg Pages sites. Each entry generates a CNAME from <subdomain>.<zone> to <repoName>.caniko.codeberg.page.";
+      description = "Registry of project Pages sites. Each entry generates a CNAME from <subdomain>.<zone> to the explicit cnameTarget.";
     };
 
     reconciler = {
@@ -898,13 +906,7 @@ in {
         assertion = false;
         inherit message;
       })
-      validationErrors
-      ++ [
-        {
-          assertion = !(cfg.autoSynthesizeCodebergPagesCnames && cfg.codebergPagesSites != [] && cfg.codebergPagesZone == null);
-          message = "canix-toolbelt.dns.codebergPagesZone must be set explicitly when autoSynthesizeCodebergPagesCnames is enabled with a non-empty codebergPagesSites registry (no implicit first-zone fallback).";
-        }
-      ];
+      validationErrors;
 
     canix-toolbelt.dns = {
       dnsConfig = validatedDnsConfig;
