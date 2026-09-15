@@ -787,7 +787,7 @@ in {
     codebergPagesZone = mkOption {
       type = types.nullOr types.str;
       default = null;
-      description = "Zone under which Codeberg Pages CNAME records are synthesized. Null falls back to the first declared zone; set explicitly when that is ambiguous.";
+      description = "Zone under which Codeberg Pages CNAME records are synthesized. Must be set explicitly when autoSynthesizeCodebergPagesCnames is enabled with a non-empty registry; evaluation fails otherwise instead of guessing the first declared zone.";
     };
 
     codebergPagesSites = mkOption {
@@ -898,7 +898,13 @@ in {
         assertion = false;
         inherit message;
       })
-      validationErrors;
+      validationErrors
+      ++ [
+        {
+          assertion = !(cfg.autoSynthesizeCodebergPagesCnames && cfg.codebergPagesSites != [] && cfg.codebergPagesZone == null);
+          message = "canix-toolbelt.dns.codebergPagesZone must be set explicitly when autoSynthesizeCodebergPagesCnames is enabled with a non-empty codebergPagesSites registry (no implicit first-zone fallback).";
+        }
+      ];
 
     canix-toolbelt.dns = {
       dnsConfig = validatedDnsConfig;

@@ -34,19 +34,16 @@ in {
   };
 
   # When the wg-home link is declared (via fleetix integration), derive wgHome
-  # defaults only from explicit link fields. Consumers must set vpnDomain and
-  # endpointHost themselves (canix does in root/modules/networking/wg_home.nix);
-  # no fleet domain is implied here.
+  # defaults only from explicit link fields. Consumers must set vpnDomain
+  # themselves (canix does in root/modules/networking/wg_home.nix); no fleet
+  # domain is implied here, and the link schema carries no such field.
   config.canix-toolbelt.networking.wgHome = lib.mkIf ((wgLink.cidr or null) != null) (
     lib.mkMerge [
-      (lib.mkIf ((wgLink.vpnDomain or null) != null) {
-        vpnDomain = lib.mkDefault wgLink.vpnDomain;
-      })
       (lib.mkIf (endpointCandidate != null) {
         endpointHost = lib.mkDefault endpointCandidate;
       })
       {
-        port = lib.mkDefault (wgLink.port or 54321);
+        port = lib.mkDefault (firstNonNull [(wgLink.port or null) 54321]);
       }
     ]
   );

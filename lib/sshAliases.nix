@@ -14,9 +14,10 @@
 # Tunnel aliases (i<t>/t<t>) encode consumer routing policy: pass the VPN
 # alias of the jump host explicitly, e.g. jumpHostAlias = "vhub". Null
 # disables tunnel aliases entirely (fail closed). The initrd alias (i<t>)
-# additionally requires allowRelaxedInitrdCheck: it disables host-key
-# verification and must never be enabled silently. Empty result is valid —
-# caller may warn if reachable set is empty.
+# keeps normal host-key verification unless allowRelaxedInitrdCheck is set,
+# which adds StrictHostKeyChecking=no plus /dev/null known-hosts and must
+# never be enabled silently. Empty result is valid — caller may warn if the
+# reachable set is empty.
 {
   lib,
   hosts,
