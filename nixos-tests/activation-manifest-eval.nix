@@ -33,7 +33,7 @@
       {
         canix-toolbelt.activation.contracts.openobserve = {
           enabled = true;
-          owner = "canix:root/hosts/thething/server/openobserve.nix";
+          owner = "canix:root/hosts/hub/server/openobserve.nix";
           rollout = "reconcile";
           requirements.password = {
             phase = "runtime";
@@ -79,7 +79,7 @@ in
       }
       {
         name = "contract-owner";
-        assertion = contract.owner == "canix:root/hosts/thething/server/openobserve.nix";
+        assertion = contract.owner == "canix:root/hosts/hub/server/openobserve.nix";
         message = "manifest must preserve the contract owner";
       }
       {

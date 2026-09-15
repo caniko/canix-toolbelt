@@ -12,8 +12,9 @@
 #   d<name>  target in fromHost.directLinkPeers (mutual; asserted symmetric)
 #
 # Tunnel aliases (i<t>/t<t>) encode consumer routing policy: pass the VPN
-# alias of the jump host explicitly. Empty result is valid — caller may warn
-# if reachable set is empty.
+# alias of the jump host explicitly, e.g. jumpHostAlias = "vhub". Null
+# disables tunnel aliases entirely (fail closed). Empty result is valid —
+# caller may warn if reachable set is empty.
 {
   lib,
   hosts,
@@ -23,8 +24,8 @@
   defaultIdentity,
   defaultPort,
   overrides ? {},
-  jumpHostAlias ? "vthething",
-  jumpExcludedHost ? "thething",
+  jumpHostAlias ? null,
+  jumpExcludedHost ? null,
   enableInitrdAlias ? true,
   initrdPort ? 2222,
 }: let
@@ -76,7 +77,9 @@
   aliasesFor = targetName: let
     t = hosts.${targetName};
     isSelf = targetName == fromHost;
-    isJumpExcluded = targetName == jumpExcludedHost;
+    tunnelVia = jumpHostAlias;
+    tunnelsEnabled = tunnelVia != null;
+    isJumpExcluded = jumpExcludedHost != null && targetName == jumpExcludedHost;
     o = overrideOf (overrides.${targetName} or {});
     hasLan = (t.lanIp or null) != null;
     hasWg = (t.wgHomeIp or null) != null;
@@ -86,17 +89,17 @@
     // lib.optionalAttrs (!isSelf && hasLan) {
       "l${targetName}" = mkBlock t.lanIp ({Compression = false;} // o);
     }
-    // lib.optionalAttrs (!isSelf && hasLan && enableInitrdAlias) {
+    // lib.optionalAttrs (!isSelf && hasLan && enableInitrdAlias && tunnelsEnabled) {
       "i${targetName}" = mkBlock t.lanIp ({
           Port = initrdPort;
-          ProxyJump = jumpHostAlias;
+          ProxyJump = tunnelVia;
           StrictHostKeyChecking = "no";
           UserKnownHostsFile = "/dev/null";
         }
         // o);
     }
-    // lib.optionalAttrs (!isSelf && hasLan && fromHasWg && !isJumpExcluded) {
-      "t${targetName}" = mkBlock t.lanIp ({ProxyJump = jumpHostAlias;} // o);
+    // lib.optionalAttrs (!isSelf && hasLan && fromHasWg && tunnelsEnabled && !isJumpExcluded) {
+      "t${targetName}" = mkBlock t.lanIp ({ProxyJump = tunnelVia;} // o);
     }
     // lib.optionalAttrs (!isSelf && fromHasWg && hasWg) {
       "v${targetName}" = mkBlock t.wgHomeIp o;

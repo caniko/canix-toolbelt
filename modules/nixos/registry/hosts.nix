@@ -107,7 +107,7 @@
       directLinkPeers = mkOption {
         type = types.listOf types.str;
         default = [];
-        example = ["nomad"];
+        example = ["peer-host"];
         description = "Hostnames this host is directly cabled to (mutual).";
       };
 
@@ -177,7 +177,7 @@ in {
         cidr = mkOption {
           type = types.nullOr types.str;
           default = null;
-          description = "Network CIDR for this link (e.g. \"10.123.0.0/24\").";
+          description = "Network CIDR for this link (e.g. \"198.51.100.0/24\").";
         };
         serverAddress = mkOption {
           type = types.nullOr types.str;

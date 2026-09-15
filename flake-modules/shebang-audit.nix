@@ -16,7 +16,7 @@
 #       # Audit only nixosConfigurations whose name ends in "-crossbow":
 #       filter = name: _: lib.hasSuffix "-crossbow" name;
 #       # Or pick configurations explicitly:
-#       # configurations = { thething-crossbow = self.nixosConfigurations.thething-crossbow; };
+#       # configurations = { hub-crossbow = self.nixosConfigurations.hub-crossbow; };
 #     };
 #   };
 {

@@ -15,17 +15,17 @@
           hosts = {
             client = {
               deviceType = "laptop";
-              wgHomeIp = "10.123.0.2";
+              wgHomeIp = "198.51.100.2";
             };
             server = {
               deviceType = "server";
-              wgHomeIp = "10.123.0.1";
+              wgHomeIp = "198.51.100.1";
               wgHomePublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
             };
           };
           networking = {
             links.wg-home = {
-              cidr = "10.123.0.0/24";
+              cidr = "198.51.100.0/24";
               endpointHost = "wg.example.test";
               port = 54321;
             };

@@ -47,15 +47,15 @@
       type = lib.types.attrsOf (lib.types.attrsOf lib.types.unspecified);
       default = {
         lan = {
-          name = "Home LAN";
-          cidrv4 = "192.168.178.0/24";
+          name = "LAN";
+          cidrv4 = "192.0.2.0/24";
         };
         wg-home = {
           name = "WireGuard VPN";
-          cidrv4 = "10.123.0.0/24";
+          cidrv4 = "198.51.100.0/24";
         };
       };
-      description = "nix-topology network definitions.";
+      description = "nix-topology network definitions. Documentation-range placeholders; consumers with real topology should pass explicit networks.";
     };
 
     extra = lib.mkOption {

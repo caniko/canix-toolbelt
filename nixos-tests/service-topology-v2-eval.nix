@@ -9,7 +9,7 @@
   topology = {
     schemaVersion = 2;
     links.wg-home = {
-      subnet = "10.123.0.0/24";
+      subnet = "198.51.100.0/24";
       port = 51820;
       endpointSubdomain = "wg";
     };
@@ -45,7 +45,7 @@
           lanInterface = "lan0";
         };
         links.wg-home = {
-          address = "10.123.0.1";
+          address = "198.51.100.1";
           role = "server";
           publicKey = "hub-key";
         };
@@ -341,7 +341,7 @@
             ingressListeners = {
               public = ["192.0.2.240:443"];
               solo = ["192.0.2.241:443"];
-              vpn = ["10.123.0.1:443"];
+              vpn = ["198.51.100.1:443"];
             };
             cloudflareCidrs = ["203.0.113.0/24"];
             staticRoots.docs = ../lib;
@@ -458,7 +458,7 @@ in
       }
       {
         name = "vpn-dns-from-access";
-        assertion = builtins.elem "/private.example.test/10.123.0.1" dnsAddresses && !(builtins.elem "/app.example.test/10.123.0.1" dnsAddresses);
+        assertion = builtins.elem "/private.example.test/198.51.100.1" dnsAddresses && !(builtins.elem "/app.example.test/198.51.100.1" dnsAddresses);
         message = "VPN DNS must derive records from site access, not hostname suffix";
       }
       {

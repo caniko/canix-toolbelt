@@ -205,7 +205,7 @@ in {
     extraDomains = mkOption {
       type = types.listOf types.str;
       default = [];
-      example = ["tartanoglu.com"];
+      example = ["example.com"];
       description = ''
         Additional mail domains to seed as Stalwart domain principals, on top of
         the domains derived from every account email. Stalwart rejects creating
