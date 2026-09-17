@@ -27,7 +27,7 @@
     };
     # Transitional compatibility only: database-specific modules now live in
     # db-harbor and this input can be removed after consumers migrate.
-    db-harbor = {
+    harbor-db = {
       url = "git+https://github.com/caniko/harbor-db.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
@@ -95,7 +95,7 @@
             # owned by db-harbor; keep the old option path during migration.
             pg-backup = {
               imports = [
-                inputs.db-harbor.nixosModules.pg-backup
+                inputs.harbor-db.nixosModules.pg-backup
                 (nixpkgs.lib.mkAliasOptionModule
                   ["canix-toolbelt" "services" "pgBackup"]
                   ["services" "db-harbor" "pgBackup"])
