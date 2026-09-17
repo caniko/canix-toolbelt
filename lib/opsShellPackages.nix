@@ -7,7 +7,7 @@
 #   - openssl, ripgrep
 #
 # Returned as a list of packages so it composes with arbitrary shell builders
-# (`pkgs.mkShell`, rs-harbor's `mkDevShell`, etc).
+# (`pkgs.mkShell`, harbor-rs's `mkDevShell`, etc).
 #
 # Used internally by `flakeModules.ops-shell`; expose separately so consumers
 # can plug it into their own builder.

@@ -95,7 +95,7 @@
         defaultText = "pkgs.mkShell";
         description = ''
           Shell builder. Override to use a custom builder (e.g.
-          `rs-harbor.lib.mkDevShell` configured for Rust cross-compilation).
+          `harbor-rs.lib.mkDevShell` configured for Rust cross-compilation).
           Receives `{packages, shellHook, ...attrs}` where `attrs` includes
           every entry of `extraEnv`.
         '';
