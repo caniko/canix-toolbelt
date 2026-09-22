@@ -42,7 +42,6 @@
     wrapper-manager.url = "github:viperML/wrapper-manager/51ad0422b925d830bf4af36979fed51209f79c0a";
     plinth = {
       url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
     secret-manager = {
       url = "git+https://github.com/caniko/secret-manager.git";
