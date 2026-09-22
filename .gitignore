@@ -1,5 +1,6 @@
 result
 result-*
+.nix-results/
 .direnv/
 .pre-commit-config.yaml
 graphify-out/
