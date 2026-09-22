@@ -130,15 +130,8 @@
       )
       normalized.executables;
     envRules = lib.optionals normalized.wrappers.environmentAssignments (
-      lib.concatMap (
-        executable:
-          map (command: {
-            key = "*=* ${mkCommand executable command}";
-            inherit action;
-          })
-          (lib.concatMap commandVariants normalized.commands)
-      )
-      normalized.executables
+      map (rule: rule // {key = "*=* ${rule.key}";})
+      (commandRules ++ storeRules ++ resultRules)
     );
     storeRules = lib.optionals normalized.wrappers.nixStorePaths (
       lib.concatMap (

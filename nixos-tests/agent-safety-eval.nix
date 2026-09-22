@@ -46,6 +46,14 @@ in
         message = "wildcard declarations must include environment-prefix wrappers";
       }
       {
+        name = "combined-env-path-wrappers";
+        assertion =
+          wildcard."*=* /nix/store/*/bin/demo *" == "allow"
+          && wildcard."*=* ./result/bin/demo *" == "allow"
+          && !(builtins.hasAttr "*=* ./result/bin/demo query *" narrow);
+        message = "environment wrappers must compose with enabled executable paths";
+      }
+      {
         name = "narrow-command";
         assertion = narrow."demo query *" == "allow" && narrow."demo-admin query *" == "allow";
         message = "structured declarations must render all declared executable aliases";
