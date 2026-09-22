@@ -54,21 +54,17 @@ in
   mkEvalCheck {
     name = "dev-oom-guard-pause-eval";
     resultMessage = "dev-oom-guard foreground pause contract evaluated correctly";
+    nativeBuildInputs = [pkgs.jq];
+    # Inspect generated files at build time, without import-from-derivation.
+    runtimeScript = ''
+      jq -e --arg pausePath ${lib.escapeShellArg cfg.pausePath} '.pausePath == $pausePath' ${configSource} >/dev/null
+      jq -e 'any(.protect[]; .name == "interactive-root" and .maxAdj == -1000)' ${configSource} >/dev/null
+    '';
     assertions = [
       {
         name = "pause-path-is-configured";
         assertion = cfg.pausePath == "/run/user/1000/canix/foreground-active";
         message = "the marker path must be retained in the public module option";
-      }
-      {
-        name = "pause-path-is-rendered";
-        assertion = lib.hasInfix "pausePath" (builtins.readFile configSource);
-        message = "the runtime JSON must carry pausePath to the guard process";
-      }
-      {
-        name = "negative-protection-is-rendered";
-        assertion = lib.hasInfix ''"maxAdj": -1000'' (builtins.readFile configSource);
-        message = "negative protected-process adjustments must reach the runtime config";
       }
       {
         name = "user-scope-oom-policy";

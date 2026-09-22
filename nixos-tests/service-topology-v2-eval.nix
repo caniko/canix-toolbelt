@@ -378,13 +378,16 @@
   redirectRoute = builtins.elemAt appRoutes 2;
   fallbackRoute = builtins.elemAt appRoutes 3;
   handler = name: route: lib.findFirst (item: item.handler or "" == name) null route.handle;
-  configJson = builtins.readFile edge1.config.services.caddy.configFile;
   relayRoute = builtins.head backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.routes;
   dnsAddresses = hub.config.services.dnsmasq.settings.address;
 in
   mkEvalCheck {
     name = "service-topology-v2-eval";
     resultMessage = "Fleetix service topology v2 registry evaluated expected Caddy, DNS, and firewall behavior";
+    nativeBuildInputs = [pkgs.jq];
+    runtimeScript = ''
+      jq -e '.apps.tls.certificates.load_files == [{"certificate":"/var/lib/acme/example/fullchain.pem","key":"/var/lib/acme/example/key.pem"}]' ${edge1.config.services.caddy.configFile} >/dev/null
+    '';
     assertions = [
       {
         name = "fleetix-populates-v2-registry";
@@ -450,11 +453,6 @@ in
         name = "auth-and-response-headers";
         assertion = (handler "authenticator" exactRoute).portal_name == "users" && (handler "headers" exactRoute).response.set.X-Service == ["app"] && (handler "headers" fallbackRoute).response.set.Cache-Control == ["no-store"];
         message = "auth policies and route response headers must render";
-      }
-      {
-        name = "certificates-preserved";
-        assertion = lib.hasInfix ''"load_files":[{"certificate":"/var/lib/acme/example/fullchain.pem","key":"/var/lib/acme/example/key.pem"}]'' configJson;
-        message = "configured certificate files must remain in Caddy JSON";
       }
       {
         name = "vpn-dns-from-access";
