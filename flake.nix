@@ -83,8 +83,8 @@
               inherit (inputs) wrapper-manager;
             };
             firefoxGpu = import ./lib/firefoxGpu.nix {
-              lib = nixpkgs.lib;
-              wrapper-manager = inputs.wrapper-manager;
+              inherit (nixpkgs) lib;
+              inherit (inputs) wrapper-manager;
             };
           };
         nixosModules =

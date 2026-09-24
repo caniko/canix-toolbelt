@@ -6,7 +6,7 @@
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
   fakeBuildPkgs = {
     stdenv.hostPlatform.system = "marker-build-system";
-    runCommand = pkgs.runCommand;
+    inherit (pkgs) runCommand;
   };
   fakeInputs =
     inputs

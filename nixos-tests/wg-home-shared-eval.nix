@@ -11,13 +11,12 @@
       ];
     };
 
-  evalWithoutLink =
-    lib.evalModules {
-      modules = [
-        ../modules/nixos/registry/hosts.nix
-        ../modules/nixos/networking/wg-home-shared.nix
-      ];
-    };
+  evalWithoutLink = lib.evalModules {
+    modules = [
+      ../modules/nixos/registry/hosts.nix
+      ../modules/nixos/networking/wg-home-shared.nix
+    ];
+  };
 
   # Option metadata: distinguishes "intentionally undefined" from an
   # evaluation failure (tryEval success cannot tell those apart).

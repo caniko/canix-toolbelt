@@ -13,7 +13,6 @@
 {
   config,
   lib,
-  pkgs,
   gpuMedia ? null,
   ...
 }: let

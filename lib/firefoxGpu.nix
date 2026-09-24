@@ -31,20 +31,20 @@
         })
       else basePackage;
     wrapped =
-      ((wrapper-manager.lib {
-          inherit pkgs;
-          modules = [
-            {
-              wrappers.${wrapperName} = {
-                basePackage = wrapperBasePackage;
-                env = env;
-                programs = lib.genAttrs skipPrograms (_: {});
-              };
-            }
-          ];
-        }).config.wrappers.${
-          wrapperName
-        })
+      (wrapper-manager.lib {
+        inherit pkgs;
+        modules = [
+          {
+            wrappers.${wrapperName} = {
+              basePackage = wrapperBasePackage;
+              inherit env;
+              programs = lib.genAttrs skipPrograms (_: {});
+            };
+          }
+        ];
+      }).config.wrappers.${
+        wrapperName
+      }
           .wrapped;
   in
     wrapped

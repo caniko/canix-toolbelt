@@ -213,7 +213,7 @@
     legacy = false;
     namespace = "vpn-${id}";
     interface = "wg-${id}";
-    addresses = connection.addresses;
+    inherit (connection) addresses;
     peers =
       map (peer: {
         inherit (peer) endpoint publicKey dynamicEndpointRefreshSeconds dynamicEndpointRefreshRestartSeconds;
@@ -236,9 +236,9 @@
     namespace = legacyCfg.name;
     interface = legacyCfg.interfaceName;
     addresses = legacyCfg.ips;
-    peers = legacyCfg.peers;
+    inherit (legacyCfg) peers;
     allowedIps = lib.concatMap (peer: peer.allowedIPs) legacyCfg.peers;
-    dnsServers = legacyCfg.dnsServers;
+    inherit (legacyCfg) dnsServers;
     portForwarding = null;
     inherit (legacyCfg) boundServices portForwards wrappedApps privateKeyFile;
     renewal = {
@@ -247,9 +247,9 @@
       onBootSec = "";
       onUnitActiveSec = "";
     };
-    socks = legacyCfg.socks;
+    inherit (legacyCfg) socks;
     socksHostAddress = null;
-    socksPort = legacyCfg.socksPort;
+    inherit (legacyCfg) socksPort;
   };
 
   instances =

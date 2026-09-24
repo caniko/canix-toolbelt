@@ -193,7 +193,7 @@
 
   actionAssertions = lib.concatMap (siteName:
     map (route: let
-      action = route.action;
+      inherit (route) action;
       valid =
         if action.type == "proxy"
         then action.endpoint != null

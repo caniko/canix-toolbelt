@@ -32,8 +32,8 @@
   badNode = check (valid // {renderNode = "renderD128";});
 
   firewall = import ../lib/firefoxGpu.nix {
-    lib = pkgs.lib;
-    wrapper-manager = inputs.wrapper-manager;
+    inherit (pkgs) lib;
+    inherit (inputs) wrapper-manager;
   };
   fakeFf = pkgs.symlinkJoin {
     name = "fake-firefox";

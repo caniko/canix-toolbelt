@@ -7,7 +7,12 @@
   wgLink = config.canix-toolbelt.networking.links.wg-home or {};
   # First non-null candidate; a declared-but-null field falls through.
   firstNonNull = values:
-    lib.foldl' (acc: value: if acc != null then acc else value) null values;
+    lib.foldl' (acc: value:
+      if acc != null
+      then acc
+      else value)
+    null
+    values;
   endpointCandidate = firstNonNull [
     (wgLink.endpointHost or null)
     (wgLink.ddnsHost or null)

@@ -90,7 +90,7 @@
           handler = "static_response";
           status_code = action.status;
         }
-        // lib.optionalAttrs (action.body != null) {body = action.body;})
+        // lib.optionalAttrs (action.body != null) {inherit (action) body;})
     ]
     else throw "canix-toolbelt Caddy registry: unsupported HTTP action `${action.type}`";
 in rec {

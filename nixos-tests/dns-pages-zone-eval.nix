@@ -1,4 +1,7 @@
-{inputs, pkgs}: let
+{
+  inputs,
+  pkgs,
+}: let
   inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 

@@ -48,7 +48,8 @@ in
       {
         name = "combined-env-path-wrappers";
         assertion =
-          wildcard."*=* /nix/store/*/bin/demo *" == "allow"
+          wildcard."*=* /nix/store/*/bin/demo *"
+          == "allow"
           && wildcard."*=* ./result/bin/demo *" == "allow"
           && !(builtins.hasAttr "*=* ./result/bin/demo query *" narrow);
         message = "environment wrappers must compose with enabled executable paths";

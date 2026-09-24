@@ -36,7 +36,7 @@
         if route.action.type == "proxy"
         then resolveEndpoint route.action.endpoint
         else null;
-      staticRoots = cfg.staticRoots;
+      inherit (cfg) staticRoots;
     };
 
   sitesForGroup = groupName:

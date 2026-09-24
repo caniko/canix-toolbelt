@@ -25,10 +25,29 @@
   };
 
   closed = sshAliases base;
-  tunneled = sshAliases (base // {jumpHostAlias = "vgamma"; jumpExcludedHost = "beta";});
-  relaxed = sshAliases (base // {jumpHostAlias = "vgamma"; jumpExcludedHost = "gamma"; allowRelaxedInitrdCheck = true;});
-  noInitrd = sshAliases (base // {jumpHostAlias = "vgamma"; jumpExcludedHost = "gamma"; enableInitrdAlias = false;});
-  overridden = sshAliases (base // {jumpHostAlias = "vgamma"; jumpExcludedHost = "gamma";} // {overrides = {beta = {port = 2222;};};});
+  tunneled = sshAliases (base
+    // {
+      jumpHostAlias = "vgamma";
+      jumpExcludedHost = "beta";
+    });
+  relaxed = sshAliases (base
+    // {
+      jumpHostAlias = "vgamma";
+      jumpExcludedHost = "gamma";
+      allowRelaxedInitrdCheck = true;
+    });
+  noInitrd = sshAliases (base
+    // {
+      jumpHostAlias = "vgamma";
+      jumpExcludedHost = "gamma";
+      enableInitrdAlias = false;
+    });
+  overridden = sshAliases (base
+    // {
+      jumpHostAlias = "vgamma";
+      jumpExcludedHost = "gamma";
+    }
+    // {overrides = {beta = {port = 2222;};};});
 in
   mkEvalCheck {
     name = "ssh-aliases-eval";

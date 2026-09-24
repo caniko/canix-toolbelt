@@ -10,8 +10,8 @@
     to = "https://new.example.com";
     preservePath = false;
   };
-  domains =
-    (inputs.fleetix.lib.projections.normalize {
+  inherit
+    ((inputs.fleetix.lib.projections.normalize {
       topology = {
         hosts = {};
         links = {};
@@ -25,7 +25,9 @@
         ];
         services = {};
       };
-    }).domains;
+    }))
+    domains
+    ;
 
   moduleResult = inputs.nixpkgs.lib.nixosSystem {
     inherit (pkgs.stdenv.hostPlatform) system;
@@ -38,7 +40,7 @@
       {
         canix-toolbelt.dns = {
           enable = true;
-          redirects = domains.redirects;
+          inherit (domains) redirects;
         };
 
         system.stateVersion = "25.11";
