@@ -15,6 +15,9 @@
       ruff-check.enable = true;
       alejandra.enable = true;
       rustfmt.enable = true;
+      # Shell scripts are formatted through treefmt only; agents may not
+      # run shfmt directly (see the project-side formatter deny policy).
+      shfmt.enable = true;
       statix.enable = true;
       terraform.enable = true;
       typos.enable = false;
