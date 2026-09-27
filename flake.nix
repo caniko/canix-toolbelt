@@ -117,6 +117,7 @@
       };
 
       perSystem = {
+        config,
         pkgs,
         system,
         ...
@@ -184,6 +185,10 @@
           };
         apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
           domain = "canix-toolbelt.tartanoglu.com";
+        };
+        devShells.default = pkgs.mkShell {
+          packages = [config.treefmt.build.wrapper];
+          shellHook = config.pre-commit.installationScript;
         };
         formatter = pkgs.alejandra;
       };
