@@ -9,6 +9,16 @@
   legacyCfg = config.canix-toolbelt.networking.vpnNetns;
   pluralCfg = config.canix-toolbelt.networking.vpnNamespaces;
   identifierPattern = "^[A-Za-z0-9][A-Za-z0-9_-]*$";
+  literalIpv4EndpointPattern = "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:[0-9]+$";
+  literalIpv6EndpointPattern = "^[[][0-9A-Fa-f:]+[]]:[0-9]+$";
+  isLiteralEndpoint = endpoint:
+    (builtins.match literalIpv4EndpointPattern endpoint
+      != null
+      || builtins.match literalIpv6EndpointPattern endpoint != null)
+    && (let
+      port = lib.toInt (lib.last (lib.splitString ":" endpoint));
+    in
+      port > 0 && port <= 65535);
 
   legacyPeerType = types.submodule {
     options = {
@@ -363,9 +373,11 @@
 
     portForwardUnits = lib.mapAttrs' (label: port: let
       bindAddress =
-        if !instance.legacy && instance.socks && label == "socks"
+        if instance.legacy
+        then null
+        else if instance.socks && label == "socks"
         then instance.socksHostAddress
-        else null;
+        else "127.0.0.1";
     in
       lib.nameValuePair (names.forward label) {
         description = "Forward TCP port ${toString port} from the ${instance.namespace} VPN namespace to the host";
@@ -393,6 +405,12 @@
           else "canix-toolbelt.networking.vpnNamespaces.${instance.id}.wrappedApps.${label} requires package or bin, a safe identifier, and explicit identifier-safe allowedUsers.";
       })
       instance.wrappedApps;
+    peerAssertions =
+      map (peer: {
+        assertion = instance.legacy || isLiteralEndpoint peer.endpoint;
+        message = "VPN namespace `${instance.namespace}` requires a literal IP WireGuard endpoint; hostname resolution cannot bootstrap inside an isolated namespace.";
+      })
+      instance.peers;
   in {
     assertions =
       [
@@ -446,7 +464,8 @@
         assertion = builtins.match identifierPattern label != null;
         message = "VPN namespace `${instance.namespace}` port-forward label `${label}` is not a safe identifier.";
       }) (lib.attrNames instance.portForwards)
-      ++ appAssertions;
+      ++ appAssertions
+      ++ peerAssertions;
 
     environment.etc."netns/${instance.namespace}/resolv.conf".text =
       lib.concatMapStringsSep "\n" (server: "nameserver ${server}") instance.dnsServers;
@@ -466,7 +485,7 @@
       {
         ${names.create} = {
           description = "Create the ${instance.namespace} VPN network namespace";
-          before = ["network.target"];
+          before = ["wireguard-${instance.interface}.service" "network.target"];
           requiredBy = ["wireguard-${instance.interface}.service"];
           serviceConfig = {
             Type = "oneshot";

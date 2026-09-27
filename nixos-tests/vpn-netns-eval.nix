@@ -43,7 +43,7 @@
     };
   };
 
-  plural =
+  evaluatePlural = endpoint:
     (import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = "x86_64-linux";
       modules = [
@@ -63,7 +63,7 @@
                   peers = [
                     {
                       publicKey = "can-peer-key";
-                      endpoint = "can.example.test:51820";
+                      inherit endpoint;
                       allowedIps = ["0.0.0.0/0"];
                       dynamicEndpointRefreshSeconds = 30;
                       dynamicEndpointRefreshRestartSeconds = 5;
@@ -97,7 +97,7 @@
                   peers = [
                     {
                       publicKey = "dejana-peer-key";
-                      endpoint = "dejana.example.test:51820";
+                      endpoint = "192.0.2.2:51820";
                       allowedIps = ["0.0.0.0/0"];
                     }
                   ];
@@ -115,6 +115,8 @@
         }
       ];
     }).config;
+  plural = evaluatePlural "192.0.2.1:51820";
+  pluralWithHostname = evaluatePlural "can.example.test:51820";
 
   wg = plain.networking.wireguard.interfaces.wg0;
   setupScript = plain.systemd.services.netns-vpn-setup.serviceConfig.ExecStart;
@@ -206,6 +208,16 @@ in
         message = "plural VPN instances must create isolated interfaces and bind their own services";
       }
       {
+        name = "plural-namespace-before-wireguard";
+        assertion = builtins.elem "wireguard-wg-can.service" plural.systemd.services.netns-vpn-can.before;
+        message = "the namespace must exist before WireGuard starts";
+      }
+      {
+        name = "plural-port-forwards-loopback-only";
+        assertion = lib.hasInfix "bind=127.0.0.1" plural.systemd.services."netns-vpn-can-forward-qbittorrent".serviceConfig.ExecStart;
+        message = "plural host forwards must bind to loopback by default";
+      }
+      {
         name = "plural-socks-loopback-only";
         assertion = lib.hasInfix "bind=127.0.0.1" plural.systemd.services."netns-vpn-can-forward-socks".serviceConfig.ExecStart;
         message = "plural SOCKS forwards must bind to host loopback by default";
@@ -219,6 +231,14 @@ in
           == 30
           && peer.dynamicEndpointRefreshRestartSeconds == 5;
         message = "dynamic endpoint refresh settings must flow into the wireguard peer";
+      }
+      {
+        name = "plural-rejects-hostname-endpoints";
+        assertion = lib.any (entry:
+          !entry.assertion
+          && lib.hasInfix "literal IP WireGuard endpoint" entry.message)
+        pluralWithHostname.assertions;
+        message = "isolated namespaces must reject endpoints that require DNS before tunnel setup";
       }
       {
         name = "plural-app-sudo-users";
