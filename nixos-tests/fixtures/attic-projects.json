@@ -1,0 +1,4 @@
+{
+  "media": { "consumers": ["atlas"], "runner": "atlas" },
+  "sdk": { "consumers": ["nomad"] }
+}

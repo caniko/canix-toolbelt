@@ -131,6 +131,7 @@
         checks =
           {
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
+            attic-projects-registry-eval = import ./nixos-tests/attic-projects-registry-eval.nix {inherit pkgs;};
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             gpu-media-eval = import ./nixos-tests/gpu-media-eval.nix {inherit inputs pkgs;};
             direct-link-eval = import ./nixos-tests/direct-link-eval.nix {inherit pkgs;};

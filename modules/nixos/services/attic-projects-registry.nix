@@ -15,7 +15,10 @@
   ...
 }: let
   cfg = config.canix-toolbelt.atticProjects;
-  registry = lib.importJSON cfg.registry;
+  registry =
+    if builtins.isAttrs cfg.registry && !(cfg.registry ? outPath)
+    then cfg.registry
+    else lib.importJSON cfg.registry;
   inherit (config.networking) hostName;
 
   forThisHost =
@@ -33,8 +36,8 @@
 in {
   options.canix-toolbelt.atticProjects = {
     registry = lib.mkOption {
-      type = lib.types.path;
-      description = "Path to the attic-projects JSON registry.";
+      type = lib.types.either lib.types.path (lib.types.attrsOf (lib.types.attrsOf lib.types.anything));
+      description = "Path to the attic-projects JSON registry or an already-resolved project attrset.";
     };
 
     secretPath = lib.mkOption {
