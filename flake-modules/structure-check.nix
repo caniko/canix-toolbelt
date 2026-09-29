@@ -31,6 +31,28 @@
     ...
   }: let
     cfg = config.canix-toolbelt.structure-check;
+    sourceRoot =
+      if builtins.isPath cfg.src
+      then cfg.src
+      # fileset requires a path value; its resulting source restores the store
+      # dependency after normalising a context-carrying flake outPath string.
+      else /. + builtins.unsafeDiscardStringContext (toString cfg.src);
+    # Copy the scanned subtrees independently of the containing flake. An
+    # unrelated change elsewhere in a consumer must not invalidate this check.
+    source = lib.fileset.toSource {
+      root = sourceRoot;
+      fileset = lib.fileset.unions (
+        # ripgrep also reads ignore files above the selected scan directories.
+        [(lib.fileset.fileFilter (file: builtins.elem file.name [".gitignore" ".ignore" ".rgignore"]) sourceRoot)]
+        ++ lib.concatMap (rule:
+          map (path: sourceRoot + "/${path}") (
+            if rule.paths == []
+            then ["."]
+            else rule.paths
+          ))
+        cfg.rules
+      );
+    };
     mkRule = r: let
       globArgs = lib.concatMapStringsSep " " (g: "-g ${lib.escapeShellArg g}") r.globs;
       pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg r.paths;
@@ -82,7 +104,7 @@
         pkgs.runCommand cfg.name {
           nativeBuildInputs = [pkgs.ripgrep];
         } ''
-          cd ${cfg.src}
+          cd ${source}
           ${lib.concatMapStringsSep "\n" mkRule cfg.rules}
           touch "$out"
         '';
