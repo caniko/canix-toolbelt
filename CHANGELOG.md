@@ -5,6 +5,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Supply a CA bundle to sandboxed Zola site builds so local-only site fixtures
+  can initialize Zola's HTTP client.
+
 ## [0.1.0] - 2026-09-30
 
 ### Added

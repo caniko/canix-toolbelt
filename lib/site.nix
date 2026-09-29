@@ -52,6 +52,8 @@ in {
       inherit pname version src;
 
       nativeBuildInputs = [pkgs.zola];
+      # Zola initializes its HTTP client even for entirely local templates.
+      SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
       phases = ["buildPhase" "installPhase"];
 
