@@ -4,8 +4,12 @@ platform = "github"
 runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
+with_msrv = true
+with_audit = true
+with_docs = true
+publish_crates = true
+extra_env= { RUSTDOCFLAGS = "-D warnings" }
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"
 canonical_domain = "canix-toolbelt.tartanoglu.com"
-source_branch = "trunk"

@@ -1,5 +1,15 @@
 # canix-toolbelt
 
+<!-- simit:badges:start -->
+
+[![CI](https://img.shields.io/badge/CI-managed-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
+
+<!-- simit:badges:end -->
+
+The Rust library and standalone CLI candidate are documented in [RUST.md](RUST.md).
+They provide Cargo-native runtime-manifest loading; publication readiness and
+remaining release gates are tracked in [RELEASE.md](RELEASE.md).
+
 Reusable, host-agnostic Nix building blocks extracted from
 [caniko/canix](https://github.com/caniko/canix). The pieces here are the
 hyper-stable parts of that repo — modules and helpers that have low churn,

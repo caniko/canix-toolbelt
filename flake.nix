@@ -25,6 +25,8 @@
       url = "git+https://github.com/caniko/fleetix.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
+    harbor-rs.follows = "fleetix/harbor-rs";
     # Transitional compatibility only: database-specific modules now live in
     # db-harbor and this input can be removed after consumers migrate.
     harbor-db = {
@@ -68,6 +70,7 @@
 
       imports = [
         ./flake-modules/dev-stack.nix
+        ./flake-modules/rust.nix
       ];
 
       flake = {
@@ -188,10 +191,14 @@
           domain = "canix-toolbelt.tartanoglu.com";
         };
         devShells.default = pkgs.mkShell {
-          packages = [config.treefmt.build.wrapper];
+          packages = [config.treefmt.build.wrapper pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.cargo-audit pkgs.cmake pkgs.pkg-config pkgs.perl];
+          # This shell uses stable Rust; do not inherit Canix's nightly-only flags.
+          RUSTFLAGS = "";
+          CARGO_ENCODED_RUSTFLAGS = "";
           shellHook = config.pre-commit.installationScript;
         };
-        formatter = pkgs.alejandra;
+        devShells.docs = config.devShells.default;
+        formatter = config.treefmt.build.wrapper;
       };
     };
 }

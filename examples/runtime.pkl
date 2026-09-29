@@ -1,0 +1,24 @@
+// Synthetic consumer-owned manifest; paths are references, never read or run.
+bins {
+  ["fetch-tool"] {
+    name = "fetch-tool"
+    path = "/opt/example/bin/fetch"
+    description = null
+  }
+}
+endpoints {
+  ["api"] {
+    name = "api"
+    scheme = "http"
+    host = "127.0.0.1"
+    port = 8032
+    description = null
+  }
+}
+secrets {
+  ["token"] {
+    name = "token"
+    agenixPath = "/run/example/token"
+    mode = "0440"
+  }
+}

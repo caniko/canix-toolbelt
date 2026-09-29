@@ -1,0 +1,82 @@
+# canix-toolbelt Rust library and CLI
+
+Reusable operations for adopters of the Canix architecture. The first Rust
+release extracts runtime-manifest loading from Canix: binary paths, service
+endpoints, and agenix secret references. It depends on the published Fleetix
+library for embedded Pkl evaluation.
+
+**Release candidate:** `0.1.0` has passed local package verification but has not
+yet been published. The dependency/install examples below apply after successful
+Simit CI publication and registry verification. See `RELEASE.md` in the repository.
+
+```toml
+[dependencies]
+canix-toolbelt = "0.1.0"
+```
+
+```rust,no_run
+use canix_toolbelt::runtime::RuntimeManifest;
+use std::path::Path;
+
+let manifest = RuntimeManifest::load_from(Path::new("/run/example/runtime.pkl"))?;
+println!("{} binaries", manifest.bins.len());
+# Ok::<(), canix_toolbelt::runtime::LoadError>(())
+```
+
+Async callers use `RuntimeManifest::load_from_async(path).await`. The synchronous
+loader returns an error inside an existing Tokio runtime. Errors retain the
+manifest path and underlying evaluator diagnostic.
+
+Install the optional standalone CLI with Cargo:
+
+```sh
+cargo install canix-toolbelt --features cli
+canix-toolbelt runtime show --path /run/example/runtime.pkl
+```
+
+`runtime show` emits the typed manifest as JSON. A missing or invalid manifest
+exits unsuccessfully. It reads only the manifest and its Pkl dependencies;
+referenced binaries and secrets are not executed or read. Producers supply the
+three mappings `bins`, `endpoints`, and `secrets` and any schema defaults; see
+[`examples/runtime.pkl`](examples/runtime.pkl). The existing camelCase wire
+format, including `agenixPath`, is preserved.
+
+## Dependency contract
+
+Fleetix owns generic fleet operations. Toolbelt composes architecture conventions
+on top of Fleetix; Canix supplies fleet-specific data and policy. Shared behavior
+lives in libraries called in-process, with CLI parsing and presentation at the
+edges. Toolbelt's Rust crate has no Canix dependency, global output state,
+hardcoded fleet path, flake lookup, or Nix-based build script. Nix modules remain
+separate integration surfaces.
+
+This release implements runtime-manifest loading. Generic deployment extraction,
+toolbelt deployment profiles, and other command families are subsequent slices;
+this crate does not yet expose a deployment CLI.
+
+## Development and releases
+
+Run `cargo test --all-features`, `cargo test --no-default-features`,
+`cargo clippy --all-targets --all-features -- -D warnings`, and
+`cargo doc --no-deps --all-features`. Format through the repository's `treefmt`.
+The library and CLI build with Cargo alone; Nix is optional developer tooling.
+
+Simit generates the GitHub verification and crates.io publication workflows.
+The saved policy in `simit.toml` requests MSRV, all-feature, audit, and docs
+coverage. Regenerate with `simit init ci --platform github` and verify with
+`simit init ci --platform github --check --diff`, using the current generator
+described in `RELEASE.md`. That handoff also records the Nix-runtime coverage
+fixes and remaining release gates. CI and publication both test all features and
+the library-only configuration. The MSRV step selects `.#msrv`, verifies Rust
+1.88.0, and checks all targets with all features; `flake-modules/rust.nix` derives
+that compiler from this crate's `rust-version`.
+Signed exact-version tags trigger publication. Before tagging, check the
+maintainer trust root, versioned changelog, registry dependencies, package
+contents, dry-run publication, and GitHub publishing credential. Confirm the
+version on crates.io before switching downstream dependencies.
+
+The existing Nix-built Pages workflow requires Simit's shared CI runtime to be
+`nix`; the developer shell supplies Cargo and release tooling. This is a CI
+environment choice, not a dependency-distribution mechanism. Neither the crate
+archive nor its consumers need the flake. Cargo-only CI can replace this once
+Simit permits an independent runtime for Pages.

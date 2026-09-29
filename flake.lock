@@ -7174,6 +7174,10 @@
         "fleetix": "fleetix",
         "git-hooks": "git-hooks_10",
         "harbor-db": "harbor-db",
+        "harbor-rs": [
+          "fleetix",
+          "harbor-rs"
+        ],
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_6",
         "plinth": "plinth_3",

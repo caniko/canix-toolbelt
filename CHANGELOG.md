@@ -1,0 +1,17 @@
+# Changelog
+
+All notable Rust library and CLI changes are documented here. Nix module history
+is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-09-30
+
+### Added
+
+- Cargo-native runtime-manifest types and synchronous/asynchronous Pkl loading,
+  extracted from Canix with explicit consumer-owned paths and typed errors.
+- Optional `canix-toolbelt runtime show --path PATH` CLI using the same library.
+- Simit-generated GitHub verification and crates.io publication workflows,
+  release configuration, and exported maintainer trust root. First publication
+  remains pending the gates in `RELEASE.md`.

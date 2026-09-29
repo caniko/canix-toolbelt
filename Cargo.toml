@@ -1,0 +1,38 @@
+[package]
+name = "canix-toolbelt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
+license = "MIT"
+repository = "https://github.com/caniko/canix-toolbelt"
+homepage = "https://canix-toolbelt.tartanoglu.com"
+documentation = "https://docs.rs/canix-toolbelt"
+readme = "RUST.md"
+keywords = ["nixos", "runtime", "pkl", "configuration"]
+categories = ["config", "command-line-utilities"]
+include = ["/src/**", "/tests/**", "/examples/**", "/RUST.md", "/CHANGELOG.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+cli = ["dep:clap", "dep:serde_json"]
+
+[[bin]]
+name = "canix-toolbelt"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+fleetix = { version = "0.1.0", default-features = false }
+miette = "7"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
