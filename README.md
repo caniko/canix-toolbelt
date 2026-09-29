@@ -38,6 +38,15 @@ Two output families:
 }
 ```
 
+### GPU compute requests
+
+`lib.gpu.normalize` and `lib.gpu.forHost` expose an optional `compute` record:
+`{ dgpu = "intel"; compute.backend = "oneapi"; }` normalizes to a primary Intel
+GPU with `compute.backend = "oneapi"`. Requests are validated against the
+primary GPU (dGPU, otherwise iGPU): Intel/oneAPI, AMD/ROCm, NVIDIA/CUDA.
+Absent or null declarations normalize to `compute = null` and do not opt into
+acceleration. Consumers own package sources and runtime device selection.
+
 ### Dev-stack flake-parts module
 
 ```nix

@@ -4,6 +4,9 @@
 }: let
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
   inherit (inputs.nixpkgs) lib;
+  gpu = import ../lib/gpu.nix;
+  compute = data: (gpu.normalize data).compute;
+  rejects = data: !(builtins.tryEval (builtins.deepSeq (compute data) true)).success;
 
   eval = modules:
     lib.nixosSystem {
@@ -50,6 +53,45 @@ in
   mkEvalCheck {
     name = "gpu-backends-eval";
     assertions = [
+      {
+        name = "primary-compute-contract";
+        assertion =
+          compute {}
+          == null
+          && compute {dgpu = "intel";} == null
+          && compute {
+            dgpu = "intel";
+            compute.backend = "oneapi";
+          }
+          == {backend = "oneapi";}
+          && compute {
+            igpu = "intel";
+            compute.backend = "oneapi";
+          }
+          == {backend = "oneapi";}
+          && compute {
+            igpu = "amd";
+            dgpu = "nvidia";
+            compute.backend = "cuda";
+          }
+          == {backend = "cuda";}
+          && compute {
+            dgpu = "amd";
+            compute.backend = "rocm";
+          }
+          == {backend = "rocm";}
+          && rejects {compute.backend = "oneapi";}
+          && rejects {
+            igpu = "intel";
+            dgpu = "nvidia";
+            compute.backend = "oneapi";
+          }
+          && rejects {
+            dgpu = "intel";
+            compute.backend = "typo";
+          };
+        message = "compute requests must match the primary GPU and remain opt-in";
+      }
       {
         name = "diagnostics-absent";
         assertion = lib.all (case: lib.all (name: !(builtins.elem (package case name) (installedGpuPackages case))) diagnostics) cases;
