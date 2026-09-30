@@ -12,6 +12,10 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # dns-manager owns reusable DNS schema/rendering/backend code. Toolbelt
     # keeps only host/service-registry integration and the canix DNS wrapper.
     dns-manager = {
@@ -93,6 +97,12 @@
         nixosModules =
           (import ./modules/nixos)
           // {
+            cloud-host = {
+              imports = [
+                inputs.disko.nixosModules.disko
+                ./modules/nixos/hosts/cloud-host.nix
+              ];
+            };
             # Compatibility alias. Database-specific backup mechanics are
             # owned by db-harbor; keep the old option path during migration.
             pg-backup = {
@@ -133,6 +143,7 @@
       in {
         checks =
           {
+            cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
               inherit pkgs;
@@ -170,6 +181,16 @@
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
+          }
+          // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            cloud-host-install-bios = import ./nixos-tests/cloud-host-install.nix {
+              inherit inputs pkgs;
+              mode = "bios";
+            };
+            cloud-host-install-uefi = import ./nixos-tests/cloud-host-install.nix {
+              inherit inputs pkgs;
+              mode = "uefi";
+            };
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 

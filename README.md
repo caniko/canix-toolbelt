@@ -48,6 +48,134 @@ Two output families:
 }
 ```
 
+### Cloud-host configurator
+
+`nixosModules.cloud-host` composes a complete small NixOS guest using Disko and
+NetworkManager. Enable it explicitly and supply the disk, firmware, network
+selector, state version and operator public keys:
+
+```nix
+{
+  imports = [inputs.canix-toolbelt.nixosModules.cloud-host];
+  nixpkgs.hostPlatform = "x86_64-linux";
+  networking.hostName = "edge";
+  canix-toolbelt.cloudHost = {
+    enable = true;
+    stateVersion = "25.11"; # keep the host's initial value on upgrades
+    platform = "qemu";
+    boot.mode = "uefi";
+    disk = "/dev/disk/by-id/virtio-root"; # verify against this instance
+    network.interfaceName = "ens3"; # or network.macAddress
+    access = {
+      port = 1337;
+      authorizedKeys = [ (builtins.readFile ./operator.pub) ];
+    };
+  };
+}
+```
+
+Use the existing `nixpkgs.lib.nixosSystem` or your fleet's configuration builder;
+the module does not introduce another host registry. The normal NixOS options
+remain the interface for extra accounts, packages, services, and secret managers.
+The exported module imports its pinned Disko module. When composing with a fleet
+that already imports Disko, make `inputs.canix-toolbelt.inputs.disko.follows = "disko"`
+so both use the same module identity.
+
+Firmware is required: `uefi` selects systemd-boot with a 512 MiB FAT ESP;
+`bios` selects GRUB with a GPT BIOS boot partition. BIOS is x86_64 only; UEFI
+supports x86_64 and aarch64. Both use Btrfs with `compress=zstd:3` and `noatime`:
+
+| Subvolume | Mount | Recovery boundary |
+| --- | --- | --- |
+| `@root` | `/` | Snapshotted operating-system files |
+| `@nix` | `/nix` | Store, profiles and GC roots retained independently |
+| `@state` | `/var/lib` | Service databases, WireGuard identity and ACME state |
+| `@log` | `/var/log` | Logs retained across root recovery |
+| `@identity` | `/etc/ssh` | SSH host identity retained across root recovery |
+| `@snapshots` | `/.snapshots` | Root-only Snapper snapshots, root-readable |
+
+Weekly scrubbing covers the shared filesystem once, limited to 32 MiB/s. Daily
+root snapshots retain seven daily entries; numbered cleanup keeps five ordinary
+and five important snapshots, subject to Snapper's minimum age. Configure
+`storage.snapshots.*` and `storage.compressionLevel` as needed. These are count
+limits, not byte quotas or backups. Service state requires application-aware
+backup; keep persistent WireGuard keys under `/var/lib`, or regenerate runtime
+secrets with the fleet secret manager.
+
+Use NixOS generation rollback for deployments. For filesystem recovery, retain
+the corresponding Nix closure with a GC root before the checkpoint, recover the
+required root files, and activate the matching generation. Disko mounts `@root`
+explicitly: `snapper rollback` changing the filesystem's default subvolume is not
+a boot-selection mechanism here. Whole-root replacement requires an offline
+recovery procedure and a writable snapshot restored as `@root`; identities and
+service state stay on their separate subvolumes. Disko partitioning is an explicit
+installation operation, never an activation action. Reinstalling onto the same
+disk is destructive.
+
+The profile keeps `/tmp`, `/var/tmp`, `/home`, `/srv` and `/var` as ordinary
+directories unless explicitly mounted separately. This overrides systemd's
+implicit nested-subvolume creation: Btrfs root snapshots otherwise leave
+unwritable placeholders for those subvolumes, preventing services with
+`PrivateTmp` from starting after recovery. Add further subvolumes only with an
+explicit mount and recovery policy.
+
+`platform = "qemu"` supplies virtio drivers and the QEMU guest agent. `custom`
+leaves additional drivers to the platform module. Neither setting selects a cloud
+vendor. Provider selection must still verify actual firmware, disk/NIC identity,
+serial-console/recovery behavior and addressing requirements.
+
+IPv4 defaults to DHCP; IPv6 defaults to disabled. Static/routed providers can use:
+
+```nix
+canix-toolbelt.cloudHost.network.ipv4 = {
+  method = "manual";
+  addresses = [ "192.0.2.10/32" ];
+  gateway = "192.0.2.1";
+  gatewayOnLink = true;
+  dns = [ "192.0.2.53" ];
+};
+```
+
+IPv6 uses the same fields, with IPv6 literals. Manual addressing requires
+addresses, gateway and DNS. A `/32` or `/128` routed uplink can mark its gateway
+on-link explicitly. NetworkManager is the sole runtime manager and does not
+create automatic competing DHCP profiles. Test provider reachability before
+enrollment; syntactically valid addresses are not proof of working routing.
+
+SSH is key-only, including root administration before any VPN is established.
+The module opens only its administrative port; service roles add their own
+listeners. When forwarding public Git SSH on port 22, choose a different
+administrative port. Bootstrap host-key verification, installed-key enrollment,
+secret rekeying and cloud-firewall restrictions belong to the installer/fleet
+integration. This module does not perform those operations.
+
+Small-host defaults are zero local build jobs, 256/1024 MiB Nix GC watermarks,
+128 MiB persistent journal budget, five boot-menu generations, and weekly
+age-based GC after 30 days. `resources.*` configures those sizes and local build
+jobs. Boot-menu limits do not protect generations from GC; retain any required
+rollback closure through the deployment system's GC roots. Supply the build-host
+and private-cache policy from the fleet rather than putting credentials here.
+
+Checks:
+
+- `cloud-host-eval` forces full UEFI, BIOS, ARM UEFI, MAC-matched and routed
+  static NixOS system derivations, and checks disabled behavior and invalid input.
+- `cloud-host-install-bios` / `cloud-host-install-uefi` use Disko's installation
+  test to partition empty virtual disks, boot, repeat activation and reboot while
+  checking Btrfs mounts, retained host keys/service state, root-file recovery,
+  numbered snapshot cleanup and NixOS specialisation rollback with a persistent
+  GC root. They also restore the whole root offline, then check writable
+  directories, service startup, activation and retained identity/state. The
+  runner's shared store is read-only; a separate writable store on `@nix` holds
+  the full system closure while an unreferenced path is collected and retained
+  contents are verified. Provider operation, tunnel access and key enrollment
+  have separate gates.
+
+These checks must pass before consumption. Canix operators evaluate through
+`canix repo eval` and opt into VM realization with
+`canix cache binary build .#checks.x86_64-linux.cloud-host-install-uefi --include-tests --no-push`.
+Use the analogous BIOS check. Provider-backed deployment is a separate gate.
+
 ### GPU compute requests
 
 `lib.gpu.normalize` and `lib.gpu.forHost` expose an optional `compute` record:
