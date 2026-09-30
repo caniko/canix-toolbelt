@@ -36,6 +36,9 @@
   caddy-service-registry = ./services/caddy-service-registry.nix;
   dev-agent-isolation = ./services/dev-agent-isolation.nix;
   dev-oom-guard = ./services/dev-oom-guard.nix;
+  gatus-instances = ./services/gatus-instances.nix;
+  gatus-health-publisher = ./services/gatus-health-publisher.nix;
+  gatus-external-ingress = ./services/gatus-external-ingress.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
   garage = ./services/garage.nix;
   garage-buckets-registry = ./services/garage-buckets-registry.nix;

@@ -2347,14 +2347,19 @@
         "nixpkgs": [
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_6"
+        "rust-overlay": "rust-overlay_6",
+        "treefmt-nix": [
+          "fleetix",
+          "harbor-rs",
+          "treefmt-nix"
+        ]
       },
       "locked": {
-        "lastModified": 1789914139,
-        "narHash": "sha256-8LbqGECcCmXhV4lIyxPZtrnZqRPsi6t/0nSaj/n/gO0=",
+        "lastModified": 1790751185,
+        "narHash": "sha256-6EnYiTzhN219WU9aBj77By5MkDuwkrn3IfHCYJAJ9ug=",
         "ref": "refs/heads/trunk",
-        "rev": "3e8b915d5d14370fa4a3f6978c9210271870c4f2",
-        "revCount": 66,
+        "rev": "a8d43d13ed34c4d27f70fe10ed3450c0d89ca92f",
+        "revCount": 86,
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       },

@@ -134,6 +134,12 @@
         checks =
           {
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
+            gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
+              inherit pkgs;
+              fleetixLib = inputs.fleetix.lib;
+            };
+              pkgs.writeText "gatus-instances-eval" "ok";
+            gatus-publisher-eval = builtins.deepSeq (import ./nixos-tests/gatus-publisher-eval.nix {inherit pkgs;}) (pkgs.writeText "gatus-publisher-eval" "ok");
             attic-projects-registry-eval = import ./nixos-tests/attic-projects-registry-eval.nix {inherit pkgs;};
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             gpu-media-eval = import ./nixos-tests/gpu-media-eval.nix {inherit inputs pkgs;};
