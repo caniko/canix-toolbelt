@@ -48,6 +48,44 @@
       jumpExcludedHost = "gamma";
     }
     // {overrides = {beta = {port = 2222;};};});
+  cloudHosts =
+    hosts
+    // {
+      alpha = hosts.alpha // {linkAddresses.wg-edge = "10.90.0.2";};
+      edge = {
+        hostPubkey = "ssh-ed25519 fixture-key";
+        management = {
+          publicAddress = "192.0.2.10";
+          sshPort = 1337;
+          link = "wg-edge";
+        };
+        linkAddresses.wg-edge = "10.90.0.1";
+      };
+    };
+  cloud = sshAliases (base // {hosts = cloudHosts;});
+  recoveryOnly = sshAliases (base // {hosts = cloudHosts // {inherit (hosts) alpha;};});
+  restricted = sshAliases (base
+    // {
+      hosts = cloudHosts;
+      rbac.userCanReach = _user: host: host != "edge";
+    });
+  cloudOverrides = sshAliases (base
+    // {
+      hosts = cloudHosts;
+      overrides.edge = {
+        port = 22;
+        extraOptions = {
+          StrictHostKeyChecking = "no";
+          UserKnownHostsFile = "~/.ssh/known_hosts";
+          ControlMaster = "auto";
+        };
+      };
+    });
+  untrusted = builtins.tryEval (builtins.deepSeq (sshAliases (base
+    // {
+      hosts = cloudHosts // {edge = cloudHosts.edge // {hostPubkey = null;};};
+    }))
+  true);
 in
   mkEvalCheck {
     name = "ssh-aliases-eval";
@@ -87,6 +125,26 @@ in
         name = "per-target-override";
         assertion = overridden.tbeta.Port == 2222 && overridden.lbeta.Port == 2222;
         message = "per-target port overrides must apply to generated aliases";
+      }
+      {
+        name = "cloud-without-lan";
+        assertion = cloud.eedge.HostName == "10.90.0.1" && cloud.pedge.HostName == "192.0.2.10" && !(cloud ? ledge) && !(cloud ? vedge);
+        message = "management must use the declared shared link and independent public address without inventing LAN/VPN routes";
+      }
+      {
+        name = "cloud-port-and-identity";
+        assertion = cloud.eedge.Port == 1337 && cloud.pedge.Port == 1337 && cloud.eedge.HostKeyAlias == "edge" && cloud.pedge.StrictHostKeyChecking == "yes" && !cloud.pedge.PasswordAuthentication;
+        message = "installed port and canonical pinned identity must apply to both management routes";
+      }
+      {
+        name = "runtime-pins-cannot-be-relaxed-by-legacy-overrides";
+        assertion = cloudOverrides.pedge.Port == 1337 && cloudOverrides.pedge.StrictHostKeyChecking == "yes" && cloudOverrides.pedge.UserKnownHostsFile == "/dev/null" && cloudOverrides.pedge.GlobalKnownHostsFile == "/etc/ssh/ssh_known_hosts" && cloudOverrides.pedge.ControlMaster == "no";
+        message = "management must use the enrolled installed identity and port, without user-file keys or cached unverified sessions";
+      }
+      {
+        name = "independent-recovery-and-rbac";
+        assertion = !(recoveryOnly ? eedge) && (recoveryOnly ? pedge) && !(restricted ? pedge) && !(restricted ? eedge) && !untrusted.success;
+        message = "public recovery must survive absent link membership, preserve RBAC, and require runtime identity";
       }
     ];
   }

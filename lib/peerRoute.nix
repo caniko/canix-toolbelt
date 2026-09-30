@@ -52,6 +52,14 @@ let
     peerKnown = hasAttr peerName hosts;
     selfDirectPeers = selfHost.directLinkPeers or [];
     selfHasWg = (selfHost.wgHomeIp or null) != null;
+    management = peer.management or {};
+    managementLink = management.link or null;
+    hasManagementLink =
+      managementLink
+      != null
+      && hasAttr managementLink (selfHost.linkAddresses or {})
+      && hasAttr managementLink (peer.linkAddresses or {});
+    hasRuntimeIdentity = (peer.hostPubkey or null) != null && (peer.hostPubkey or "") != "";
     localAnchored = isAnchoredUnder (selfHost.dataRoot or null) folder.path;
     remoteBase =
       if localAnchored && (peer.dataRoot or null) != null
@@ -76,6 +84,16 @@ let
         via = "wg-home";
         sshAlias = "v${peerName}";
       }
+      else if hasManagementLink && hasRuntimeIdentity
+      then {
+        via = "management-link";
+        sshAlias = "e${peerName}";
+      }
+      else if (management.publicAddress or null) != null && hasRuntimeIdentity
+      then {
+        via = "public";
+        sshAlias = "p${peerName}";
+      }
       else null;
   in
     if !peerKnown
@@ -99,7 +117,7 @@ let
     }
     else if route == null
     then {
-      warning = "canix.sync.folders.${folder.id}: peer `${peerName}` is not reachable via direct-link, lan, or wg-home from `${hostname}`; skipping.";
+      warning = "canix.sync.folders.${folder.id}: peer `${peerName}` has no declared SSH route from `${hostname}`; skipping.";
       peer = null;
     }
     else {

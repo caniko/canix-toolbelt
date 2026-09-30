@@ -5,6 +5,7 @@
   ...
 }: let
   inherit (lib) mkOption types;
+  networkTypes = import ../../../lib/network-types.nix {inherit lib;};
   deviceTypes = import ../../../lib/deviceTypes.nix;
   fleetixLib = inputs.fleetix.lib or (throw "canix-toolbelt host-registry: inputs.fleetix.lib is required when canix-toolbelt.fleetix.enable = true");
 
@@ -39,6 +40,30 @@
         default = [];
         example = ["myhost" "myhost.local" "192.0.2.1"];
         description = "Additional hostnames/IPs for SSH known_hosts.";
+      };
+
+      management = {
+        publicAddress = mkOption {
+          type = types.nullOr (types.either networkTypes.ipv4 networkTypes.ipv6);
+          default = null;
+          description = "Explicit installed-system public recovery IP; independent of LAN and service publication.";
+        };
+        sshPort = mkOption {
+          type = types.nullOr (types.addCheck types.port (port: port > 0));
+          default = null;
+          description = "Installed-system SSH port; null uses the consumer's fleet default. Never the bootstrap port.";
+        };
+        link = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Preferred management link, usable only from hosts with a binding on that same link.";
+        };
+      };
+
+      linkAddresses = mkOption {
+        type = types.attrsOf (types.either networkTypes.ipv4 networkTypes.ipv6);
+        default = {};
+        description = "Host address bindings projected from Fleetix links.";
       };
 
       lanIp = mkOption {
@@ -253,6 +278,8 @@ in {
       lib.mapAttrs (_name: host: {
         hostPubkey = host.hostPubkey or null;
         hostNames = host.hostNames or [];
+        management = host.management or {};
+        linkAddresses = host.linkAddresses or {};
         deviceType = host.deviceType or null;
         dataRoot = host.dataRoot or null;
         projectStateRoot = (host.storage or {}).projectStateRoot or null;

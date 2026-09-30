@@ -37,6 +37,7 @@
   localSecretManagerPkg = inputs.secret-manager.packages.${effectiveDnsManagerBuildPkgs.stdenv.hostPlatform.system}.default;
   caddyLib = import ../../../lib/caddy.nix {inherit lib;};
   fleetixLib = inputs.fleetix.lib;
+  networkTypes = import ../../../lib/network-types.nix {inherit lib;};
 
   recordTypes = ["A" "AAAA" "ALIAS" "CAA" "CNAME" "DNAME" "MX" "NS" "SOA" "SRV" "SSHFP" "TLSA" "TXT" "URI"];
   proxiableRecordTypes = ["A" "AAAA" "ALIAS" "CNAME"];
@@ -240,6 +241,7 @@
     domains = {
       zones = zoneNames;
       managedZones = zoneNames;
+      inherit (cfg) publicationTargets;
       pagesSites =
         map (site: {
           inherit (site) subdomain repository cnameTarget;
@@ -247,6 +249,11 @@
         cfg.codebergPagesSites;
     };
     services.httpSites = config.canix-toolbelt.services.httpSites or {};
+  };
+
+  publication = import ../../../lib/dns-publication.nix {
+    inherit lib fleetixLib cfg;
+    topology = topologyForDnsIntents;
   };
 
   cnameIntentToRecord = intent: {
@@ -339,7 +346,7 @@
       ++ lib.optional cfg.autoSynthesizeCodebergPagesCnames (synthesizedCodebergPagesByZone.${zoneName} or []);
     filteredSynthesized = filter (record: !(explicitKeys.${recordKey record} or false)) (lib.flatten synthesized);
   in
-    filteredSynthesized ++ zone.records;
+    filteredSynthesized ++ (publication.recordsByZone.${zoneName} or []) ++ zone.records;
 
   metadataForRecord = zone: record:
     dropNulls {
@@ -537,7 +544,7 @@
     ++ lib.optional (cfg.autoSynthesizeCodebergPagesCnames && cfg.codebergPagesZone != null && !(builtins.elem cfg.codebergPagesZone zoneNames))
     "codebergPagesZone '${cfg.codebergPagesZone}' is not a declared zone (${toString zoneNames}); refusing to synthesize Pages records into nowhere";
 
-  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors ++ pagesZoneErrors;
+  validationErrors = proxiedRecordErrors ++ ttlAutoErrors ++ dataFileErrors ++ commentErrors ++ apexCnameErrors ++ redirectErrors ++ pagesZoneErrors ++ publication.errors;
 
   validatedDnsConfig =
     if validationErrors == []
@@ -742,6 +749,32 @@ in {
       type = types.attrsOf zoneSubmodule;
       default = {};
       description = "DNS zones declared on this host.";
+    };
+
+    publicationTargets = mkOption {
+      type = types.attrsOf (types.submodule {
+        options = {
+          hostname = mkOption {
+            type = networkTypes.hostname;
+            description = "Static destination hostname in a managed zone.";
+          };
+          targetHost = mkOption {
+            type = types.str;
+            description = "Fleet host serving this destination; validated by Fleetix.";
+          };
+          ipv4 = mkOption {
+            type = networkTypes.ipv4;
+            description = "Explicit desired public IPv4, promoted into authored topology.";
+          };
+          ipv6 = mkOption {
+            type = types.nullOr networkTypes.ipv6;
+            default = null;
+            description = "Optional desired IPv6; null means no published AAAA.";
+          };
+        };
+      });
+      default = {};
+      description = "Fleetix static publication targets. Empty preserves legacy DNS synthesis. Each target owns A/AAAA, even when IPv6 is absent.";
     };
 
     redirects = mkOption {

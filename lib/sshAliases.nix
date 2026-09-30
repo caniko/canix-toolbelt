@@ -10,6 +10,8 @@
 #   t<name>  l-condition AND fromHost has wgHomeIp AND target != jumpExcludedHost
 #   v<name>  fromHost.wgHomeIp != null AND target.wgHomeIp != null
 #   d<name>  target in fromHost.directLinkPeers (mutual; asserted symmetric)
+#   e<name>  source and target share target.management.link
+#   p<name>  target.management.publicAddress is declared (independent recovery)
 #
 # Tunnel aliases (i<t>/t<t>) encode consumer routing policy: pass the VPN
 # alias of the jump host explicitly, e.g. jumpHostAlias = "vhub". Null
@@ -18,6 +20,9 @@
 # which adds StrictHostKeyChecking=no plus /dev/null known-hosts and must
 # never be enabled silently. Empty result is valid — caller may warn if the
 # reachable set is empty.
+# Management aliases pin the canonical installed host identity and port through
+# knownHostsFile, which must contain that identity's enrolled key (including its
+# [name]:port entry). They never reuse multiplexed sessions or user-file keys.
 {
   lib,
   hosts,
@@ -26,6 +31,7 @@
   user,
   defaultIdentity,
   defaultPort,
+  knownHostsFile ? "/etc/ssh/ssh_known_hosts",
   overrides ? {},
   jumpHostAlias ? null,
   jumpExcludedHost ? null,
@@ -88,31 +94,69 @@
     hasLan = (t.lanIp or null) != null;
     hasWg = (t.wgHomeIp or null) != null;
     isPeer = elem targetName fromPeers;
-  in
-    {}
-    // lib.optionalAttrs (!isSelf && hasLan) {
-      "l${targetName}" = mkBlock t.lanIp ({Compression = false;} // o);
-    }
-    // lib.optionalAttrs (!isSelf && hasLan && enableInitrdAlias && tunnelsEnabled) {
-      "i${targetName}" = mkBlock t.lanIp ({
-          Port = initrdPort;
-          ProxyJump = tunnelVia;
-        }
-        // lib.optionalAttrs allowRelaxedInitrdCheck {
-          StrictHostKeyChecking = "no";
+    management = t.management or {};
+    managementLink = management.link or null;
+    hasManagementLink =
+      managementLink
+      != null
+      && builtins.hasAttr managementLink (fromData.linkAddresses or {})
+      && builtins.hasAttr managementLink (t.linkAddresses or {});
+    publicAddress = management.publicAddress or null;
+    declaredPort = management.sshPort or null;
+    targetPort =
+      if declaredPort == null
+      then defaultPort
+      else declaredPort;
+    targetBlock = addr: extra: mkBlock addr ({Port = targetPort;} // extra);
+    pinnedBlock = addr:
+      targetBlock addr (o
+        // {
+          Port = targetPort;
+          HostKeyAlias = targetName;
+          StrictHostKeyChecking = "yes";
           UserKnownHostsFile = "/dev/null";
-        }
-        // o);
-    }
-    // lib.optionalAttrs (!isSelf && hasLan && fromHasWg && tunnelsEnabled && !isJumpExcluded) {
-      "t${targetName}" = mkBlock t.lanIp ({ProxyJump = tunnelVia;} // o);
-    }
-    // lib.optionalAttrs (!isSelf && fromHasWg && hasWg) {
-      "v${targetName}" = mkBlock t.wgHomeIp o;
-    }
-    // lib.optionalAttrs (!isSelf && isPeer && (t.directLinkIp or null) != null) {
-      "d${targetName}" = mkBlock t.directLinkIp ({Compression = false;} // o);
-    };
+          GlobalKnownHostsFile = knownHostsFile;
+          ControlMaster = "no";
+          ControlPath = "none";
+          PasswordAuthentication = false;
+          KbdInteractiveAuthentication = false;
+        });
+    identityOk =
+      (managementLink == null && publicAddress == null)
+      || ((t.hostPubkey or null) != null && t.hostPubkey != "")
+      || throw "ssh/aliases: explicit management routes for ${targetName} require an enrolled runtime hostPubkey";
+  in
+    assert identityOk;
+      {}
+      // lib.optionalAttrs (!isSelf && hasLan) {
+        "l${targetName}" = targetBlock t.lanIp ({Compression = false;} // o);
+      }
+      // lib.optionalAttrs (!isSelf && hasLan && enableInitrdAlias && tunnelsEnabled) {
+        "i${targetName}" = targetBlock t.lanIp ({
+            Port = initrdPort;
+            ProxyJump = tunnelVia;
+          }
+          // lib.optionalAttrs allowRelaxedInitrdCheck {
+            StrictHostKeyChecking = "no";
+            UserKnownHostsFile = "/dev/null";
+          }
+          // o);
+      }
+      // lib.optionalAttrs (!isSelf && hasLan && fromHasWg && tunnelsEnabled && !isJumpExcluded) {
+        "t${targetName}" = targetBlock t.lanIp ({ProxyJump = tunnelVia;} // o);
+      }
+      // lib.optionalAttrs (!isSelf && fromHasWg && hasWg) {
+        "v${targetName}" = targetBlock t.wgHomeIp o;
+      }
+      // lib.optionalAttrs (!isSelf && isPeer && (t.directLinkIp or null) != null) {
+        "d${targetName}" = targetBlock t.directLinkIp ({Compression = false;} // o);
+      }
+      // lib.optionalAttrs (!isSelf && hasManagementLink) {
+        "e${targetName}" = pinnedBlock t.linkAddresses.${managementLink};
+      }
+      // lib.optionalAttrs (!isSelf && publicAddress != null) {
+        "p${targetName}" = pinnedBlock publicAddress;
+      };
 
   reachable = filter (t: rbac.userCanReach user t) (attrNames hosts);
 in

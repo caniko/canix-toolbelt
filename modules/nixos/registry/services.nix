@@ -161,6 +161,11 @@
         type = types.enum ["managed" "external" "none"];
         description = "DNS publication policy.";
       };
+      publicationTarget = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Explicit Fleetix publication destination; null retains the legacy zone-apex CNAME target.";
+      };
       routes = mkOption {
         type = types.listOf routeSubmodule;
         description = "Ordered HTTP routes.";
