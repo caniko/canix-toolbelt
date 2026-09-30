@@ -357,9 +357,9 @@ dependencies = [
 
 [[package]]
 name = "fleetix"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e4fe9a390937994ea2c3558498c09555ee06a1d86328f1e7f5e55e90c70f21"
+checksum = "a1ed70113b23735ebfa93a79cf1bf063dc886e217787230cb171e872c9afec1b"
 dependencies = [
  "indexmap",
  "miette",

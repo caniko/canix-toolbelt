@@ -18,5 +18,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   extracted from Canix with explicit consumer-owned paths and typed errors.
 - Optional `canix-toolbelt runtime show --path PATH` CLI using the same library.
 - Simit-generated GitHub verification and crates.io publication workflows,
-  release configuration, and exported maintainer trust root. First publication
-  remains pending the gates in `RELEASE.md`.
+  release configuration, and exported maintainer trust root.
+- Registry Fleetix `0.2` integration, allowing downstream consumers to share
+  one supported Fleetix series with the runtime loader.

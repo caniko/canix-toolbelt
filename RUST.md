@@ -3,11 +3,10 @@
 Reusable operations for adopters of the Canix architecture. The first Rust
 release extracts runtime-manifest loading from Canix: binary paths, service
 endpoints, and agenix secret references. It depends on the published Fleetix
-library for embedded Pkl evaluation.
+library (`0.2`) for embedded Pkl evaluation.
 
-**Release candidate:** `0.1.0` has passed local package verification but has not
-yet been published. The dependency/install examples below apply after successful
-Simit CI publication and registry verification. See `RELEASE.md` in the repository.
+The `0.1.0` release provides the library and optional CLI shown below. See
+`RELEASE.md` in the repository for publication and verification evidence.
 
 ```toml
 [dependencies]
