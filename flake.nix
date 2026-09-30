@@ -184,6 +184,7 @@
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            public-edge = import ./nixos-tests/public-edge.nix {inherit pkgs;};
             cloud-host-install-bios = import ./nixos-tests/cloud-host-install.nix {
               inherit inputs pkgs;
               mode = "bios";
