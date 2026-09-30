@@ -47,6 +47,7 @@
   initrd-ssh = ./services/initrd-ssh.nix;
   kanidm-preset = ./services/kanidm-preset.nix;
   power-cycle-relay = ./services/power-cycle-relay.nix;
+  public-edge = ./services/public-edge.nix;
   pypi-server = ./services/pypi-server.nix;
   rauthy-preset = ./services/rauthy-preset.nix;
   rbac = ./registry/rbac.nix;
@@ -56,6 +57,7 @@
 
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   direct-link = ./networking/direct-link.nix;
+  edge-transport = ./networking/edge-transport.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
   stalwart-seed-accounts = ./services/stalwart-seed-accounts.nix;
   sunshine = ./services/sunshine.nix;

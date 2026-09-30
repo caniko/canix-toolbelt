@@ -176,6 +176,82 @@ These checks must pass before consumption. Canix operators evaluate through
 `canix cache binary build .#checks.x86_64-linux.cloud-host-install-uefi --include-tests --no-push`.
 Use the analogous BIOS check. Provider-backed deployment is a separate gate.
 
+### Public edge role
+
+`nixosModules.public-edge` adds an optional gateway role to a cloud host or any
+other NixOS machine. `nixosModules.edge-transport` is also available separately
+for home peers. It uses a dedicated kernel WireGuard interface with exact peer
+`/32` routes; public client prefixes and default routes are never installed.
+
+```nix
+{
+  imports = [inputs.canix-toolbelt.nixosModules.public-edge];
+  # Administrative SSH must not collide with forwarded Git SSH on port 22.
+  canix-toolbelt.cloudHost.access.port = 1337;
+  canix-toolbelt.networking.edgeTransport = {
+    enable = true;
+    address = "10.77.0.1";
+    privateKeyFile = "/run/agenix/wg-edge";
+    listenPort = 51821;
+    mtu = 1380; # Select from measurements of the actual underlay.
+    openFirewall = true;
+    peers.home = {
+      address = "10.77.0.2";
+      publicKey = "<home-peer-public-key>";
+    };
+  };
+  canix-toolbelt.services.publicEdge = {
+    enable = true;
+    publicAddress = "192.0.2.10";
+    publicInterface = "ens3";
+    http."app.example.org" = {
+      serverName = "origin.example.org";
+      upstreams = [{address = "10.77.0.2"; port = 443;}];
+    };
+    tcp.git = {publicPort = 22; address = "10.77.0.2"; port = 22;};
+    udp.webtransport = {publicPort = 8443; address = "10.77.0.2"; port = 8443;};
+  };
+}
+```
+
+The addresses above are documentation examples. Home imports `edge-transport`,
+uses its own runtime private key, and sets the edge peer's `endpoint` to the
+stable public IP/port with `keepaliveSeconds = 25`. Open only the required
+origin ports on `wg-edge`. Endpoint DNS must not depend on the service being
+forwarded. Supply certificates through `services.caddy.certificates` or issuer
+policies through `services.caddy.tlsPolicies` under `canix-toolbelt`; provision
+zone-scoped DNS-01 credentials at runtime when pre-cutover issuance needs them.
+
+Public HTTPS offers HTTP/1.1, HTTP/2 and HTTP/3 with TLS early data disabled.
+`http.<hostname>.originProtocols` independently selects verified upstream HTTPS
+versions (default HTTP/1.1 + HTTP/2; HTTP/3 requires `["3"]`). Upstream addresses
+must be enrolled tunnel peers. Host is preserved independently of TLS SNI. Active
+health checks require a `200` response on `healthPath` (default `/`). Configure a
+suitable unauthenticated health path for sites whose main page redirects or
+requires login.
+
+The edge replaces forwarding identity. Each home ingress/relay must separately
+restrict source admission with `caddy.servers.<name>.cidrAllowlist` and specify
+`trustedProxies` for strict right-to-left `X-Forwarded-For` parsing. Include known
+earlier proxy hops when the relay receives a forwarded chain; never trust every
+address merely because it is on a private subnet.
+
+TCP uses HAProxy without TLS termination. Set `proxyProtocol = "v1"` only on an
+origin listener configured to accept PROXY v1 from the edge's exact tunnel IP.
+This supplies connection metadata, not application authentication. UDP forwarding
+uses connection-scoped DNAT/SNAT and exact public-interface/address/port matches;
+the origin sees the edge tunnel IP. Application QUIC/WebTransport stays with the
+application on its own UDP port. Caddy's HTTP/3 listener does not substitute for
+WebTransport support in an application.
+
+`checks.<system>.public-edge-eval` checks composition and rejects conflicting
+ports, unenrolled destinations and invalid protocol combinations, then validates
+the rendered Caddy and HAProxy configurations. The x86_64 `public-edge` VM test
+exercises the packet path, including header spoofing, protocol fallback, large
+transfers and the application-owned WebTransport fixture. It does not certify a
+cloud provider, Stalwart, a browser's WebTransport implementation, or paid transit
+capacity. See Canix's public-edge design for the enrollment and publication gates.
+
 ### GPU compute requests
 
 `lib.gpu.normalize` and `lib.gpu.forHost` expose an optional `compute` record:

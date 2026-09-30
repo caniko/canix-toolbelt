@@ -13,6 +13,21 @@
         default = [];
         description = "Caddy listener addresses.";
       };
+      protocols = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf (lib.types.enum ["h1" "h2" "h2c" "h3"]));
+        default = null;
+        description = "Explicit HTTP protocols; null preserves Caddy's defaults. HTTP/3 also needs its UDP firewall port.";
+      };
+      allow0Rtt = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = "Allow TLS early data (replayable requests); null preserves Caddy's default.";
+      };
+      trustedProxies = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Exact proxy source IPs/CIDRs trusted for X-Forwarded-For; separate from source admission.";
+      };
       routes = lib.mkOption {
         type = lib.types.listOf lib.types.attrs;
         default = [];
@@ -195,6 +210,18 @@ in {
       }
       // lib.optionalAttrs (!server.automaticHttps) {
         automatic_https.disable = true;
+      }
+      // lib.optionalAttrs (server.protocols != null) {inherit (server) protocols;}
+      // lib.optionalAttrs (server.allow0Rtt != null) {allow_0rtt = server.allow0Rtt;}
+      // lib.optionalAttrs (server.trustedProxies != []) {
+        trusted_proxies = {
+          source = "static";
+          ranges = server.trustedProxies;
+        };
+        # Caddy 2.11 uses an integer for strict right-to-left parsing.
+        # https://github.com/caddyserver/caddy/blob/v2.11.4/modules/caddyhttp/server.go
+        trusted_proxies_strict = 1;
+        client_ip_headers = ["X-Forwarded-For"];
       }
       // lib.optionalAttrs server.metrics {metrics = {};};
 

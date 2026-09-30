@@ -144,6 +144,7 @@
         checks =
           {
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
+            public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
               inherit pkgs;
