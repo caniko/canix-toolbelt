@@ -152,19 +152,21 @@ class RealBrowserSmoke(unittest.TestCase):
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
             self.assertIn("Adapter smoke", snapshot["content"])
             self.assertIn("Static text is readable", snapshot["content"])
-            def ref(label):
-                line = next(line for line in snapshot["content"].splitlines() if f'"{label}"' in line)
-                return line.strip().split()[0]
+            def ref(label, role):
+                matches = [line for line in snapshot["content"].splitlines()
+                           if f'[{role}] "{label}"' in line]
+                self.assertEqual(len(matches), 1, snapshot["content"])
+                return matches[0].strip().split()[0]
 
             call({"type": "fill_form", "tabID": tab_id, "fields": [
-                {"type": "text", "ref": ref("Name"), "value": "Canix"},
-                {"type": "select", "ref": ref("Choice"), "values": ["two"]},
-                {"type": "check", "ref": ref("Ready"), "checked": True},
+                {"type": "text", "ref": ref("Name", "textbox"), "value": "Canix"},
+                {"type": "select", "ref": ref("Choice", "combobox"), "values": ["two"]},
+                {"type": "check", "ref": ref("Ready", "checkbox"), "checked": True},
             ]})
             self.assertEqual(call({"type": "evaluate", "tabID": tab_id, "script":
                 "[document.querySelector('#name').value,document.querySelector('#choice').value,document.querySelector('#ready').checked]"
             })["value"]["value"], ["Canix", "two", True])
-            call({"type": "click", "tabID": tab_id, "ref": ref("Submit")})
+            call({"type": "click", "tabID": tab_id, "ref": ref("Submit", "button")})
             call({"type": "wait", "tabID": tab_id, "condition": "text", "text": "Clicked"})
             frames = call({"type": "frames", "tabID": tab_id})["value"]["frames"]
             self.assertEqual(len(frames), 2)
