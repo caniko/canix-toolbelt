@@ -2375,15 +2375,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1790751185,
-        "narHash": "sha256-6EnYiTzhN219WU9aBj77By5MkDuwkrn3IfHCYJAJ9ug=",
-        "ref": "refs/heads/trunk",
-        "rev": "a8d43d13ed34c4d27f70fe10ed3450c0d89ca92f",
-        "revCount": 86,
+        "lastModified": 1790890401,
+        "narHash": "sha256-vMiSvoLmSmm5wqIeYzbIruf3dLdFwHVobXgIOe39bTs=",
+        "ref": "integration/gpu-routing",
+        "rev": "c79c9a3902f746ec17f56de37f2c351e2dcdfbc3",
+        "revCount": 87,
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       },
       "original": {
+        "ref": "integration/gpu-routing",
+        "rev": "c79c9a3902f746ec17f56de37f2c351e2dcdfbc3",
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       }
