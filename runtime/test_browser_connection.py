@@ -9,11 +9,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from browser_connection import default_browser
+from browser_connection import default_browser, firefox_binary
 from opencode_browser import OPERATIONS, Host
 
 
 class DefaultBrowserTests(unittest.TestCase):
+    def test_nix_wrapper_keeps_its_launcher_and_exposes_real_gecko_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "package" / "bin" / "floorp"
+            binary.parent.mkdir(parents=True)
+            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.chmod(0o700)
+            metadata = binary.parent.parent / "lib" / "floorp"
+            metadata.mkdir(parents=True)
+            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            launcher = Path(firefox_binary(str(binary), root / "launcher"))
+            self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
+            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                             ["-profile", "literal path", "--name=Floorp"])
+
+    def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "floorp"
+            binary.touch()
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+            (root / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+
     def test_actual_xdg_default_and_arguments_are_used(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
