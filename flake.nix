@@ -168,6 +168,18 @@
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};
             agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
+            browser-connection-eval = import ./nixos-tests/browser-connection-eval.nix {inherit pkgs;};
+            browser-connection-smoke = import ./nixos-tests/browser-connection-smoke.nix {inherit pkgs;};
+            browser-connection-runtime =
+              pkgs.runCommand "browser-connection-runtime" {
+                nativeBuildInputs = [pkgs.python3];
+              } ''
+                cp -r ${./runtime} runtime
+                mkdir lib
+                cp ${./lib/browserConnection.nix} lib/browserConnection.nix
+                python -m unittest discover -s runtime -p test_browser_connection.py -v
+                touch "$out"
+              '';
             keyboard-layout-shortcut-eval = import ./nixos-tests/keyboard-layout-shortcut-eval.nix {inherit pkgs;};
             dev-agent-isolation-eval = import ./nixos-tests/dev-agent-isolation-eval.nix {inherit pkgs;};
             dev-agent-isolation-scope = import ./nixos-tests/dev-agent-isolation-scope.nix {inherit pkgs;};
@@ -198,6 +210,7 @@
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
         packages.website = website;
+        packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.

@@ -13,6 +13,7 @@
   # the backend permission object.
   agent-safety = ./agent-safety.nix;
   project-tree = ./project-tree.nix;
+  browser-connection = ./browser-connection.nix;
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
   gpu-media = ../gpu-media.nix;

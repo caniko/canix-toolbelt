@@ -5,6 +5,7 @@ in
     agenixPaths = import ./agenixPaths.nix;
     agentSafety = import ./agent-safety.nix {inherit lib;};
     activation = import ./activation.nix {inherit lib;};
+    browserConnection = import ./browserConnection.nix {inherit lib;};
     caddy = import ./caddy.nix {inherit lib;};
     deviceTypes = import ./deviceTypes.nix;
     devAgentIsolation = import ./dev-agent-isolation.nix {inherit lib;};
