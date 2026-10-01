@@ -33,15 +33,15 @@ in {
     };
     adapters.opencode = lib.mkOption {
       type = lib.types.attrs;
-      default = {};
       readOnly = true;
       description = "OpenCode native-browser host command and implemented operation inventory.";
     };
   };
-  config = lib.mkIf cfg.enable {
-    home.packages = [adapter.package];
-    canix-toolbelt.browserConnection.adapters.opencode = {
-      inherit (adapter) command operations;
-    };
+  config = {
+    home.packages = lib.mkIf cfg.enable [adapter.package];
+    canix-toolbelt.browserConnection.adapters.opencode =
+      if cfg.enable
+      then {inherit (adapter) command operations;}
+      else {};
   };
 }

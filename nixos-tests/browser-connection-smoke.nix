@@ -3,7 +3,7 @@
   settings = pkgs.writeText "browser-connection-smoke.json" (builtins.toJSON {
     browser = {
       family = "firefox";
-      executable = pkgs.lib.getExe pkgs.floorp;
+      executable = pkgs.lib.getExe pkgs.floorp-bin;
       arguments = [];
     };
     headless = true;
