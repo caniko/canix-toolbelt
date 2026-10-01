@@ -17,7 +17,10 @@
           default = [];
         };
         canix-toolbelt.services.httpSites = lib.mkOption {
-          type = lib.types.attrs;
+          type = lib.types.attrsOf (lib.types.submodule {
+            options = lib.genAttrs ["hostname" "access" "dnsPublication" "publicationTarget"] (_:
+              lib.mkOption {type = lib.types.str;});
+          });
           default = {};
         };
       };
