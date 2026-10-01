@@ -74,6 +74,24 @@ class DefaultBrowserTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_privileged_startup_page_uses_standard_webdriver_metadata(self):
+        from unittest.mock import Mock
+        driver = Mock()
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16")
+        driver.call.side_effect = lambda method, path, *args: {
+            "/window/handles": ["startup"], "/url": "about:welcome", "/title": "Welcome",
+        }.get(path)
+        host = Host(driver)
+        state = host.inventory()["tabs"][0]
+        self.assertEqual(state["url"], "about:welcome")
+        self.assertEqual(state["title"], "Welcome")
+        self.assertFalse(state["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], state["generation"])
+        driver.script.side_effect = RuntimeError("unrelated driver error")
+        with self.assertRaisesRegex(RuntimeError, "unrelated driver error"):
+            host.inventory()
+
     def test_capability_inventory_is_shared_with_nix(self):
         source = (Path(__file__).parent.parent / "lib/browserConnection.nix").read_text()
         for method in OPERATIONS:
