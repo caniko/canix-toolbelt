@@ -178,9 +178,13 @@ class RealBrowserSmoke(unittest.TestCase):
             captures = call({"type": "files.list", "tabID": tab_id})["value"]["files"]
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
+            existing_tabs = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
             other = call({"type": "tabs.open"})["value"]["id"]
             self.assertNotEqual(other, tab_id)
-            self.assertEqual(len(call({"type": "tabs.close", "tabID": other})["value"]["tabs"]), 1)
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
+                             existing_tabs | {other})
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]},
+                             existing_tabs)
         finally:
             process.stdin.close()
             try:
