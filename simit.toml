@@ -9,12 +9,27 @@ nix_builds = [
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.harbor-db-compat-eval",
 ]
 with_msrv = true
 with_audit = true
 with_docs = true
 publish_crates = true
 extra_env= { RUSTDOCFLAGS = "-D warnings" }
+# Full flake checks include NixOS guests. Require hosted KVM before boot and
+# serialize realizations so concurrent VM checks fit the hosted runner budget.
+extra_setup = ['''
+set -eu
+test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+test -c /dev/kvm
+sudo chmod a+rw /dev/kvm
+test -r /dev/kvm && test -w /dev/kvm
+{
+  printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
+  printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+  printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
+} >> "$GITHUB_ENV"
+''']
 
 [ci.nix_build]
 max_parallel = 2

@@ -6,6 +6,13 @@ at connection time and opens an isolated automation profile. Firefox/Floorp use
 geckodriver; Chromium-family browsers use chromedriver. An unsupported default
 produces an error instead of selecting a different browser.
 
+For Nix-wrapped Gecko browsers, the connection creates a temporary launcher
+beside a copy of the selected package's `platform.ini`. This lets geckodriver
+identify the actual Gecko version without parsing Floorp's branded `--version`
+output. The launcher executes the original package wrapper, preserving its
+runtime environment and all browser arguments. It is removed with the isolated
+profile; ambiguous package metadata fails rather than choosing another browser.
+
 ```nix
 {
   imports = [inputs.canix-toolbelt.homeModules.browser-connection];
