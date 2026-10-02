@@ -218,9 +218,16 @@ class RealBrowserSmoke(unittest.TestCase):
             captures = call({"type": "files.list", "tabID": tab_id})["value"]["files"]
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
+            # Floorp may open welcome tabs in a new isolated profile. Verify
+            # exact tab ownership without assuming a single startup window.
+            before = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
+            self.assertIn(tab_id, before)
             other = call({"type": "tabs.open"})["value"]["id"]
-            self.assertNotEqual(other, tab_id)
-            self.assertEqual(len(call({"type": "tabs.close", "tabID": other})["value"]["tabs"]), 1)
+            self.assertNotIn(other, before)
+            opened = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
+            self.assertEqual(opened, before | {other})
+            closed = {tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]}
+            self.assertEqual(closed, before)
         finally:
             process.stdin.close()
             try:
