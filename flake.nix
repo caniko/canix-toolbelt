@@ -26,7 +26,7 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git?ref=integration/gpu-routing&rev=4465108ce8160bdb7b9510211669099ee3a83ac4";
+      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=2230d9ee804a66d94424a91919182e4fcca13ab2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
