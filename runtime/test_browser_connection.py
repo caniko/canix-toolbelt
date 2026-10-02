@@ -7,7 +7,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from browser_connection import default_browser
 from opencode_browser import OPERATIONS, Host
@@ -66,6 +66,37 @@ class ProtocolTests(unittest.TestCase):
         host = Host(None)
         with self.assertRaisesRegex(ValueError, "expired"):
             host.element({"refs": {}}, "@e1")
+
+    def test_privileged_startup_tab_does_not_block_inventory(self):
+        driver = Mock()
+        def call(method, path, body=None):
+            if (method, path) == ("GET", "/window/handles"):
+                return ["welcome"]
+            if (method, path) == ("GET", "/url"):
+                return "about:welcome"
+            if (method, path) == ("GET", "/title"):
+                return "Welcome to Floorp"
+            return None
+        driver.call.side_effect = call
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported "
+            "for privileged browsing contexts: 16"
+        )
+        host = Host(driver)
+        inventory = host.inventory()
+        tab = inventory["tabs"][0]
+        self.assertEqual(tab["url"], "about:welcome")
+        self.assertEqual(tab["title"], "Welcome to Floorp")
+        self.assertEqual(inventory["focusedTabID"], tab["id"])
+        self.assertFalse(tab["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
+
+    def test_inventory_does_not_hide_unrelated_script_failures(self):
+        driver = Mock()
+        driver.call.return_value = ["window"]
+        driver.script.side_effect = RuntimeError("unknown error: connection lost")
+        with self.assertRaisesRegex(RuntimeError, "connection lost"):
+            Host(driver).inventory()
 
 
 class RealBrowserSmoke(unittest.TestCase):
