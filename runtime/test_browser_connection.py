@@ -7,7 +7,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from browser_connection import default_browser, firefox_launcher
 from opencode_browser import OPERATIONS, Host
@@ -104,6 +104,33 @@ class FirefoxLauncherTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_privileged_start_page_inventory_uses_native_metadata(self):
+        driver = Mock()
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16"
+        )
+        values = {"/window/handles": ["window"], "/url": "about:home", "/title": "Floorp"}
+        driver.call.side_effect = lambda method, path, *args: values.get(path)
+        host = Host(driver)
+        tab = host.inventory()["tabs"][0]
+        self.assertEqual((tab["url"], tab["title"]), ("about:home", "Floorp"))
+        self.assertFalse(tab["canGoBack"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
+        # Navigation to an ordinary page resumes document-aware scripting.
+        driver.script.side_effect = None
+        driver.script.return_value = {"url": "https://example.test", "title": "Page", "loading": False,
+                                      "document": 42}
+        changed = host.inventory()["tabs"][0]
+        self.assertGreater(changed["generation"], tab["generation"])
+        self.assertTrue(changed["canGoBack"])
+
+    def test_inventory_does_not_hide_unrelated_driver_failures(self):
+        driver = Mock()
+        driver.call.return_value = ["window"]
+        driver.script.side_effect = RuntimeError("session disconnected")
+        with self.assertRaisesRegex(RuntimeError, "session disconnected"):
+            Host(driver).inventory()
+
     def test_capability_inventory_is_shared_with_nix(self):
         source = (Path(__file__).parent.parent / "lib/browserConnection.nix").read_text()
         for method in OPERATIONS:
