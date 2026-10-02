@@ -6,5 +6,7 @@ pkgs.rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
   buildFeatures = ["cli"];
   nativeBuildInputs = [pkgs.cmake pkgs.pkg-config pkgs.perl];
+  # Pkl's HTTP client initializes even for local-only manifest fixtures.
+  SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
   meta.mainProgram = "canix-toolbelt";
 }

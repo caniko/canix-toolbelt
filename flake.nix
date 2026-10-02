@@ -26,7 +26,8 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git";
+      # The existing DNS publication gate requires publicationAddressIntents.
+      url = "git+https://github.com/caniko/fleetix.git?ref=integration/gpu-routing&rev=4465108ce8160bdb7b9510211669099ee3a83ac4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.

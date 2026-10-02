@@ -51,7 +51,13 @@
     }).config;
   valid = eval {};
   records = valid.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.test";
-  apex = eval {canix-toolbelt.services.httpSites.media.hostname = lib.mkForce "example.test";};
+  # The stub exposes an untyped attrs option: override at its option boundary,
+  # so a nested mkForce value is not passed through as the hostname itself.
+  apex = eval {
+    canix-toolbelt.services.httpSites = lib.mkForce {
+      media = site // {hostname = "example.test";};
+    };
+  };
   conflicts = eval {
     canix-toolbelt.dns.zones."example.test".exclude = [
       {
