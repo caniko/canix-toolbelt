@@ -76,6 +76,22 @@ class Host:
                 return {url:location.href,title:document.title,loading:document.readyState !== 'complete',
                   document:performance.timeOrigin};
             """)
+        except RuntimeError as error:
+            if str(error).startswith(
+                "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported "
+                "for privileged browsing contexts"
+            ):
+                # Browser-internal startup tabs cannot run content scripts. Native
+                # metadata keeps them listable without enabling privileged execution.
+                url = self.driver.call("GET", "/url")
+                observed = {"url": url, "title": self.driver.call("GET", "/title"),
+                            "loading": False, "document": "privileged:" + url}
+            elif "unexpected alert open" in str(error):
+                observed = {"url": tab["history"][tab["position"]] if tab["history"] else "about:blank",
+                            "title": "", "loading": False}
+            else:
+                raise
+        if "document" in observed:
             if observed["document"] != tab["document"]:
                 tab["generation"] += 1
                 tab["document"] = observed["document"]
@@ -84,11 +100,6 @@ class Host:
             if not history or history[tab["position"]] != observed["url"]:
                 tab["history"] = history[:tab["position"] + 1] + [observed["url"]]
                 tab["position"] += 1
-        except RuntimeError as error:
-            if "unexpected alert open" not in str(error):
-                raise
-            observed = {"url": tab["history"][tab["position"]] if tab["history"] else "about:blank",
-                        "title": "", "loading": False}
         return {"id": tab_id, "url": observed["url"][:16384], "title": observed["title"][:2048],
                 "loading": observed["loading"], "generation": tab["generation"],
                 "canGoBack": tab["position"] > 0, "canGoForward": tab["position"] < len(tab["history"]) - 1}

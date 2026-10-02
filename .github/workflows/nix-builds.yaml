@@ -22,6 +22,8 @@ jobs:
       max-parallel: 2
       matrix:
         installable:
+          - ".#canix-toolbelt"
+          - ".#checks.x86_64-linux.resumable-operator-eval"
           - ".#opencode-browser-adapter"
           - ".#checks.x86_64-linux.browser-connection-eval"
           - ".#checks.x86_64-linux.browser-connection-runtime"

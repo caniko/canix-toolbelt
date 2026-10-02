@@ -40,6 +40,32 @@ three mappings `bins`, `endpoints`, and `secrets` and any schema defaults; see
 [`examples/runtime.pkl`](examples/runtime.pkl). The existing camelCase wire
 format, including `agenixPath`, is preserved.
 
+## Durable stage operator (unreleased)
+
+The Unix `operator` library and CLI execute deployment-owned, idempotent systemd
+stages. Nix's `mkResumableOperator` supplies the units, retry policy and
+`executionContract`; consumers must bind that contract to the executable,
+arguments, database and data roots used by their stages. The controller compares
+the complete persisted policy before resuming and refuses changed contracts.
+
+Checkpoint and worker-restoration intent are synchronized before publication.
+A kernel lock excludes both a second runner and cancellation. Signals stop the
+current stage and preserve recovery intent; failed worker restoration keeps the
+run owned. Legacy interrupted shell state is retained and rejected rather than
+interpreted as checkpoints for the new engine. Reconcile that state using the
+original deployment before starting a new contract.
+
+The CLI takes an explicit policy and service-manager executable:
+
+```sh
+canix-toolbelt operator run --config /run/example/operator.json --systemctl /usr/bin/systemctl
+canix-toolbelt operator cancel --config /run/example/operator.json
+```
+
+Successful runs exit 0, exhausted stages exit 20, interrupted runs exit 143, and
+inspection, persistence or recovery errors exit unsuccessfully. Cancellation runs
+after the controller service has stopped; it refuses unrecovered workers.
+
 ## Dependency contract
 
 Fleetix owns generic fleet operations. Toolbelt composes architecture conventions

@@ -18,7 +18,7 @@ all-features = true
 
 [features]
 default = []
-cli = ["dep:clap", "dep:serde_json"]
+cli = ["dep:clap", "dep:signal-hook"]
 
 [[bin]]
 name = "canix-toolbelt"
@@ -30,7 +30,9 @@ fleetix = { version = "0.2.0", default-features = false }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde_json = "1"
+rustix = { version = "1", features = ["fs"] }
+signal-hook = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

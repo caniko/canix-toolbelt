@@ -26,7 +26,8 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git";
+      # The existing DNS publication gate requires publicationAddressIntents.
+      url = "git+https://github.com/caniko/fleetix.git?ref=integration/gpu-routing&rev=4465108ce8160bdb7b9510211669099ee3a83ac4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
@@ -211,6 +212,7 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
+        packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.

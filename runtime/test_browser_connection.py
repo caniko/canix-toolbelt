@@ -7,7 +7,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from browser_connection import default_browser
 from opencode_browser import OPERATIONS, Host
@@ -67,6 +67,37 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expired"):
             host.element({"refs": {}}, "@e1")
 
+    def test_privileged_startup_tab_does_not_block_inventory(self):
+        driver = Mock()
+        def call(method, path, body=None):
+            if (method, path) == ("GET", "/window/handles"):
+                return ["welcome"]
+            if (method, path) == ("GET", "/url"):
+                return "about:welcome"
+            if (method, path) == ("GET", "/title"):
+                return "Welcome to Floorp"
+            return None
+        driver.call.side_effect = call
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported "
+            "for privileged browsing contexts: 16"
+        )
+        host = Host(driver)
+        inventory = host.inventory()
+        tab = inventory["tabs"][0]
+        self.assertEqual(tab["url"], "about:welcome")
+        self.assertEqual(tab["title"], "Welcome to Floorp")
+        self.assertEqual(inventory["focusedTabID"], tab["id"])
+        self.assertFalse(tab["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
+
+    def test_inventory_does_not_hide_unrelated_script_failures(self):
+        driver = Mock()
+        driver.call.return_value = ["window"]
+        driver.script.side_effect = RuntimeError("unknown error: connection lost")
+        with self.assertRaisesRegex(RuntimeError, "connection lost"):
+            Host(driver).inventory()
+
 
 class RealBrowserSmoke(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("BROWSER_CONNECTION_SMOKE_CONFIG"), "requires explicit real-browser fixture")
@@ -105,24 +136,25 @@ class RealBrowserSmoke(unittest.TestCase):
                 self.assertEqual(response["type"], "success", response)
                 return response["result"]
             tabs = call({"type": "tabs.list"})["value"]["tabs"]
+            original_tab_ids = {tab["id"] for tab in tabs}
             tab_id = tabs[0]["id"]
             call({"type": "navigate", "tabID": tab_id, "url": f"http://127.0.0.1:{server.server_port}/"})
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
             self.assertIn("Adapter smoke", snapshot["content"])
             self.assertIn("Static text is readable", snapshot["content"])
-            def ref(label):
-                line = next(line for line in snapshot["content"].splitlines() if f'"{label}"' in line)
+            def ref(label, role):
+                line = next(line for line in snapshot["content"].splitlines() if f'[{role}] "{label}"' in line)
                 return line.strip().split()[0]
 
             call({"type": "fill_form", "tabID": tab_id, "fields": [
-                {"type": "text", "ref": ref("Name"), "value": "Canix"},
-                {"type": "select", "ref": ref("Choice"), "values": ["two"]},
-                {"type": "check", "ref": ref("Ready"), "checked": True},
+                {"type": "text", "ref": ref("Name", "textbox"), "value": "Canix"},
+                {"type": "select", "ref": ref("Choice", "combobox"), "values": ["two"]},
+                {"type": "check", "ref": ref("Ready", "checkbox"), "checked": True},
             ]})
             self.assertEqual(call({"type": "evaluate", "tabID": tab_id, "script":
                 "[document.querySelector('#name').value,document.querySelector('#choice').value,document.querySelector('#ready').checked]"
             })["value"]["value"], ["Canix", "two", True])
-            call({"type": "click", "tabID": tab_id, "ref": ref("Submit")})
+            call({"type": "click", "tabID": tab_id, "ref": ref("Submit", "button")})
             call({"type": "wait", "tabID": tab_id, "condition": "text", "text": "Clicked"})
             frames = call({"type": "frames", "tabID": tab_id})["value"]["frames"]
             self.assertEqual(len(frames), 2)
@@ -135,8 +167,11 @@ class RealBrowserSmoke(unittest.TestCase):
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
             other = call({"type": "tabs.open"})["value"]["id"]
-            self.assertNotEqual(other, tab_id)
-            self.assertEqual(len(call({"type": "tabs.close", "tabID": other})["value"]["tabs"]), 1)
+            self.assertNotIn(other, original_tab_ids)
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
+                             original_tab_ids | {other})
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]},
+                             original_tab_ids)
         finally:
             process.stdin.close()
             try:

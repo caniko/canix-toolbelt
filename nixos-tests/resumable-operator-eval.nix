@@ -3,6 +3,7 @@
   operator = (import ../lib/systemd.nix {inherit lib;}).mkResumableOperator {
     inherit pkgs;
     name = "fixture-operator";
+    executionContract = "fixture-package-and-arguments-v1";
     stateDir = "/var/lib/fixture-operator";
     stages = [
       {
@@ -23,17 +24,20 @@
   cancel = operator.systemd.services.fixture-operator-cancel;
   resume = operator.systemd.services.fixture-operator-resume;
   controller = lib.head (lib.splitString " " main.serviceConfig.ExecStart);
+  policy = builtins.elemAt (lib.splitString " " main.serviceConfig.ExecStart) 4;
 in
   assert main.serviceConfig.Type == "notify";
   assert main.serviceConfig.RestartPreventExitStatus == "20";
   assert lib.elem "/var/lib/fixture-operator" main.serviceConfig.ReadWritePaths;
   assert cancel.serviceConfig.Type == "oneshot";
   assert resume.unitConfig.ConditionPathExists == "/var/lib/fixture-operator/requested";
-    pkgs.runCommand "resumable-operator-eval" {} ''
+    pkgs.runCommand "resumable-operator-eval" {nativeBuildInputs = [pkgs.jq];} ''
       test -x ${controller}
-      ${pkgs.bash}/bin/bash -n ${controller}
-      definition_line=$(grep -n '^run_stage()' ${controller} | cut -d: -f1)
-      call_line=$(grep -n '^run_stage first ' ${controller} | head -1 | cut -d: -f1)
-      test "$definition_line" -lt "$call_line"
+      ${controller} operator run --help | grep -F -- --config
+      ${controller} operator cancel --help | grep -F -- --config
+      jq -e '.contract_id == "fixture-package-and-arguments-v1" and
+        .state_dir == "/var/lib/fixture-operator" and
+        .stages == [{"name":"first","unit":"fixture-first.service"},
+                    {"name":"second","unit":"fixture-second.service"}]' ${policy}
       touch $out
     ''

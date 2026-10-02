@@ -5,6 +5,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Durable systemd-stage operator with an optional Unix CLI, execution-contract
+  binding, kernel locking, synchronized checkpoints, bounded retries and worker
+  restoration. Interrupted runs reject a changed package/argument contract and
+  preserve legacy shell state for explicit reconciliation.
+
 ### Fixed
 
 - Supply a CA bundle to sandboxed Zola site builds so local-only site fixtures

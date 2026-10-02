@@ -5,6 +5,8 @@ runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
+  ".#canix-toolbelt",
+  ".#checks.x86_64-linux.resumable-operator-eval",
   ".#opencode-browser-adapter",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
