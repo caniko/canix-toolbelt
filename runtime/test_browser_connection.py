@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from browser_connection import default_browser
+from browser_connection import default_browser, firefox_launcher
 from opencode_browser import OPERATIONS, Host
 
 
@@ -47,6 +47,60 @@ class DefaultBrowserTests(unittest.TestCase):
     def test_explicit_browser_needs_no_desktop_connection(self):
         browser = {"family": "firefox", "executable": "/browser", "arguments": []}
         self.assertEqual(default_browser({"browser": browser}), browser)
+
+
+class FirefoxLauncherTests(unittest.TestCase):
+    def test_wrapped_browser_keeps_original_argv_environment_and_gecko_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            prefix = root / "package with spaces"
+            (prefix / "bin").mkdir(parents=True)
+            metadata = prefix / "lib/floorp-bin-12.17.2"
+            metadata.mkdir(parents=True)
+            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            (metadata / "floorp").write_text("not the selected wrapper")
+            executable = prefix / "bin/floorp"
+            executable.write_text(
+                f"#!{sys.executable}\nimport os, sys, json\n"
+                "print(json.dumps([sys.argv, os.environ['BROWSER_WRAPPER_TEST']]))\n"
+            )
+            executable.chmod(0o700)
+            # Desktop executables often reach a store package through a profile symlink.
+            selected = root / "profile-floorp"
+            selected.symlink_to(executable)
+            launcher = firefox_launcher(str(selected), root / "automation")
+            self.assertEqual((Path(launcher).parent / "platform.ini").read_text(),
+                             (metadata / "platform.ini").read_text())
+            with patch.dict(os.environ, {"BROWSER_WRAPPER_TEST": "preserved"}):
+                result = subprocess.run([launcher, "-profile", "path with spaces", "--name=Floorp"],
+                                        check=True, capture_output=True, text=True, timeout=10)
+            self.assertEqual(json.loads(result.stdout),
+                             [[str(selected), "-profile", "path with spaces", "--name=Floorp"], "preserved"])
+
+    def test_native_or_unknown_browser_is_not_replaced(self):
+        with tempfile.TemporaryDirectory() as root:
+            executable = Path(root) / "bin/firefox"
+            executable.parent.mkdir()
+            executable.touch()
+            self.assertEqual(firefox_launcher(str(executable), Path(root) / "automation"),
+                             str(executable))
+            (executable.parent / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            self.assertEqual(firefox_launcher(str(executable), Path(root) / "automation"),
+                             str(executable))
+
+    def test_ambiguous_package_metadata_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            executable = root / "bin/floorp"
+            executable.parent.mkdir()
+            executable.touch()
+            for name in ("one", "two"):
+                metadata = root / "lib" / name
+                metadata.mkdir(parents=True)
+                (metadata / "floorp").touch()
+                (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            with self.assertRaisesRegex(ValueError, "Ambiguous"):
+                firefox_launcher(str(executable), root / "automation")
 
 
 class ProtocolTests(unittest.TestCase):
