@@ -1,9 +1,12 @@
 {pkgs}: let
   python = pkgs.python3.withPackages (p: [p.pillow]);
+  floorp = pkgs.floorp-bin.unwrapped;
   settings = pkgs.writeText "browser-connection-smoke.json" (builtins.toJSON {
     browser = {
       family = "firefox";
-      executable = pkgs.lib.getExe pkgs.floorp-bin;
+      # Geckodriver reads the engine version from adjacent application.ini;
+      # the desktop wrapper's branded --version output is not Firefox metadata.
+      executable = "${floorp}/lib/${floorp.libName}/floorp";
       arguments = [];
     };
     headless = true;
