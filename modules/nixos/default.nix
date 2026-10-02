@@ -1,4 +1,4 @@
-{
+{fleetixGpu}: {
   activation-contracts = ./activation-contracts.nix;
   activation-manifest = ./activation-manifest.nix;
 
@@ -72,7 +72,8 @@
   gpu-backend-vulkan = ./hardware/gpu/backend/vulkan.nix;
 
   # GPU — explicit VA-API media-decode route (shared with homeModules)
-  gpu-media = ../gpu-media.nix;
+  gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};
+  gpu-render = import ../gpu-render.nix {inherit fleetixGpu;};
 
   # GPU — vendors
   gpu-amd = ./hardware/gpu/amd.nix;

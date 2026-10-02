@@ -2375,15 +2375,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1790751185,
-        "narHash": "sha256-6EnYiTzhN219WU9aBj77By5MkDuwkrn3IfHCYJAJ9ug=",
-        "ref": "refs/heads/trunk",
-        "rev": "a8d43d13ed34c4d27f70fe10ed3450c0d89ca92f",
-        "revCount": 86,
+        "lastModified": 1790947744,
+        "narHash": "sha256-m/4aN6/6zS801q8Y1jww1k65z+3x3QlXiaPkyFCmacQ=",
+        "ref": "trunk",
+        "rev": "2230d9ee804a66d94424a91919182e4fcca13ab2",
+        "revCount": 99,
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       },
       "original": {
+        "ref": "trunk",
+        "rev": "2230d9ee804a66d94424a91919182e4fcca13ab2",
         "type": "git",
         "url": "https://github.com/caniko/fleetix.git"
       }

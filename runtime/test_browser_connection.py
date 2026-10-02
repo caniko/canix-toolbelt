@@ -9,11 +9,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from browser_connection import default_browser
+from browser_connection import default_browser, firefox_binary
 from opencode_browser import OPERATIONS, Host
 
 
 class DefaultBrowserTests(unittest.TestCase):
+    def test_nix_wrapper_keeps_its_launcher_and_exposes_real_gecko_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "package" / "bin" / "floorp"
+            binary.parent.mkdir(parents=True)
+            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.chmod(0o700)
+            metadata = binary.parent.parent / "lib" / "floorp"
+            metadata.mkdir(parents=True)
+            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            launcher = Path(firefox_binary(str(binary), root / "launcher"))
+            self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
+            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                             ["-profile", "literal path", "--name=Floorp"])
+
+    def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "floorp"
+            binary.touch()
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+            (root / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+
     def test_actual_xdg_default_and_arguments_are_used(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -50,6 +74,24 @@ class DefaultBrowserTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_privileged_startup_page_uses_standard_webdriver_metadata(self):
+        from unittest.mock import Mock
+        driver = Mock()
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16")
+        driver.call.side_effect = lambda method, path, *args: {
+            "/window/handles": ["startup"], "/url": "about:welcome", "/title": "Welcome",
+        }.get(path)
+        host = Host(driver)
+        state = host.inventory()["tabs"][0]
+        self.assertEqual(state["url"], "about:welcome")
+        self.assertEqual(state["title"], "Welcome")
+        self.assertFalse(state["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], state["generation"])
+        driver.script.side_effect = RuntimeError("unrelated driver error")
+        with self.assertRaisesRegex(RuntimeError, "unrelated driver error"):
+            host.inventory()
+
     def test_capability_inventory_is_shared_with_nix(self):
         source = (Path(__file__).parent.parent / "lib/browserConnection.nix").read_text()
         for method in OPERATIONS:
@@ -110,19 +152,21 @@ class RealBrowserSmoke(unittest.TestCase):
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
             self.assertIn("Adapter smoke", snapshot["content"])
             self.assertIn("Static text is readable", snapshot["content"])
-            def ref(label):
-                line = next(line for line in snapshot["content"].splitlines() if f'"{label}"' in line)
-                return line.strip().split()[0]
+            def ref(label, role):
+                matches = [line for line in snapshot["content"].splitlines()
+                           if f'[{role}] "{label}"' in line]
+                self.assertEqual(len(matches), 1, snapshot["content"])
+                return matches[0].strip().split()[0]
 
             call({"type": "fill_form", "tabID": tab_id, "fields": [
-                {"type": "text", "ref": ref("Name"), "value": "Canix"},
-                {"type": "select", "ref": ref("Choice"), "values": ["two"]},
-                {"type": "check", "ref": ref("Ready"), "checked": True},
+                {"type": "text", "ref": ref("Name", "textbox"), "value": "Canix"},
+                {"type": "select", "ref": ref("Choice", "combobox"), "values": ["two"]},
+                {"type": "check", "ref": ref("Ready", "checkbox"), "checked": True},
             ]})
             self.assertEqual(call({"type": "evaluate", "tabID": tab_id, "script":
                 "[document.querySelector('#name').value,document.querySelector('#choice').value,document.querySelector('#ready').checked]"
             })["value"]["value"], ["Canix", "two", True])
-            call({"type": "click", "tabID": tab_id, "ref": ref("Submit")})
+            call({"type": "click", "tabID": tab_id, "ref": ref("Submit", "button")})
             call({"type": "wait", "tabID": tab_id, "condition": "text", "text": "Clicked"})
             frames = call({"type": "frames", "tabID": tab_id})["value"]["frames"]
             self.assertEqual(len(frames), 2)
@@ -134,9 +178,13 @@ class RealBrowserSmoke(unittest.TestCase):
             captures = call({"type": "files.list", "tabID": tab_id})["value"]["files"]
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
+            existing_tabs = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
             other = call({"type": "tabs.open"})["value"]["id"]
             self.assertNotEqual(other, tab_id)
-            self.assertEqual(len(call({"type": "tabs.close", "tabID": other})["value"]["tabs"]), 1)
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
+                             existing_tabs | {other})
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]},
+                             existing_tabs)
         finally:
             process.stdin.close()
             try:

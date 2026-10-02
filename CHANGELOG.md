@@ -5,6 +5,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-02
+
+### Changed
+
+- Use published Fleetix `0.4` with explicit `pkl` support for the runtime loader,
+  allowing consumers to share one Fleetix series with topology and GPU APIs.
+
 ### Fixed
 
 - Supply a CA bundle to sandboxed Zola site builds so local-only site fixtures
