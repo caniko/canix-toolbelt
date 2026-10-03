@@ -1,0 +1,13 @@
+// Consumer-owned runtime policy. Load from user/deployment configuration,
+// never automatically from the pull request's source branch.
+schemaVersion: Int = 1
+provider: String = "greptile"
+transport: String = "github-comment"
+reviewerId: UInt = 165735046
+
+class CheckRequirement {
+  name: String
+  appId: UInt? = null
+}
+
+requiredChecks: Listing<CheckRequirement> = new {}
