@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -15,6 +15,7 @@ include = [
   "/src/**",
   "/tests/**",
   "/examples/**",
+  "/runtime/ReviewPolicy.pkl",
   "/RUST.md",
   "/CHANGELOG.md",
   "/LICENSE",
@@ -27,7 +28,8 @@ all-features = true
 
 [features]
 default = []
-cli = ["dep:clap", "dep:serde_json"]
+cli = ["dep:clap", "review"]
+review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "dep:serde_json"]
 
 [[bin]]
 name = "canix-toolbelt"
@@ -40,6 +42,12 @@ miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
+sha2 = { version = "0.10", optional = true }
+fs2 = { version = "0.4", optional = true }
+url = { version = "2", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

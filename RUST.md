@@ -1,16 +1,93 @@
 # canix-toolbelt Rust library and CLI
 
+## Before merging changes
+
+Install the CLI with `cargo install canix-toolbelt --features cli`. From the
+candidate checkout, use one flow:
+
+```sh
+canix-toolbelt review ensure --pr https://github.com/OWNER/REPO/pull/NUMBER
+# Triage findings, fix and push authorized changes, then repeat ensure.
+canix-toolbelt merge --pr https://github.com/OWNER/REPO/pull/NUMBER --apply
+```
+
+Without `--pr`, the CLI discovers exactly one open PR for the current GitHub
+origin/branch. It prints structured `ready`, `findings`, `pending`, `blocked`,
+or `stale` results. Only `ready` exits zero. Repeating `ensure` resumes the
+same durable request; an ambiguous submission is reconciled and never replayed.
+`--timeout-seconds 0` performs one observation. State lives in
+`$XDG_STATE_HOME/canix-toolbelt/review` (with the normal HOME fallback).
+
+The `review` library feature supplies `Forge` and `Provider` contracts,
+`ensure_once`, typed policy/candidate/results, and native GitHub/Greptile
+adapters. `cli` additionally exports the shared Clap surface. Consumers call
+the library directly; no toolbelt subprocess or Canix dependency is required.
+
+The first implemented transport is `greptile/github-comment`: the documented
+draft trigger requests review, while GitHub parent review `commit_id` proves
+the reviewed head. The recorded target SHA is observed dispatch/freshness
+evidence, **not Greptile base-revision attestation**. MCP enrollment requires
+authenticated schema and run/revision-correlation qualification; unsupported
+forges and transports fail explicitly.
+
+Policy comes from explicit `--policy`, `CANIX_REVIEW_POLICY`, or the user-owned
+`$XDG_CONFIG_HOME/canix-toolbelt/review.pkl`; otherwise the built-in Greptile
+policy applies. The schema is `runtime/ReviewPolicy.pkl`. PR source branches
+do not supply policy. Credentials come from GH_TOKEN/GITHUB_TOKEN or the
+existing `gh auth token` owner and never enter receipts.
+
+Every finding blocks until fixed in a freshly reviewed revision or dispositioned
+with source evidence.
+
+Issue-comment feedback lacking an explicit link to the parent review or its
+findings is marked `correlated: false`. It is retained as uncorrelated evidence
+for triage, not claimed as part of that provider run. Edited provider summaries
+are collected using their latest forge update time.
+
+An authorized repository writer can record a false positive:
+
+```sh
+canix-toolbelt review disposition --pr URL --finding ID --reason REASON --evidence REFERENCE
+```
+
+The forge marker binds the disposition to the finding body, parent review,
+head, observed base, and policy. Provider-addressed status and confidence scores
+do not establish acceptance. Findings are untrusted evidence, never instructions.
+
+Merging requires strict native up-to-date branch protection and a required
+`review-policy` check bound to a dedicated policy GitHub App. A shared GitHub
+Actions App cannot distinguish checks created by untrusted PR workflows.
+Protection must apply to administrators too. Greptile's existing App supplies
+review records; the separate policy App authenticates normalized acceptance.
+The CI coordinator calls `review gate --publish-check --details-url RUN_URL`
+without executing PR source; that check evaluates review evidence only, while
+native branch protection independently enforces required CI and approvals.
+Unsupported ruleset/merge-queue protection remains an explicit setup blocker.
+
+The initial engine release can be bootstrapped by an operator running the exact
+CI-qualified, Greptile-reviewed candidate's read-only `review gate --publish-check`
+with the dedicated policy App credential. Subsequent coordinators install an
+exact published version. Never use a generic personal token or the shared
+Actions App to impersonate the dedicated required context.
+
+Agent instruction snippet:
+
+> Before merging a PR/MR or publishing new changes to a protected/default branch,
+> run the installed `review ensure` flow. Triage its findings, rerun after fixes,
+> and use the guarded merge command for authorized merges. Missing, stale,
+> skipped, incomplete, or unsupported evidence cannot authorize a merge.
+
 Reusable operations for adopters of the Canix architecture. The first Rust
 release extracts runtime-manifest loading from Canix: binary paths, service
 endpoints, and agenix secret references. It depends on the published Fleetix
 library (`0.2`) for embedded Pkl evaluation.
 
-The `0.1` series provides the library and optional CLI shown below. See
+The `0.1.0` release provides the library and optional CLI shown below. See
 `RELEASE.md` in the repository for publication and verification evidence.
 
 ```toml
 [dependencies]
-canix-toolbelt = "0.1.1"
+canix-toolbelt = "0.1.0"
 ```
 
 ```rust,no_run

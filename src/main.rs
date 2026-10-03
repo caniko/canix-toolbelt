@@ -12,6 +12,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Ensure revision-bound PR review, inspect gates and disposition findings
+    #[command(subcommand)]
+    Review(canix_toolbelt::review::cli::ReviewCommand),
+    /// Revalidate review and CI before an explicitly authorized PR merge
+    Merge(canix_toolbelt::review::cli::MergeArgs),
     /// Inspect deployment-provided runtime facts
     #[command(subcommand)]
     Runtime(RuntimeCommand),
@@ -27,8 +32,18 @@ enum RuntimeCommand {
     },
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Review(command) => {
+            return canix_toolbelt::review::cli::run(command)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
+        Command::Merge(args) => {
+            return canix_toolbelt::review::cli::merge(args)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
         Command::Runtime(RuntimeCommand::Show { path }) => {
             let manifest = RuntimeManifest::load_from(&path)?;
             let mut stdout = std::io::stdout().lock();
@@ -36,12 +51,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             writeln!(stdout)?;
         }
     }
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
 fn main() -> std::process::ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
