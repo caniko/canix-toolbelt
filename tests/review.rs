@@ -77,6 +77,7 @@ fn addressed_status_and_unknown_severity_do_not_silence_findings() {
         line: Some(12),
         severity: None,
         provider_addressed: true,
+        correlated: true,
         url: "https://github.com/example/project/pull/12#discussion_r1".into(),
     });
     assert_eq!(
@@ -219,4 +220,43 @@ fn read_only_gate_never_requests_a_review() {
         Verdict::Blocked
     );
     assert_eq!(provider.submits, 0);
+}
+
+#[test]
+fn a_deleted_submitted_marker_blocks_recovery_without_replaying() {
+    let state = tempfile::tempdir().unwrap();
+    let mut forge = Fake {
+        submits: 0,
+        ambiguous: false,
+        delivered: false,
+        finished: false,
+    };
+    let mut provider = Fake {
+        submits: 0,
+        ambiguous: false,
+        delivered: false,
+        finished: false,
+    };
+    ensure_once(
+        &mut forge,
+        &mut provider,
+        &Policy::default(),
+        &candidate().url,
+        state.path(),
+        true,
+    )
+    .unwrap();
+    provider.delivered = false;
+    let result = ensure_once(
+        &mut forge,
+        &mut provider,
+        &Policy::default(),
+        &candidate().url,
+        state.path(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(result.verdict, Verdict::Blocked);
+    assert!(result.blockers.iter().any(|b| b.contains("marker")));
+    assert_eq!(provider.submits, 1);
 }

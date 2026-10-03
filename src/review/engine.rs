@@ -311,6 +311,8 @@ pub fn ensure_once<F: Forge, P: Provider>(
             outcome: None,
         }
     });
+    let missing_marker =
+        matches!(run.submission, Submission::Submitted) && evidence.request_receipt.is_none();
     if let Some(receipt) = evidence.request_receipt {
         run.request_receipt = Some(receipt);
         run.submission = Submission::Submitted;
@@ -333,6 +335,9 @@ pub fn ensure_once<F: Forge, P: Provider>(
                 }
             }
         }
+    } else if missing_marker {
+        result = outcome(&candidate, Some(&run.intent), Verdict::Blocked,
+            vec!["submitted request marker is missing; restore the original authorized marker from the durable intent and receipt without retriggering the provider".into()], None);
     } else if matches!(run.submission, Submission::Unknown) {
         result = outcome(
             &candidate,

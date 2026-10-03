@@ -284,6 +284,10 @@ pub struct Finding {
     pub severity: Option<String>,
     /// Provider-reported addressed status, diagnostic only.
     pub provider_addressed: bool,
+    /// Whether the feedback is explicitly linked to this parent review.
+    /// False identifies conservative, uncorrelated provider feedback.
+    #[serde(default)]
+    pub correlated: bool,
     /// Source permalink.
     pub url: String,
 }

@@ -37,7 +37,14 @@ do not supply policy. Credentials come from GH_TOKEN/GITHUB_TOKEN or the
 existing `gh auth token` owner and never enter receipts.
 
 Every finding blocks until fixed in a freshly reviewed revision or dispositioned
-with source evidence. An authorized repository writer can record a false positive:
+with source evidence.
+
+Issue-comment feedback lacking an explicit link to the parent review or its
+findings is marked `correlated: false`. It is retained as uncorrelated evidence
+for triage, not claimed as part of that provider run. Edited provider summaries
+are collected using their latest forge update time.
+
+An authorized repository writer can record a false positive:
 
 ```sh
 canix-toolbelt review disposition --pr URL --finding ID --reason REASON --evidence REFERENCE

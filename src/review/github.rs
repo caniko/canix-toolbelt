@@ -366,6 +366,22 @@ impl Forge for GitHub {
                     });
                 }
             }
+            if let Some(contexts) = protection
+                .pointer("/required_status_checks/contexts")
+                .and_then(Value::as_array)
+            {
+                for context in contexts {
+                    let name = context
+                        .as_str()
+                        .ok_or_else(|| Error("invalid native required status context".into()))?;
+                    if !required.iter().any(|r| r.name == name) {
+                        required.push(CheckRequirement {
+                            name: name.into(),
+                            app_id: None,
+                        });
+                    }
+                }
+            }
         }
         let mut checks = self.pages(
             &format!(
@@ -374,6 +390,7 @@ impl Forge for GitHub {
             ),
             Some("check_runs"),
         )?;
+        let mut qualified_shas = vec![candidate.head.clone()];
         let pull = self.get(&format!("/repos/{}/pulls/{}", pr.repository, pr.number))?;
         if let Some(merge_sha) = pull
             .get("merge_commit_sha")
@@ -389,6 +406,7 @@ impl Forge for GitHub {
                 .filter_map(|p| p.get("sha").and_then(Value::as_str))
                 .collect();
             if parents == BTreeSet::from([candidate.head.as_str(), candidate.base.as_str()]) {
+                qualified_shas.push(merge_sha.into());
                 checks.extend(self.pages(
                     &format!(
                         "/repos/{}/commits/{merge_sha}/check-runs?filter=latest",
@@ -398,11 +416,16 @@ impl Forge for GitHub {
                 )?);
             }
         }
-        let mut latest: BTreeMap<(String, u64), Value> = BTreeMap::new();
+        let mut latest: BTreeMap<(String, u64, String), Value> = BTreeMap::new();
         for check in checks {
+            let sha = text(&check, "/head_sha")?;
+            if !qualified_shas.iter().any(|expected| expected == sha) {
+                return Err(Error("CI check belongs to a different comparison".into()));
+            }
             let key = (
                 text(&check, "/name")?.to_owned(),
                 number(&check, "/app/id")?,
+                sha.into(),
             );
             if latest.get(&key).is_none_or(|old| {
                 check.get("id").and_then(Value::as_u64) > old.get("id").and_then(Value::as_u64)
@@ -410,30 +433,28 @@ impl Forge for GitHub {
                 latest.insert(key, check);
             }
         }
-        let statuses = self.pages(
-            &format!(
-                "/repos/{}/commits/{}/statuses",
-                pr.repository, candidate.head
-            ),
-            None,
-        )?;
         let mut legacy = BTreeMap::new();
-        for value in statuses {
-            legacy
-                .entry(text(&value, "/context")?.to_owned())
-                .or_insert(value);
+        for sha in qualified_shas {
+            for value in self.pages(
+                &format!("/repos/{}/commits/{sha}/statuses", pr.repository),
+                None,
+            )? {
+                legacy
+                    .entry((text(&value, "/context")?.to_owned(), sha.clone()))
+                    .or_insert(value);
+            }
         }
         let mut blockers = Vec::new();
         for check in &required {
-            let successful = latest.iter().any(|((name, app), v)| {
+            let successful = latest.iter().any(|((name, app, _), v)| {
                 name == &check.name
                     && check.app_id.is_none_or(|expected| expected == *app)
                     && v.get("status").and_then(Value::as_str) == Some("completed")
                     && v.get("conclusion").and_then(Value::as_str) == Some("success")
             }) || (check.app_id.is_none()
-                && legacy
-                    .get(&check.name)
-                    .is_some_and(|v| v.get("state").and_then(Value::as_str) == Some("success")));
+                && legacy.iter().any(|((name, _), v)| {
+                    name == &check.name && v.get("state").and_then(Value::as_str) == Some("success")
+                }));
             if !successful {
                 blockers.push(format!(
                     "required CI context is missing or unsuccessful: {}",
@@ -441,14 +462,14 @@ impl Forge for GitHub {
                 ));
             }
         }
-        for ((name, _), v) in &latest {
+        for ((name, _, _), v) in &latest {
             if v.get("status").and_then(Value::as_str) != Some("completed")
                 || v.get("conclusion").and_then(Value::as_str) != Some("success")
             {
                 blockers.push(format!("CI check has not passed: {name}"));
             }
         }
-        for (name, v) in &legacy {
+        for ((name, _), v) in &legacy {
             if v.get("state").and_then(Value::as_str) != Some("success") {
                 blockers.push(format!("CI status has not passed: {name}"));
             }
@@ -643,6 +664,7 @@ impl Provider for GreptileGitHub {
                             .and_then(Value::as_u64)
                             .or_else(|| item.get("original_line").and_then(Value::as_u64)),
                         provider_addressed: false,
+                        correlated: true,
                         url: text(&item, "/html_url")?.into(),
                     });
                 }
@@ -655,6 +677,7 @@ impl Provider for GreptileGitHub {
                         path: None,
                         line: None,
                         provider_addressed: false,
+                        correlated: true,
                         url: text(parent, "/html_url")?.into(),
                     });
                 }
@@ -666,8 +689,12 @@ impl Provider for GreptileGitHub {
                 for comment in &comments {
                     if comment.pointer("/user/id").and_then(Value::as_u64)
                         == Some(policy.reviewer_id)
-                        && timestamp(text(comment, "/created_at")?)?
-                            >= requested_at.unwrap_or(i64::MAX)
+                        && timestamp(
+                            comment
+                                .get("updated_at")
+                                .and_then(Value::as_str)
+                                .unwrap_or(text(comment, "/created_at")?),
+                        )? >= requested_at.unwrap_or(i64::MAX)
                         && !text(comment, "/body")?.trim().is_empty()
                     {
                         findings.push(Finding {
@@ -677,6 +704,13 @@ impl Provider for GreptileGitHub {
                             path: None,
                             line: None,
                             provider_addressed: false,
+                            correlated: text(comment, "/body")?
+                                .contains(text(parent, "/html_url")?)
+                                || findings.iter().any(|f| {
+                                    f.correlated
+                                        && text(comment, "/body")
+                                            .is_ok_and(|body| body.contains(&f.url))
+                                }),
                             url: text(comment, "/html_url")?.into(),
                         });
                     }
@@ -914,7 +948,7 @@ mod tests {
 
     #[test]
     fn provider_issue_comment_feedback_is_not_silently_omitted() {
-        let summary = json!({"id":19,"body":"Unresolved race found in the review summary", "created_at":"2026-10-03T12:01:00Z", "user":{"id":165735046}, "html_url":"https://github.com/example/project/pull/12#issuecomment-19"});
+        let summary = json!({"id":19,"body":"Unresolved race found in the review summary", "created_at":"2026-10-03T11:59:00Z", "updated_at":"2026-10-03T12:01:00Z", "user":{"id":165735046}, "html_url":"https://github.com/example/project/pull/12#issuecomment-19"});
         let (github, handle) = server(vec![
             (200, json!([parent("a".repeat(40), "2026-10-03T12:01:00Z")])),
             (200, json!([marker_comment(), summary])),
@@ -927,6 +961,14 @@ mod tests {
             .review
             .unwrap();
         assert!(review.findings.iter().any(|f| f.id == "issue-19"));
+        assert!(
+            !review
+                .findings
+                .iter()
+                .find(|f| f.id == "issue-19")
+                .unwrap()
+                .correlated
+        );
         assert_eq!(
             Policy::default().evaluate(&candidate(), &review),
             super::super::Verdict::Findings
@@ -1009,6 +1051,60 @@ mod tests {
             (404, Value::Null),
             (200, json!({"check_runs":[],"total_count":0})),
             (200, json!({"merge_commit_sha":null})),
+            (200, json!([])),
+        ]);
+        assert!(
+            !github
+                .checks(&candidate(), &Policy::default())
+                .unwrap()
+                .is_empty()
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn missing_native_legacy_context_blocks_an_otherwise_passing_check() {
+        let (mut github, handle) = server(vec![
+            (
+                200,
+                json!({"required_status_checks":{"contexts":["required-legacy"],"checks":[]}}),
+            ),
+            (
+                200,
+                json!({"check_runs":[{"id":2,"name":"tests","app":{"id":15368},"head_sha":"a".repeat(40),"status":"completed","conclusion":"success"}],"total_count":1}),
+            ),
+            (200, json!({"merge_commit_sha":null})),
+            (200, json!([])),
+        ]);
+        assert!(
+            github
+                .checks(&candidate(), &Policy::default())
+                .unwrap()
+                .iter()
+                .any(|b| b.contains("required-legacy"))
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_newer_passing_head_check_cannot_hide_a_failed_test_merge_check() {
+        let check = |id: u64, sha: &str, conclusion: &str| json!({"id":id,"name":"tests","app":{"id":15368},"head_sha":sha.repeat(40),"status":"completed","conclusion":conclusion});
+        let (mut github, handle) = server(vec![
+            (404, Value::Null),
+            (
+                200,
+                json!({"check_runs":[check(100,"a","success")],"total_count":1}),
+            ),
+            (200, json!({"merge_commit_sha":"c".repeat(40)})),
+            (
+                200,
+                json!({"parents":[{"sha":"a".repeat(40)},{"sha":"b".repeat(40)}]}),
+            ),
+            (
+                200,
+                json!({"check_runs":[check(90,"c","failure")],"total_count":1}),
+            ),
+            (200, json!([])),
             (200, json!([])),
         ]);
         assert!(
