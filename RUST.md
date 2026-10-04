@@ -5,12 +5,12 @@ release extracts runtime-manifest loading from Canix: binary paths, service
 endpoints, and agenix secret references. It depends on the published Fleetix
 library (`0.2`) for embedded Pkl evaluation.
 
-The `0.1.0` release provides the library and optional CLI shown below. See
+The `0.1` series provides the library and optional CLI shown below. See
 `RELEASE.md` in the repository for publication and verification evidence.
 
 ```toml
 [dependencies]
-canix-toolbelt = "0.1.0"
+canix-toolbelt = "0.1.1"
 ```
 
 ```rust,no_run

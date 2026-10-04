@@ -3,7 +3,10 @@
 # Mirrors modules/nixos, but is a *function* of the flake inputs the modules
 # need: chromium-gpu builds its wrappers with wrapper-manager, which is closed
 # over here so consumers don't have to pass `inputs.wrapper-manager` themselves.
-{wrapper-manager}: {
+{
+  wrapper-manager,
+  fleetixGpu,
+}: {
   # Shared readiness contracts for Home Manager features with activation
   # hooks, runtime credentials, or mutable external state.
   activation-contracts = ./activation-contracts.nix;
@@ -16,7 +19,10 @@
   browser-connection = ./browser-connection.nix;
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
-  gpu-media = ../gpu-media.nix;
+  gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};
+  gpu-render = import ../gpu-render.nix {inherit fleetixGpu;};
+  modde-gpu = import ./gaming/modde-gpu.nix {inherit fleetixGpu;};
+  mpv-gpu = ./desktop/mpv-gpu.nix;
   # GPU — Chromium VA-API acceleration flags/env wrapper
   chromium-gpu = import ./desktop/chromium-gpu.nix {inherit wrapper-manager;};
   # GPU — Firefox/Floorp VA-API decode wrapper (MOZ_DRM_DEVICE + libva)

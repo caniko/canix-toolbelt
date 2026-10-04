@@ -9,6 +9,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -50,6 +51,33 @@ def default_browser(settings):
     if executable is None:
         raise ValueError(f"Default browser executable is not available: {argv[0]}")
     return {"family": family, "executable": executable, "arguments": arguments}
+
+
+def firefox_binary(executable, launcher_root):
+    """Expose genuine Gecko metadata beside Nix wrappers without bypassing them.
+
+    geckodriver's mozversion reads platform.ini beside the configured binary.
+    Nix puts it under lib; Floorp's --version cannot substitute for that metadata.
+    """
+    binary = Path(executable).resolve()
+    if (binary.parent / "platform.ini").is_file():
+        return executable
+    candidates = {
+        metadata.resolve()
+        for package in (binary.parent.parent, Path(executable).parent.parent)
+        for metadata in (package / "lib").glob("*/platform.ini")
+        if metadata.is_file()
+    }
+    if len(candidates) != 1:
+        return executable
+    launcher_root.mkdir()
+    (launcher_root / "platform.ini").symlink_to(candidates.pop())
+    launcher = launcher_root / "firefox"
+    launcher.write_text(
+        f"#!{sys.executable}\nimport os, sys\nos.execv({executable!r}, [{executable!r}, *sys.argv[1:]])\n"
+    )
+    launcher.chmod(0o700)
+    return str(launcher)
 
 
 class WebDriver:
@@ -97,7 +125,8 @@ class WebDriver:
                 args += ["-no-remote", "-profile", self.profile.name]
                 if settings.get("headless"):
                     args += ["-headless"]
-                options = {"moz:firefoxOptions": {"binary": self.browser["executable"], "args": args}}
+                binary = firefox_binary(self.browser["executable"], Path(self.profile.name) / "launcher")
+                options = {"moz:firefoxOptions": {"binary": binary, "args": args}}
                 browser_name = "firefox"
             else:
                 args += ["--user-data-dir=" + self.profile.name]

@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -11,7 +11,16 @@ documentation = "https://docs.rs/canix-toolbelt"
 readme = "RUST.md"
 keywords = ["nixos", "runtime", "pkl", "configuration"]
 categories = ["config", "command-line-utilities"]
-include = ["/src/**", "/tests/**", "/examples/**", "/RUST.md", "/CHANGELOG.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
+include = [
+  "/src/**",
+  "/tests/**",
+  "/examples/**",
+  "/RUST.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+  "/Cargo.toml",
+  "/Cargo.lock",
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -26,7 +35,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-fleetix = { version = "0.2.0", default-features = false }
+fleetix = { version = "0.4.0", default-features = false, features = ["pkl"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
