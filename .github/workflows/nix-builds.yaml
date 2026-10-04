@@ -26,6 +26,7 @@ jobs:
           - ".#checks.x86_64-linux.browser-connection-eval"
           - ".#checks.x86_64-linux.browser-connection-runtime"
           - ".#checks.x86_64-linux.browser-connection-smoke"
+          - ".#checks.x86_64-linux.direnv-eval"
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
     steps:

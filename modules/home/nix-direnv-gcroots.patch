@@ -1,0 +1,31 @@
+diff --git a/share/nix-direnv/direnvrc b/share/nix-direnv/direnvrc
+--- a/share/nix-direnv/direnvrc
++++ b/share/nix-direnv/direnvrc
+@@ -375,3 +375,2 @@ use_flake() {
+         # We need to update our cache
+-        echo "$tmp_profile_rc" >"$profile_rc"
+         _nix_add_gcroot "$tmp_profile" "$profile"
+@@ -384,11 +383,21 @@ use_flake() {
+           --json --no-write-lock-file \
+-          -- "$flake_uri")
++          -- "$flake_uri") || return 1
+
++        local -A seen_inputs=()
++        local -a unique_inputs=()
+         while [[ $flake_input_paths =~ /nix/store/[^\"]+ ]]; do
+           local store_path="${BASH_REMATCH[0]}"
+-          _nix_add_gcroot "${store_path}" "${flake_inputs}/${store_path##*/}"
++          if [[ ! -v seen_inputs["$store_path"] ]]; then
++            seen_inputs["$store_path"]=1
++            unique_inputs+=("$store_path")
++          fi
+           flake_input_paths="${flake_input_paths/${store_path}/}"
+         done
++        if [ "${#unique_inputs[@]}" -gt 0 ]; then
++          _nix build --max-jobs 0 --option builders "" --out-link "${flake_inputs}/input" -- "${unique_inputs[@]}" || return 1
++        fi
++        # Publish a fresh cache only after all input roots succeeded.
++        echo "$tmp_profile_rc" >"$profile_rc"
+
+         _nix_direnv_info "Renewed cache"
+       else
