@@ -10,6 +10,8 @@ nix_builds = [
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
   ".#checks.x86_64-linux.harbor-db-compat-eval",
+  ".#checks.x86_64-linux.harbor-db-compat-runtime",
+  ".#checks.x86_64-linux.dns-publication-eval",
 ]
 with_msrv = true
 with_audit = true
@@ -42,3 +44,18 @@ artifact_retention_days = 14
 [ci.pages]
 repo = "caniko/canix-toolbelt"
 canonical_domain = "canix-toolbelt.tartanoglu.com"
+
+[[ci.required_gates]]
+id = "crate-release"
+run = "nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "generated-parity"
+run = "nix run github:caniko/simit/c515084520fbd644fbc21ea2de453fdbee98d215 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "supported-systems"
+run = "bash scripts/qualify-source.sh"
+timeout_minutes = 30

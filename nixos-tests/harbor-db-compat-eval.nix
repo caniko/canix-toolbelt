@@ -30,6 +30,7 @@
       switchAdoption.systemIdentifier = "12345";
     };
   };
+  guard = guarded.system.preSwitchChecksScript;
 in
   assert legacy.services.harbor-db.pgBackup.enable;
   assert legacy.services.harbor-db.pgBackup.sourceSettings.replicatorPasswordFile == "/run/secrets/replicator";
@@ -43,5 +44,10 @@ in
   assert pkgs.lib.hasInfix "adopt-live" guarded.system.preSwitchChecks.harbor-db-postgresql-adoption;
   assert pkgs.lib.hasInfix "12345" guarded.system.preSwitchChecks.harbor-db-postgresql-adoption;
     pkgs.runCommand "harbor-db-compat-eval" {} ''
-      echo "Legacy backup facade and explicit PostgreSQL storage guards compose" > $out
+      # Realize the complete generated hook and its referenced lifecycle tool.
+      test -f ${guard}
+      ${pkgs.bash}/bin/bash -n ${guard}
+      grep -F inspect-live ${guard}
+      grep -F adopt-live ${guard}
+      cp ${guard} "$out"
     ''

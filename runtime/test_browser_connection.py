@@ -19,15 +19,16 @@ class DefaultBrowserTests(unittest.TestCase):
             root = Path(root)
             binary = root / "package" / "bin" / "floorp"
             binary.parent.mkdir(parents=True)
-            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.write_text(f"#!{sys.executable}\nimport json, os, sys\nprint(json.dumps([sys.argv[1:], os.environ['WRAPPER_FIXTURE']]))\n")
             binary.chmod(0o700)
             metadata = binary.parent.parent / "lib" / "floorp"
             metadata.mkdir(parents=True)
             (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
             launcher = Path(firefox_binary(str(binary), root / "launcher"))
             self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
-            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
-                             ["-profile", "literal path", "--name=Floorp"])
+            with patch.dict(os.environ, {"WRAPPER_FIXTURE": "literal environment"}):
+                self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                                 [["-profile", "literal path", "--name=Floorp"], "literal environment"])
 
     def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
         with tempfile.TemporaryDirectory() as root:
@@ -132,14 +133,23 @@ class RealBrowserSmoke(unittest.TestCase):
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        command = [os.environ["BROWSER_CONNECTION_SMOKE_COMMAND"]] if os.environ.get("BROWSER_CONNECTION_SMOKE_COMMAND") else [
+            sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
+            "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]]
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
-             "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
         try:
             ready = json.loads(process.stdout.readline())
             self.assertEqual(ready["version"], 1)
+            if os.environ.get("BROWSER_WRAPPER_RECEIPT"):
+                arguments, environment = json.loads(Path(os.environ["BROWSER_WRAPPER_RECEIPT"]).read_text())
+                index = arguments.index("--name")
+                self.assertEqual(arguments[index + 1], "Toolbelt literal argument")
+                self.assertIn("-profile", arguments)
+                self.assertIn("-headless", arguments)
+                self.assertEqual(environment, "literal environment preserved")
             def call(action, files=None):
                 process.stdin.write(json.dumps({"id": "test", "command": {"action": action, "files": files or []}}) + "\n")
                 process.stdin.flush()
