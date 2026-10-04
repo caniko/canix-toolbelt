@@ -5,6 +5,15 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Provider-neutral, revision-bound PR review contracts and durable request
+  accounting, with an explicit Greptile GitHub-comment adapter.
+- `review ensure`, read-only `review gate`, evidence-backed finding dispositions,
+  and a separate protected, expected-head-bound `merge --apply` command.
+- Complete parent-review findings, trusted writer request/disposition markers,
+  bounded HTTP/polling, rate-limit checkpoints, and ambiguous-submission recovery.
+
 ## [0.1.1] - 2026-10-02
 
 ### Changed
