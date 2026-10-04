@@ -182,6 +182,16 @@ fn resolve_pr(args: &CommonArgs, github: &GitHub) -> Result<String, Error> {
 }
 
 struct ReviewOnly<'a>(&'a mut GitHub);
+
+fn poll_delay(retry_at: Option<u64>, now: u64, remaining: Duration) -> Option<Duration> {
+    let delay = match retry_at {
+        Some(at) => Duration::from_secs(at.saturating_sub(now).max(1)),
+        None => Duration::from_secs(30)
+            .min(remaining / 2)
+            .max(Duration::from_secs(1)),
+    };
+    (delay < remaining).then_some(delay)
+}
 impl Forge for ReviewOnly<'_> {
     fn candidate(&mut self, url: &str) -> Result<Candidate, Error> {
         self.0.candidate(url)
@@ -255,15 +265,13 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
         if !waitable || Instant::now() >= deadline {
             return Ok(result);
         }
-        let seconds = result
-            .next_poll_at
-            .map_or((args.timeout_seconds / 3).clamp(1, 30), |at| {
-                at.saturating_sub(now_seconds()).max(1)
-            });
-        let delay = Duration::from_secs(seconds);
-        if delay > deadline.saturating_duration_since(Instant::now()) {
+        let Some(delay) = poll_delay(
+            result.next_poll_at,
+            now_seconds(),
+            deadline.saturating_duration_since(Instant::now()),
+        ) else {
             return Ok(result);
-        }
+        };
         std::thread::sleep(delay);
     }
 }
@@ -369,4 +377,34 @@ pub fn merge(args: MergeArgs) -> Result<u8, Error> {
         print(&github_from_environment()?.merge(&result.candidate, &policy)?)?;
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::poll_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn short_deadlines_leave_time_for_another_observation() {
+        for seconds in 15..30 {
+            let remaining = Duration::from_secs(seconds);
+            let delay = poll_delay(None, 100, remaining).unwrap();
+            assert!(delay < remaining);
+            assert_eq!(delay, remaining / 2);
+        }
+        assert_eq!(
+            poll_delay(None, 100, Duration::from_secs(600)),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn provider_retry_times_are_never_shortened_for_a_deadline() {
+        assert_eq!(poll_delay(Some(140), 100, Duration::from_secs(20)), None);
+        assert_eq!(
+            poll_delay(Some(115), 100, Duration::from_secs(20)),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(poll_delay(None, 100, Duration::ZERO), None);
+    }
 }
