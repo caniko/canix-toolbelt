@@ -7,8 +7,9 @@
 <!-- simit:badges:end -->
 
 The Rust library and standalone CLI candidate are documented in [RUST.md](RUST.md).
-They provide Cargo-native runtime-manifest loading; publication readiness and
-remaining release gates are tracked in [RELEASE.md](RELEASE.md).
+They provide Cargo-native runtime-manifest loading and revision-bound PR review
+and merge operations; publication steps and verification evidence are tracked
+in [RELEASE.md](RELEASE.md).
 
 Reusable, host-agnostic Nix building blocks extracted from
 [caniko/canix](https://github.com/caniko/canix). The pieces here are the

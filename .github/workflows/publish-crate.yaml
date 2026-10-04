@@ -40,6 +40,19 @@ jobs:
       - name: Add cargo bin to PATH
         run: echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Project setup
+        run: |
+          set -eu
+          test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          {
+            printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
+            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+            printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
+          } >> "$GITHUB_ENV"
+
       - name: Validate signed release tag
         run: |
           set -euo pipefail

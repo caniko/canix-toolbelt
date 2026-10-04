@@ -29,7 +29,7 @@ in {
             (old.postFixup or "")
             + ''
               chmod u+w "$out/share/nix-direnv/direnvrc"
-              ${lib.getExe pkgs.patch} --directory="$out" --strip=1 < ${./nix-direnv-gcroots.patch}
+              ${lib.getExe pkgs.patch} --directory="$out" --strip=1 < ${pkgs.replaceVars ./nix-direnv-gcroots.patch {inherit (pkgs) coreutils;}}
               chmod u-w "$out/share/nix-direnv/direnvrc"
             '';
         });
