@@ -14,10 +14,13 @@
   requires ? [],
   wants ? [],
   controllerPackage ? import ../nix/package.nix {inherit pkgs;},
-  executionContract ? toString controllerPackage,
+  # The helper cannot infer commands of consumer-owned systemd units.
+  # Callers must bind executable paths, arguments and data roots explicitly.
+  executionContract,
   extraServiceConfig ? {},
 }:
 assert stages != [];
+assert builtins.isString executionContract && executionContract != "";
 assert maxAttempts > 0;
 assert builtins.length retryDelays >= maxAttempts - 1; let
   # Nix supplies policy; the Rust engine owns locking, durable checkpoints,

@@ -95,6 +95,8 @@ struct State {
     #[serde(default)]
     restore_workers: Vec<String>,
     #[serde(default)]
+    restoring: bool,
+    #[serde(default)]
     current_unit: String,
     #[serde(default)]
     current_stage: String,
@@ -291,6 +293,17 @@ pub fn run(
     services: &mut impl ServiceManager,
     cancelled: &AtomicBool,
 ) -> io::Result<Outcome> {
+    run_with_ready(config, services, cancelled, || Ok(()))
+}
+
+/// Run with a readiness callback after the durable admission fence is installed
+/// and consumer workers are quiesced. A refused contract never announces ready.
+pub fn run_with_ready(
+    config: &OperatorConfig,
+    services: &mut impl ServiceManager,
+    cancelled: &AtomicBool,
+    ready: impl FnOnce() -> io::Result<()>,
+) -> io::Result<Outcome> {
     let delays = validate(config)?;
     let _lock = lock(config)?;
     let state_path = config.state_dir.join("state.json");
@@ -302,7 +315,11 @@ pub fn run(
     let mut state = match previous {
         Some(state)
             if config.request_path.exists()
-                && matches!(state.state.as_str(), "running" | "interrupted") =>
+                && (state.restoring
+                    || matches!(
+                        state.state.as_str(),
+                        "running" | "interrupted" | "succeeded" | "failed"
+                    )) =>
         {
             if state.config.as_ref() != Some(config) {
                 return Err(invalid(
@@ -329,6 +346,7 @@ pub fn run(
                 completed: vec![],
                 failures: BTreeMap::new(),
                 restore_workers: vec![],
+                restoring: false,
                 current_unit: String::new(),
                 current_stage: String::new(),
                 current_index: -1,
@@ -338,22 +356,46 @@ pub fn run(
             }
         }
     };
+    let restore_only = state.restoring || matches!(state.state.as_str(), "succeeded" | "failed");
     marker(&config.request_path)?;
-    state.state = "running".into();
+    if !restore_only {
+        state.state = "running".into();
+        state.result = "running".into();
+    }
     save(config, &mut state)?;
     let execution: io::Result<Outcome> = (|| {
+        // A prior crash may have left a stage owned by the service manager.
+        // Confirm it stopped before notifying readiness or starting more work.
+        if !state.current_unit.is_empty() && !state.completed.contains(&state.current_stage) {
+            stop_confirmed(services, &state.current_unit)?;
+            state.current_unit.clear();
+            save(config, &mut state)?;
+        }
         // Record restoration intent before stopping workers so abrupt reboot
         // cannot forget which workers this run owns.
-        for unit in &config.quiesce_units {
-            if !state.restore_workers.contains(unit) && services.active(unit)? {
-                state.restore_workers.push(unit.clone());
-                save(config, &mut state)?;
-            }
-            if state.restore_workers.contains(unit) {
-                services.stop(unit)?;
+        if !restore_only {
+            for unit in &config.quiesce_units {
+                if !state.restore_workers.contains(unit) && services.active(unit)? {
+                    state.restore_workers.push(unit.clone());
+                    save(config, &mut state)?;
+                }
+                if state.restore_workers.contains(unit) {
+                    services.stop(unit)?;
+                }
             }
         }
         marker(&config.sentinel_path)?;
+        ready()?;
+        if restore_only {
+            return match state.result.as_str() {
+                "succeeded" => Ok(Outcome::Succeeded),
+                "failed" => Ok(Outcome::Failed),
+                "interrupted" => Ok(Outcome::Interrupted),
+                _ => Err(invalid(
+                    "restoration state has no recorded execution result",
+                )),
+            };
+        }
         let mut failed = false;
         for (index, stage) in config.stages.iter().enumerate() {
             if cancelled.load(Ordering::SeqCst) {
@@ -372,7 +414,15 @@ pub fn run(
                 if cancelled.load(Ordering::SeqCst) {
                     return Ok(Outcome::Interrupted);
                 }
-                let result = services.start(&stage.unit, cancelled)?;
+                state.current_unit = stage.unit.clone();
+                save(config, &mut state)?;
+                let result = services
+                    .start(&stage.unit, cancelled)
+                    .unwrap_or_else(|error| StageResult {
+                        success: false,
+                        result: format!("service-manager-error: {error}"),
+                        exit_status: -1,
+                    });
                 if cancelled.load(Ordering::SeqCst) {
                     return Ok(Outcome::Interrupted);
                 }
@@ -400,6 +450,9 @@ pub fn run(
                     &result.result,
                     result.exit_status,
                 )?;
+                // Errors from reset-failed, start or result queries consume the
+                // same persisted retry budget. A retry requires a stopped unit.
+                stop_confirmed(services, &stage.unit)?;
                 if failures < config.max_attempts {
                     wait(delays[failures - 1], cancelled);
                 }
@@ -415,6 +468,24 @@ pub fn run(
             Outcome::Succeeded
         })
     })();
+    // A dead systemctl facade is not proof that systemd stopped its unit.
+    // Retain both fences and worker ownership if stage termination is uncertain.
+    if !state.current_unit.is_empty() && !state.completed.contains(&state.current_stage) {
+        if let Err(error) = stop_confirmed(services, &state.current_unit) {
+            state.state = "interrupted".into();
+            save(config, &mut state)?;
+            return Err(error);
+        }
+    }
+    state.current_unit.clear();
+    state.restoring = true;
+    state.result = match &execution {
+        Ok(Outcome::Succeeded) => "succeeded",
+        Ok(Outcome::Failed) => "failed",
+        _ => "interrupted",
+    }
+    .into();
+    save(config, &mut state)?;
     // Every execution error passes through worker recovery. Failed recovery
     // retains the durable restore list and request instead of claiming success.
     let mut recovery_error = remove(&config.sentinel_path).err();
@@ -441,8 +512,10 @@ pub fn run(
         Outcome::Interrupted => "interrupted",
     }
     .into();
-    state.result = state.state.clone();
-    state.current_unit.clear();
+    state.restoring = recovery_error.is_some();
+    if !state.restoring {
+        state.result = state.state.clone();
+    }
     save(config, &mut state)?;
     let events = fs::read_to_string(
         config
@@ -482,8 +555,13 @@ pub fn cancel(config: &OperatorConfig) -> io::Result<()> {
     let path = config.state_dir.join("state.json");
     if path.exists() {
         let mut state: State = serde_json::from_reader(File::open(&path)?)?;
-        if !state.restore_workers.is_empty() {
-            return Err(invalid("cannot cancel with unrecovered workers"));
+        if !state.restore_workers.is_empty()
+            || !state.current_unit.is_empty()
+            || config.sentinel_path.exists()
+        {
+            return Err(invalid(
+                "cannot cancel with unrecovered workers or an unconfirmed stage",
+            ));
         }
         state.state = "cancelled".into();
         state.result = "cancelled".into();
@@ -496,6 +574,16 @@ pub fn cancel(config: &OperatorConfig) -> io::Result<()> {
 pub struct Systemd {
     /// Absolute path to systemctl.
     pub systemctl: PathBuf,
+}
+
+fn stop_confirmed(services: &mut impl ServiceManager, unit: &str) -> io::Result<()> {
+    services.stop(unit)?;
+    if services.active(unit)? {
+        return Err(io::Error::other(format!(
+            "stage {unit} remains active after stop"
+        )));
+    }
+    Ok(())
 }
 
 impl Systemd {
@@ -531,7 +619,7 @@ impl ServiceManager for Systemd {
         let state = self.property(unit, "ActiveState")?;
         Ok(matches!(
             state.as_str(),
-            "active" | "activating" | "reloading"
+            "active" | "activating" | "reloading" | "deactivating"
         ))
     }
     fn stop(&mut self, unit: &str) -> io::Result<()> {

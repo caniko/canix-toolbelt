@@ -76,17 +76,25 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
                         signal_hook::flag::register(signal, std::sync::Arc::clone(&cancelled))?;
                     }
-                    if let Some(notify) = systemd_notify {
-                        if !std::process::Command::new(notify)
-                            .arg("--ready")
-                            .status()?
-                            .success()
-                        {
-                            return Err("systemd readiness notification failed".into());
-                        }
-                    }
-                    let outcome =
-                        operator::run(&policy, &mut operator::Systemd { systemctl }, &cancelled)?;
+                    let outcome = operator::run_with_ready(
+                        &policy,
+                        &mut operator::Systemd { systemctl },
+                        &cancelled,
+                        || {
+                            if let Some(notify) = systemd_notify {
+                                if !std::process::Command::new(notify)
+                                    .arg("--ready")
+                                    .status()?
+                                    .success()
+                                {
+                                    return Err(std::io::Error::other(
+                                        "systemd readiness notification failed",
+                                    ));
+                                }
+                            }
+                            Ok(())
+                        },
+                    )?;
                     return Ok(std::process::ExitCode::from(match outcome {
                         operator::Outcome::Succeeded => 0,
                         operator::Outcome::Failed => 20,

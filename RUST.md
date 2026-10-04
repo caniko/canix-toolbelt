@@ -47,6 +47,9 @@ stages. Nix's `mkResumableOperator` supplies the units, retry policy and
 `executionContract`; consumers must bind that contract to the executable,
 arguments, database and data roots used by their stages. The controller compares
 the complete persisted policy before resuming and refuses changed contracts.
+`executionContract` is required: a controller package cannot identify commands
+in external stage units. Readiness is announced only after that comparison,
+worker quiescence, and publication of the admission fence.
 
 Checkpoint and worker-restoration intent are synchronized before publication.
 A kernel lock excludes both a second runner and cancellation. Signals stop the
@@ -54,6 +57,11 @@ current stage and preserve recovery intent; failed worker restoration keeps the
 run owned. Legacy interrupted shell state is retained and rejected rather than
 interpreted as checkpoints for the new engine. Reconcile that state using the
 original deployment before starting a new contract.
+Restoration has its own persisted phase, so recovery never re-stops workers that
+were already restored. Terminal runs with leftover request markers finish
+cleanup without executing their stages again. Service-manager attempt errors
+consume the retry budget; an unconfirmed stage stop retains the admission fence
+and stopped-worker ownership until termination can be confirmed.
 
 The CLI takes an explicit policy and service-manager executable:
 
