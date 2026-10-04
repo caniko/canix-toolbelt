@@ -16,6 +16,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Complete parent-review findings, trusted writer request/disposition markers,
   bounded HTTP/polling, rate-limit checkpoints, and ambiguous-submission recovery.
 
+### Fixed
+
+- Replace the yanked `yoke-derive 0.8.3` lockfile entry with compatible `0.8.4`
+  so locked crate verification and installation use a non-yanked dependency.
+
 ## [0.1.1] - 2026-10-02
 
 ### Changed
