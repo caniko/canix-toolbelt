@@ -39,6 +39,9 @@ in
   assert guarded.services.postgresql.settings.full_page_writes;
   assert guarded.services.postgresql.settings.synchronous_commit == "on";
   assert guarded.system.preSwitchChecks ? harbor-db-postgresql-adoption;
+  assert pkgs.lib.hasInfix "inspect-live" guarded.system.preSwitchChecks.harbor-db-postgresql-adoption;
+  assert pkgs.lib.hasInfix "adopt-live" guarded.system.preSwitchChecks.harbor-db-postgresql-adoption;
+  assert pkgs.lib.hasInfix "12345" guarded.system.preSwitchChecks.harbor-db-postgresql-adoption;
     pkgs.runCommand "harbor-db-compat-eval" {} ''
       echo "Legacy backup facade and explicit PostgreSQL storage guards compose" > $out
     ''
