@@ -5,6 +5,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
 ### Added
 
 - Provider-neutral, revision-bound PR review contracts and durable request
@@ -37,3 +39,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   release configuration, and exported maintainer trust root.
 - Registry Fleetix `0.2` integration, allowing downstream consumers to share
   one supported Fleetix series with the runtime loader.
+
+[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0
