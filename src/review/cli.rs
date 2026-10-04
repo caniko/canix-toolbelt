@@ -257,7 +257,9 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
         }
         let seconds = result
             .next_poll_at
-            .map_or(30, |at| at.saturating_sub(now_seconds()).max(1));
+            .map_or((args.timeout_seconds / 3).clamp(1, 30), |at| {
+                at.saturating_sub(now_seconds()).max(1)
+            });
         let delay = Duration::from_secs(seconds);
         if delay > deadline.saturating_duration_since(Instant::now()) {
             return Ok(result);
