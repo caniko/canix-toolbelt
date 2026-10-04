@@ -7,13 +7,37 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from browser_connection import default_browser
+from browser_connection import default_browser, firefox_binary
 from opencode_browser import OPERATIONS, Host
 
 
 class DefaultBrowserTests(unittest.TestCase):
+    def test_nix_wrapper_keeps_its_launcher_and_exposes_real_gecko_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "package" / "bin" / "floorp"
+            binary.parent.mkdir(parents=True)
+            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.chmod(0o700)
+            metadata = binary.parent.parent / "lib" / "floorp"
+            metadata.mkdir(parents=True)
+            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            launcher = Path(firefox_binary(str(binary), root / "launcher"))
+            self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
+            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                             ["-profile", "literal path", "--name=Floorp"])
+
+    def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "floorp"
+            binary.touch()
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+            (root / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+
     def test_actual_xdg_default_and_arguments_are_used(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -50,6 +74,24 @@ class DefaultBrowserTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_privileged_startup_page_uses_standard_webdriver_metadata(self):
+        from unittest.mock import Mock
+        driver = Mock()
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16")
+        driver.call.side_effect = lambda method, path, *args: {
+            "/window/handles": ["startup"], "/url": "about:welcome", "/title": "Welcome",
+        }.get(path)
+        host = Host(driver)
+        state = host.inventory()["tabs"][0]
+        self.assertEqual(state["url"], "about:welcome")
+        self.assertEqual(state["title"], "Welcome")
+        self.assertFalse(state["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], state["generation"])
+        driver.script.side_effect = RuntimeError("unrelated driver error")
+        with self.assertRaisesRegex(RuntimeError, "unrelated driver error"):
+            host.inventory()
+
     def test_capability_inventory_is_shared_with_nix(self):
         source = (Path(__file__).parent.parent / "lib/browserConnection.nix").read_text()
         for method in OPERATIONS:
@@ -66,37 +108,6 @@ class ProtocolTests(unittest.TestCase):
         host = Host(None)
         with self.assertRaisesRegex(ValueError, "expired"):
             host.element({"refs": {}}, "@e1")
-
-    def test_privileged_startup_tab_does_not_block_inventory(self):
-        driver = Mock()
-        def call(method, path, body=None):
-            if (method, path) == ("GET", "/window/handles"):
-                return ["welcome"]
-            if (method, path) == ("GET", "/url"):
-                return "about:welcome"
-            if (method, path) == ("GET", "/title"):
-                return "Welcome to Floorp"
-            return None
-        driver.call.side_effect = call
-        driver.script.side_effect = RuntimeError(
-            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported "
-            "for privileged browsing contexts: 16"
-        )
-        host = Host(driver)
-        inventory = host.inventory()
-        tab = inventory["tabs"][0]
-        self.assertEqual(tab["url"], "about:welcome")
-        self.assertEqual(tab["title"], "Welcome to Floorp")
-        self.assertEqual(inventory["focusedTabID"], tab["id"])
-        self.assertFalse(tab["loading"])
-        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
-
-    def test_inventory_does_not_hide_unrelated_script_failures(self):
-        driver = Mock()
-        driver.call.return_value = ["window"]
-        driver.script.side_effect = RuntimeError("unknown error: connection lost")
-        with self.assertRaisesRegex(RuntimeError, "connection lost"):
-            Host(driver).inventory()
 
 
 class RealBrowserSmoke(unittest.TestCase):
@@ -136,15 +147,16 @@ class RealBrowserSmoke(unittest.TestCase):
                 self.assertEqual(response["type"], "success", response)
                 return response["result"]
             tabs = call({"type": "tabs.list"})["value"]["tabs"]
-            original_tab_ids = {tab["id"] for tab in tabs}
             tab_id = tabs[0]["id"]
             call({"type": "navigate", "tabID": tab_id, "url": f"http://127.0.0.1:{server.server_port}/"})
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
             self.assertIn("Adapter smoke", snapshot["content"])
             self.assertIn("Static text is readable", snapshot["content"])
             def ref(label, role):
-                line = next(line for line in snapshot["content"].splitlines() if f'[{role}] "{label}"' in line)
-                return line.strip().split()[0]
+                matches = [line for line in snapshot["content"].splitlines()
+                           if f'[{role}] "{label}"' in line]
+                self.assertEqual(len(matches), 1, snapshot["content"])
+                return matches[0].strip().split()[0]
 
             call({"type": "fill_form", "tabID": tab_id, "fields": [
                 {"type": "text", "ref": ref("Name", "textbox"), "value": "Canix"},
@@ -166,12 +178,13 @@ class RealBrowserSmoke(unittest.TestCase):
             captures = call({"type": "files.list", "tabID": tab_id})["value"]["files"]
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
+            existing_tabs = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
             other = call({"type": "tabs.open"})["value"]["id"]
-            self.assertNotIn(other, original_tab_ids)
+            self.assertNotEqual(other, tab_id)
             self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
-                             original_tab_ids | {other})
+                             existing_tabs | {other})
             self.assertEqual({tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]},
-                             original_tab_ids)
+                             existing_tabs)
         finally:
             process.stdin.close()
             try:

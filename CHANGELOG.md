@@ -5,12 +5,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
-### Added
+## [0.1.1] - 2026-10-02
 
-- Durable systemd-stage operator with an optional Unix CLI, execution-contract
-  binding, kernel locking, synchronized checkpoints, bounded retries and worker
-  restoration. Interrupted runs reject a changed package/argument contract and
-  preserve legacy shell state for explicit reconciliation.
+### Changed
+
+- Use published Fleetix `0.4` with explicit `pkl` support for the runtime loader,
+  allowing consumers to share one Fleetix series with topology and GPU APIs.
 
 ### Fixed
 

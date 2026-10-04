@@ -26,8 +26,7 @@
       };
     };
     fleetix = {
-      # The existing DNS publication gate requires publicationAddressIntents.
-      url = "git+https://github.com/caniko/fleetix.git?ref=integration/gpu-routing&rev=4465108ce8160bdb7b9510211669099ee3a83ac4";
+      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=2230d9ee804a66d94424a91919182e4fcca13ab2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
@@ -80,7 +79,10 @@
 
       flake = {
         lib =
-          (import ./lib {inherit (nixpkgs) lib;})
+          (import ./lib {
+            inherit (nixpkgs) lib;
+            fleetixLib = inputs.fleetix.lib;
+          })
           // {
             # Compatibility alias. Fleetix owns these projections; keep the
             # old export name during the migration without carrying a second
@@ -96,7 +98,7 @@
             };
           };
         nixosModules =
-          (import ./modules/nixos)
+          (import ./modules/nixos {fleetixGpu = inputs.fleetix.lib.gpu;})
           // {
             cloud-host = {
               imports = [
@@ -115,7 +117,10 @@
               ];
             };
           };
-        homeModules = import ./modules/home {inherit (inputs) wrapper-manager;};
+        homeModules = import ./modules/home {
+          inherit (inputs) wrapper-manager;
+          fleetixGpu = inputs.fleetix.lib.gpu;
+        };
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
           caddy-helpers = ./flake-modules/caddy-helpers.nix;
@@ -156,6 +161,8 @@
             attic-projects-registry-eval = import ./nixos-tests/attic-projects-registry-eval.nix {inherit pkgs;};
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             gpu-media-eval = import ./nixos-tests/gpu-media-eval.nix {inherit inputs pkgs;};
+            gpu-render-eval = import ./nixos-tests/gpu-render-eval.nix {inherit inputs pkgs;};
+            gpu-routes-eval = import ./nixos-tests/gpu-routes-eval.nix {inherit inputs pkgs;};
             direct-link-eval = import ./nixos-tests/direct-link-eval.nix {inherit pkgs;};
             gpu-backends-eval = import ./nixos-tests/gpu-backends-eval.nix {inherit inputs pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
@@ -212,7 +219,6 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
-        packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
