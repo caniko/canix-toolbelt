@@ -2,7 +2,7 @@
 
 use canix_toolbelt::operator::{OperatorConfig, Outcome, ServiceManager, Stage, StageResult, run};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io,
     sync::{
         Arc,
@@ -24,11 +24,14 @@ struct Services {
     worker_stopped: Option<Arc<AtomicBool>>,
     crash_start: Option<String>,
     crash_restore: Option<String>,
+    stopped_units: BTreeSet<String>,
+    worker_still_active: bool,
 }
 
 impl ServiceManager for Services {
     fn active(&mut self, unit: &str) -> io::Result<bool> {
-        Ok(matches!(unit, "worker.service" | "other.service"))
+        Ok(matches!(unit, "worker.service" | "other.service")
+            && (self.worker_still_active || !self.stopped_units.contains(unit)))
     }
 
     fn stop(&mut self, unit: &str) -> io::Result<()> {
@@ -36,6 +39,7 @@ impl ServiceManager for Services {
         if self.stop_fails || (self.stage_stop_fails && unit == "one.service") {
             return Err(io::Error::other("stop failed"));
         }
+        self.stopped_units.insert(unit.to_owned());
         if unit == "worker.service" {
             if let Some(stopped) = &self.worker_stopped {
                 stopped.store(true, Ordering::SeqCst);
@@ -54,6 +58,7 @@ impl ServiceManager for Services {
         if self.restore_fails || self.restore_fail_unit.as_deref() == Some(unit) {
             return Err(io::Error::other("restore failed"));
         }
+        self.stopped_units.remove(unit);
         Ok(())
     }
 
@@ -269,6 +274,12 @@ fn readiness_follows_worker_quiescence_and_the_durable_fence() {
             assert!(stopped.load(Ordering::SeqCst));
             assert!(config.request_path.exists());
             assert!(config.sentinel_path.exists());
+            assert_eq!(
+                canix_toolbelt::operator::cancel(&config)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
             notified.store(true, Ordering::SeqCst);
             Ok(())
         },
@@ -318,6 +329,32 @@ fn terminal_leftover_requests_do_not_create_another_run() {
         assert_eq!(before["run_id"], after["run_id"]);
         assert!(!config.request_path.exists());
     }
+}
+
+#[test]
+fn worker_remaining_active_never_announces_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path());
+    let notified = AtomicBool::new(false);
+    let mut services = Services {
+        worker_still_active: true,
+        ..Default::default()
+    };
+    assert!(
+        canix_toolbelt::operator::run_with_ready(
+            &config,
+            &mut services,
+            &AtomicBool::new(false),
+            || {
+                notified.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        )
+        .is_err()
+    );
+    assert!(!notified.load(Ordering::SeqCst));
+    assert!(config.request_path.exists());
+    assert!(!services.calls.iter().any(|call| call.starts_with("start:")));
 }
 
 #[test]

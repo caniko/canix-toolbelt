@@ -408,7 +408,7 @@ pub fn run_with_ready(
                     save(config, &mut state)?;
                 }
                 if state.restore_workers.contains(unit) {
-                    services.stop(unit)?;
+                    stop_confirmed(services, unit)?;
                 }
             }
         }

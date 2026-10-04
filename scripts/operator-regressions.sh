@@ -41,7 +41,7 @@ done
 old=7c6a21ffbf6dbc71fd42ba3d78f99fd50ab9e37d
 git show "$old:src/operator.rs" >"$fixture/src/operator.rs"
 cargo test --manifest-path "$fixture/Cargo.toml" --locked --no-default-features --test operator --no-run
-for regression in fresh_request_after_terminal_run_starts_new_run stale_cancelled_request_cannot_replay_stages; do
+for regression in fresh_request_after_terminal_run_starts_new_run stale_cancelled_request_cannot_replay_stages worker_remaining_active_never_announces_ready; do
   if cargo test --manifest-path "$fixture/Cargo.toml" --locked --no-default-features --test operator "$regression" -- --exact; then
     echo "Faulty implementation unexpectedly passed: $regression" >&2
     exit 1
