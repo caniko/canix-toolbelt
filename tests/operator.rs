@@ -1,12 +1,12 @@
 #![cfg(unix)]
 
-use canix_toolbelt::operator::{run, OperatorConfig, Outcome, ServiceManager, Stage, StageResult};
+use canix_toolbelt::operator::{OperatorConfig, Outcome, ServiceManager, Stage, StageResult, run};
 use std::{
     collections::BTreeMap,
     io,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -223,10 +223,12 @@ fn unconfirmed_stage_stop_retains_fences_and_does_not_restore_workers() {
     assert!(run(&config, &mut services, &AtomicBool::new(false)).is_err());
     assert!(config.request_path.exists());
     assert!(config.sentinel_path.exists());
-    assert!(!services
-        .calls
-        .iter()
-        .any(|call| call.starts_with("restore:")));
+    assert!(
+        !services
+            .calls
+            .iter()
+            .any(|call| call.starts_with("restore:"))
+    );
     assert!(canix_toolbelt::operator::cancel(&config).is_err());
     let mut recovered = Services::default();
     assert_eq!(
