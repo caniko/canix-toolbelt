@@ -1,41 +1,77 @@
 #!/usr/bin/env bash
-# Exercise the packaged function, including duplicate/empty inputs and failure.
+# Exercise the complete packaged function with deterministic Nix responses.
 set -euo pipefail
 source "$1"
 calls=0
 _nix() {
-  calls=$((calls + 1))
-  args=("$@")
-  return "${failure:-0}"
+  case "$1" in
+  print-dev-env)
+    touch "$tmp_profile"
+    printf 'renewed\n'
+    ;;
+  flake)
+    [[ $2 == archive ]]
+    printf '%s\n' "$input_json"
+    return "${archive_failure:-0}"
+    ;;
+  build)
+    calls=$((calls + 1))
+    args=("$@")
+    return "${root_failure:-0}"
+    ;;
+  *) return 99 ;;
+  esac
 }
 _nix_direnv_info() { :; }
+_nix_direnv_preflight() { :; }
+watch_file() { :; }
+direnv_layout_dir() { printf '%s\n' "$layout"; }
+_nix_argsum_suffix() { :; }
+_nix_direnv_watches() {
+  local -n watched=$1
+  watched=()
+}
+_nix_clean_old_gcroots() { :; }
+_nix_add_gcroot() { touch "$2"; }
+_nix_import_env() { cat "$1" >/dev/null; }
 
-# Extract only the patched archival block from the actual installed function.
-# This keeps the regression coupled to the package rather than a copied loop.
-body=$(declare -f use_flake)
-block=${body#*local -A seen_inputs}
-block="local -A seen_inputs${block%%_nix_direnv_info*}"
-archive_inputs() { eval "$block"; }
-flake_inputs="$PWD/inputs"
-profile_rc="$PWD/profile.rc"
-tmp_profile_rc=renewed
-flake_input_paths='["/nix/store/aaaaaaaa-source", "/nix/store/bbbbbbbb-source", "/nix/store/aaaaaaaa-source"]'
-archive_inputs
+layout="$PWD/layout"
+mkdir -p "$layout"
+profile_rc="$layout/flake-profile.rc"
+renew_cache() {
+  rm -f "$layout/flake-profile"
+  use_flake .
+}
+input_json='["/nix/store/aaaaaaaa-source", "/nix/store/bbbbbbbb-source", "/nix/store/aaaaaaaa-source"]'
+renew_cache
 [[ $calls == 1 ]]
 [[ $(cat "$profile_rc") == renewed ]]
-[[ ${args[*]} == "build --max-jobs 0 --option builders  --out-link $flake_inputs/input -- /nix/store/aaaaaaaa-source /nix/store/bbbbbbbb-source" ]]
+[[ ${args[*]} == "build --max-jobs 0 --option builders  --out-link $layout/flake-inputs//input -- /nix/store/aaaaaaaa-source /nix/store/bbbbbbbb-source" ]]
 
-flake_input_paths='[]'
-archive_inputs
+input_json='[]'
+renew_cache
 [[ $calls == 1 ]]
+[[ $(cat "$profile_rc") == renewed ]]
 
-# Failure must not be turned into a successful cache renewal.
-flake_input_paths='["/nix/store/aaaaaaaa-source"]'
-failure=1
+# Failures must propagate even when use_flake is called conditionally, and
+# neither archive nor root failure may publish the fresh environment cache.
+input_json='["/nix/store/aaaaaaaa-source"]'
+root_failure=1
 printf 'old\n' >"$profile_rc"
-if archive_inputs; then
+if renew_cache; then
   exit 1
 else
   [[ $? == 1 ]]
 fi
 [[ $(cat "$profile_rc") == old ]]
+[[ $calls == 2 ]]
+
+root_failure=0
+archive_failure=1
+if renew_cache; then
+  exit 1
+else
+  [[ $? == 1 ]]
+fi
+[[ $(cat "$profile_rc") == old ]]
+[[ $calls == 2 ]]

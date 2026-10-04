@@ -22,7 +22,16 @@ in {
       nix-direnv = {
         enable = true;
         package = cfg.package.overrideAttrs (old: {
-          patches = (old.patches or []) ++ [./nix-direnv-gcroots.patch];
+          # resholve installs from its original store input, not the unpacked
+          # tree. Patch the installed script after resolution so the change
+          # survives that copy, preserving the base package's patches/hooks.
+          postFixup =
+            (old.postFixup or "")
+            + ''
+              chmod u+w "$out/share/nix-direnv/direnvrc"
+              ${lib.getExe pkgs.patch} --directory="$out" --strip=1 < ${./nix-direnv-gcroots.patch}
+              chmod u-w "$out/share/nix-direnv/direnvrc"
+            '';
         });
       };
     };
