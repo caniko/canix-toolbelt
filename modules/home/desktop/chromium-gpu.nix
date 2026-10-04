@@ -12,14 +12,10 @@
   config,
   lib,
   pkgs,
-  gpuMedia ? null,
   ...
 }: let
   mkBackendWrapper = import ../../../lib/chromiumGpu.nix {inherit lib wrapper-manager;};
-  effectiveGpuMedia =
-    if gpuMedia != null
-    then gpuMedia
-    else config.canix-toolbelt.gpuMedia or {};
+  effectiveGpuMedia = config.canix-toolbelt.gpuMedia;
 
   mkChromiumGpuWrapper = args: let
     wrapperArgs =

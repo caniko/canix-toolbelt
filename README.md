@@ -28,6 +28,31 @@ Two output families:
 
 ## Usage
 
+### GPU routing
+
+Fleetix owns the typed Pkl GPU contract and Nix projections. Supply
+`gpuRoutes = fleetix.lib.gpu.routes host.gpu` as a special argument, or use
+the legacy `gpuMedia`/`gpuRender` arguments. Integrated Home Manager inherits
+NixOS routes; standalone Home Manager uses topology defaults. Explicit Home
+Manager route settings override either.
+
+Import `homeModules.modde-gpu` alongside modde's Home Manager module. The
+adapter supplies `programs.modde.gpu.renderNode` as a default. Explicit
+application settings and saved installation choices take precedence. An
+enabled route requires a stable `/dev/dri/by-path/pci-...-render` alias and a
+modde module that supports GPU routing. modde validates the live device at
+launch; proprietary NVIDIA routing uses explicit launch environment settings.
+
+Rendering, media and compute remain independent roles. Browser wrappers read
+the resolved `canix-toolbelt.gpuMedia` route. Import `homeModules.gpu-media`
+alongside media adapters. `homeModules.mpv-gpu` supplies default
+`hwdec`/`vaapi-device` settings with copy-mode decoding, preserves automatic
+presentation selection, and uses `nvdec-copy` for NVIDIA without a VA-API
+device. Explicit mpv settings override those defaults. Missing routes stay
+disabled; no adapter globally sets `DRI_PRIME`.
+
+### Module composition
+
 ```nix
 {
   inputs.canix-toolbelt.url = "git+ssh://git@github.com/caniko/canix-toolbelt.git";
