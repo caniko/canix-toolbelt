@@ -1,5 +1,40 @@
 # Rust release execution
 
+## 0.2.0 publication
+
+The release adds the provider-review library and guarded standalone CLI merged
+in [PR #6](https://github.com/caniko/canix-toolbelt/pull/6). Cargo declares
+`0.2.0`; the dated changelog and release validation are prepared in
+[PR #8](https://github.com/caniko/canix-toolbelt/pull/8).
+
+Before tagging the merged release revision:
+
+1. Require successful full CI, including `gate-crate-release`, and Nix
+   installable builds on that exact revision. The package gate runs
+   `cargo publish --dry-run --locked --all-features` and compiles the archive
+   with the review engine and CLI enabled.
+2. Run `simit release trust check`, confirm the operator's configured identity
+   and signing key, and verify that the exact `0.2.0` tag is unused locally and
+   remotely. Generate and check workflows with qualified Simit revision
+   `aab017d8bc5db17133d7730585b441cd0246a731`; older installed versions cannot
+   parse the current `ci.nix_build` policy.
+3. Create and verify the signed annotated `0.2.0` tag at the qualified merged
+   revision, then push that exact tag. `publish-crate.yaml` accepts numeric
+   semver tags, verifies the signature against `keys/maintainers.gpg`, reruns
+   flake, tests, MSRV, audit, docs, Clippy, and default-feature publication
+   dry-run checks, then publishes using `CRATES_IO_API_TOKEN`.
+4. Wait for the publication workflow to succeed. Verify `0.2.0` is available
+   and not yanked through the crates.io version API before installing it or
+   changing downstream Cargo dependencies.
+
+The repository's `CRATES_IO_API_TOKEN` slot exists; publication must establish
+that it is still valid. GitHub Pages is not configured and its separate
+workflow fails during Pages setup; this does not run in the crate publisher.
+Provider-review App enrollment and native protection remain runtime rollout
+prerequisites for `merge --apply`, rather than crate packaging prerequisites.
+
+## Initial release record (2026-09-30)
+
 On 2026-09-30 the operator authorized publication and downstream synchronization
 of Fleetix `0.2.0` and canix-toolbelt `0.1.0`, selecting library/release changes
 only. Concurrent topology/health and cloud-host/public-edge work has its own

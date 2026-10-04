@@ -77,17 +77,20 @@ Agent instruction snippet:
 > and use the guarded merge command for authorized merges. Missing, stale,
 > skipped, incomplete, or unsupported evidence cannot authorize a merge.
 
-Reusable operations for adopters of the Canix architecture. The first Rust
-release extracts runtime-manifest loading from Canix: binary paths, service
-endpoints, and agenix secret references. It depends on the published Fleetix
-library (`0.2`) for embedded Pkl evaluation.
+Reusable operations for adopters of the Canix architecture. Version `0.2.0`
+provides runtime-manifest loading, revision-bound review contracts, and the
+optional standalone CLI. Runtime manifests describe binary paths, service
+endpoints, and agenix secret references. Embedded Pkl evaluation uses the
+published Fleetix `0.4` library with its `pkl` feature.
 
-The `0.1.0` release provides the library and optional CLI shown below. See
-`RELEASE.md` in the repository for publication and verification evidence.
+See `RELEASE.md` in the repository for publication steps and verification
+evidence. Enable `review` when consuming the review engine as a library.
 
 ```toml
 [dependencies]
-canix-toolbelt = "0.1.0"
+canix-toolbelt = "0.2"
+# For the review engine instead:
+# canix-toolbelt = { version = "0.2", features = ["review"] }
 ```
 
 ```rust,no_run
@@ -126,9 +129,10 @@ edges. Toolbelt's Rust crate has no Canix dependency, global output state,
 hardcoded fleet path, flake lookup, or Nix-based build script. Nix modules remain
 separate integration surfaces.
 
-This release implements runtime-manifest loading. Generic deployment extraction,
-toolbelt deployment profiles, and other command families are subsequent slices;
-this crate does not yet expose a deployment CLI.
+This release implements runtime-manifest loading and revision-bound PR review
+and merge operations. Generic deployment extraction, toolbelt deployment
+profiles, and other command families are subsequent slices; this crate does not
+yet expose a deployment CLI.
 
 ## Development and releases
 
@@ -150,6 +154,11 @@ Signed exact-version tags trigger publication. Before tagging, check the
 maintainer trust root, versioned changelog, registry dependencies, package
 contents, dry-run publication, and GitHub publishing credential. Confirm the
 version on crates.io before switching downstream dependencies.
+
+The `gate-crate-release` CI job runs an all-feature publication dry-run. Cargo
+compiles the packaged archive, including the review library and standalone CLI,
+without uploading it. The publisher also verifies the default-feature archive
+before publishing the signed tag.
 
 The existing Nix-built Pages workflow requires Simit's shared CI runtime to be
 `nix`; the developer shell supplies Cargo and release tooling. This is a CI
