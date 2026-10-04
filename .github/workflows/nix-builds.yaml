@@ -24,10 +24,12 @@ jobs:
         installable:
           - ".#canix-toolbelt"
           - ".#checks.x86_64-linux.resumable-operator-eval"
+          - ".#checks.x86_64-linux.resumable-operator-runtime"
           - ".#opencode-browser-adapter"
           - ".#checks.x86_64-linux.browser-connection-eval"
           - ".#checks.x86_64-linux.browser-connection-runtime"
           - ".#checks.x86_64-linux.browser-connection-smoke"
+          - ".#checks.x86_64-linux.dns-publication-eval"
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
     steps:
@@ -50,6 +52,19 @@ jobs:
         run: |
           git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
+
+      - name: Project setup
+        run: |
+          set -eu
+          test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          {
+            printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
+            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+            printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
+          } >> "$GITHUB_ENV"
 
       - name: Build ${{ matrix.installable }}
         env:

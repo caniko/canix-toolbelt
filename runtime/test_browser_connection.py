@@ -163,14 +163,23 @@ class RealBrowserSmoke(unittest.TestCase):
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        command = [os.environ["BROWSER_CONNECTION_SMOKE_COMMAND"]] if os.environ.get("BROWSER_CONNECTION_SMOKE_COMMAND") else [
+            sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
+            "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]]
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
-             "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
         try:
             ready = json.loads(process.stdout.readline())
             self.assertEqual(ready["version"], 1)
+            if os.environ.get("BROWSER_WRAPPER_RECEIPT"):
+                arguments, environment = json.loads(Path(os.environ["BROWSER_WRAPPER_RECEIPT"]).read_text())
+                index = arguments.index("--name")
+                self.assertEqual(arguments[index + 1], "Toolbelt literal argument")
+                self.assertIn("-profile", arguments)
+                self.assertIn("-headless", arguments)
+                self.assertEqual(environment, "literal environment preserved")
             def call(action, files=None):
                 process.stdin.write(json.dumps({"id": "test", "command": {"action": action, "files": files or []}}) + "\n")
                 process.stdin.flush()

@@ -22,6 +22,8 @@ struct Services {
     stage_stop_fails: bool,
     restore_fail_unit: Option<String>,
     worker_stopped: Option<Arc<AtomicBool>>,
+    crash_start: Option<String>,
+    crash_restore: Option<String>,
 }
 
 impl ServiceManager for Services {
@@ -44,6 +46,11 @@ impl ServiceManager for Services {
 
     fn restore(&mut self, unit: &str) -> io::Result<()> {
         self.calls.push(format!("restore:{unit}"));
+        assert_ne!(
+            self.crash_restore.as_deref(),
+            Some(unit),
+            "injected restoration crash"
+        );
         if self.restore_fails || self.restore_fail_unit.as_deref() == Some(unit) {
             return Err(io::Error::other("restore failed"));
         }
@@ -52,6 +59,11 @@ impl ServiceManager for Services {
 
     fn start(&mut self, unit: &str, cancelled: &AtomicBool) -> io::Result<StageResult> {
         self.calls.push(format!("start:{unit}"));
+        assert_ne!(
+            self.crash_start.as_deref(),
+            Some(unit),
+            "injected stage crash"
+        );
         if self.start_fails {
             return Err(io::Error::other("start failed"));
         }
@@ -272,14 +284,29 @@ fn terminal_leftover_requests_do_not_create_another_run() {
         let config = config(dir.path());
         let mut first = Services {
             start_fails: failed,
+            restore_fails: true,
             ..Default::default()
         };
-        let outcome = run(&config, &mut first, &AtomicBool::new(false)).unwrap();
+        assert!(run(&config, &mut first, &AtomicBool::new(false)).is_err());
+        let outcome = if failed {
+            Outcome::Failed
+        } else {
+            Outcome::Succeeded
+        };
         let path = config.state_dir.join("state.json");
-        let before: serde_json::Value =
+        let mut before: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // Model a crash between saving the terminal state and marker removal.
-        std::fs::write(&config.request_path, "").unwrap();
+        // Keep the actual original request marker, rather than issuing a new one.
+        before["state"] = before["result"].clone();
+        before["restoring"] = false.into();
+        before["restore_workers"] = serde_json::json!([]);
+        std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
+        // Metadata maintenance is not a new request (ctime is deliberately
+        // excluded from the persisted identity).
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config.request_path, std::fs::Permissions::from_mode(0o600))
+            .unwrap();
         let mut resumed = Services::default();
         assert_eq!(
             run(&config, &mut resumed, &AtomicBool::new(false)).unwrap(),
@@ -291,6 +318,48 @@ fn terminal_leftover_requests_do_not_create_another_run() {
         assert_eq!(before["run_id"], after["run_id"]);
         assert!(!config.request_path.exists());
     }
+}
+
+#[test]
+fn fresh_request_after_terminal_run_starts_new_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path());
+    run(&config, &mut Services::default(), &AtomicBool::new(false)).unwrap();
+    let path = config.state_dir.join("state.json");
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(!config.request_path.exists());
+    std::fs::write(&config.request_path, "new request").unwrap();
+    let mut services = Services::default();
+    run(&config, &mut services, &AtomicBool::new(false)).unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_ne!(before["run_id"], after["run_id"]);
+    assert!(services.calls.contains(&"start:one.service".into()));
+    assert!(!config.request_path.exists());
+}
+
+#[test]
+fn stale_cancelled_request_cannot_replay_stages() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path());
+    let mut services = Services {
+        interrupt_after: Some("two.service".into()),
+        ..Default::default()
+    };
+    run(&config, &mut services, &AtomicBool::new(false)).unwrap();
+    let path = config.state_dir.join("state.json");
+    let mut before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    // Crash after cancel's durable state write, before request removal.
+    before["state"] = "cancelled".into();
+    before["result"] = "cancelled".into();
+    std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
+    let mut resumed = Services::default();
+    run(&config, &mut resumed, &AtomicBool::new(false)).unwrap();
+    assert!(resumed.calls.is_empty());
+    assert!(!config.request_path.exists());
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(before["run_id"], after["run_id"]);
+    assert_eq!(after["state"], "cancelled");
 }
 
 #[test]
@@ -407,4 +476,67 @@ fn recorded_failures_keep_the_retry_budget_across_interruption() {
     );
     assert!(resumed.calls.contains(&"start:two.service".into()));
     assert!(!config.request_path.exists());
+}
+
+#[test]
+fn abrupt_stage_crash_preserves_checkpoint_and_requires_confirmed_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path());
+    let mut services = Services {
+        crash_start: Some("two.service".into()),
+        ..Default::default()
+    };
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&config, &mut services, &AtomicBool::new(false)).unwrap();
+        }))
+        .is_err()
+    );
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["completed"], serde_json::json!(["one"]));
+    assert_eq!(state["current_unit"], "two.service");
+    assert_eq!(
+        state["restore_workers"],
+        serde_json::json!(["worker.service"])
+    );
+    assert!(config.request_path.exists() && config.sentinel_path.exists());
+    assert!(canix_toolbelt::operator::cancel(&config).is_err());
+    let mut resumed = Services::default();
+    assert_eq!(
+        run(&config, &mut resumed, &AtomicBool::new(false)).unwrap(),
+        Outcome::Succeeded
+    );
+    assert_eq!(resumed.calls[0], "stop:two.service");
+    assert!(!resumed.calls.contains(&"start:one.service".into()));
+    assert!(!config.request_path.exists() && !config.sentinel_path.exists());
+}
+
+#[test]
+fn abrupt_restoration_crash_only_recovers_the_persisted_remainder() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path());
+    config.quiesce_units.push("other.service".into());
+    let mut services = Services {
+        crash_restore: Some("other.service".into()),
+        ..Default::default()
+    };
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&config, &mut services, &AtomicBool::new(false)).unwrap();
+        }))
+        .is_err()
+    );
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["restoring"], true);
+    assert_eq!(
+        state["restore_workers"],
+        serde_json::json!(["other.service"])
+    );
+    assert!(config.request_path.exists());
+    assert!(!config.sentinel_path.exists());
+    let mut resumed = Services::default();
+    run(&config, &mut resumed, &AtomicBool::new(false)).unwrap();
+    assert_eq!(resumed.calls, ["restore:other.service"]);
 }

@@ -7,16 +7,30 @@ components = ["flake-evaluation"]
 nix_builds = [
   ".#canix-toolbelt",
   ".#checks.x86_64-linux.resumable-operator-eval",
+  ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#opencode-browser-adapter",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.dns-publication-eval",
 ]
 with_msrv = true
 with_audit = true
 with_docs = true
 publish_crates = true
 extra_env= { RUSTDOCFLAGS = "-D warnings" }
+extra_setup = ['''
+set -eu
+test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+test -c /dev/kvm
+sudo chmod a+rw /dev/kvm
+test -r /dev/kvm && test -w /dev/kvm
+{
+  printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
+  printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+  printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
+} >> "$GITHUB_ENV"
+''']
 
 [ci.nix_build]
 max_parallel = 2
@@ -29,3 +43,23 @@ artifact_retention_days = 14
 [ci.pages]
 repo = "caniko/canix-toolbelt"
 canonical_domain = "canix-toolbelt.tartanoglu.com"
+
+[[ci.required_gates]]
+id = "crate-release"
+run = "nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "operator-regressions"
+run = "nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "generated-parity"
+run = "nix run github:caniko/simit/c515084520fbd644fbc21ea2de453fdbee98d215 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "supported-systems"
+run = "bash scripts/qualify-source.sh"
+timeout_minutes = 30

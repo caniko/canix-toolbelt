@@ -12,6 +12,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Ensure revision-bound PR review, inspect gates and disposition findings
+    #[command(subcommand)]
+    Review(canix_toolbelt::review::cli::ReviewCommand),
+    /// Revalidate review and CI before an explicitly authorized PR merge
+    Merge(canix_toolbelt::review::cli::MergeArgs),
     /// Inspect deployment-provided runtime facts
     #[command(subcommand)]
     Runtime(RuntimeCommand),
@@ -52,6 +57,16 @@ enum RuntimeCommand {
 
 fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Review(command) => {
+            return canix_toolbelt::review::cli::run(command)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
+        Command::Merge(args) => {
+            return canix_toolbelt::review::cli::merge(args)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
         Command::Runtime(RuntimeCommand::Show { path }) => {
             let manifest = RuntimeManifest::load_from(&path)?;
             let mut stdout = std::io::stdout().lock();
@@ -96,7 +111,7 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         },
                     )?;
                     return Ok(std::process::ExitCode::from(match outcome {
-                        operator::Outcome::Succeeded => 0,
+                        operator::Outcome::Succeeded | operator::Outcome::Cancelled => 0,
                         operator::Outcome::Failed => 20,
                         operator::Outcome::Interrupted => 143,
                     }));

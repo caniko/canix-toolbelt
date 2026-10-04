@@ -7,6 +7,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
@@ -56,6 +57,8 @@ pub enum Outcome {
     Failed,
     /// Cancellation signal left durable recovery intent.
     Interrupted,
+    /// A cancelled run's stale request was cleaned without executing stages.
+    Cancelled,
 }
 
 /// Result observed from the service manager, including the unit's own status.
@@ -96,6 +99,8 @@ struct State {
     restore_workers: Vec<String>,
     #[serde(default)]
     restoring: bool,
+    #[serde(default)]
+    request_identity: Option<String>,
     #[serde(default)]
     current_unit: String,
     #[serde(default)]
@@ -172,6 +177,21 @@ fn marker(path: &Path) -> io::Result<()> {
     durable_dir(parent)?;
     File::create(path)?.sync_all()?;
     File::open(parent)?.sync_all()
+}
+
+fn request_identity(path: &Path) -> io::Result<Option<String>> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(format!(
+            "{}:{}:{}:{}",
+            metadata.dev(),
+            metadata.ino(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+        ))),
+        Ok(_) => Err(invalid("operator request must be a regular file")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn lock(config: &OperatorConfig) -> io::Result<File> {
@@ -306,6 +326,7 @@ pub fn run_with_ready(
 ) -> io::Result<Outcome> {
     let delays = validate(config)?;
     let _lock = lock(config)?;
+    let requested = request_identity(&config.request_path)?;
     let state_path = config.state_dir.join("state.json");
     let previous: Option<State> = if state_path.exists() {
         Some(serde_json::from_reader(File::open(&state_path)?)?)
@@ -314,12 +335,12 @@ pub fn run_with_ready(
     };
     let mut state = match previous {
         Some(state)
-            if config.request_path.exists()
+            if requested.is_some()
                 && (state.restoring
-                    || matches!(
-                        state.state.as_str(),
-                        "running" | "interrupted" | "succeeded" | "failed"
-                    )) =>
+                    || matches!(state.state.as_str(), "running" | "interrupted")
+                    || (matches!(state.state.as_str(), "succeeded" | "failed" | "cancelled")
+                        && (state.request_identity.is_none()
+                            || state.request_identity == requested))) =>
         {
             if state.config.as_ref() != Some(config) {
                 return Err(invalid(
@@ -328,7 +349,7 @@ pub fn run_with_ready(
             }
             state
         }
-        Some(state) if !state.restore_workers.is_empty() => {
+        Some(state) if !state.restore_workers.is_empty() || !state.current_unit.is_empty() => {
             return Err(invalid(format!(
                 "run {} has unrecovered workers; retain its request and recover the original contract",
                 state.run_id
@@ -347,6 +368,7 @@ pub fn run_with_ready(
                 failures: BTreeMap::new(),
                 restore_workers: vec![],
                 restoring: false,
+                request_identity: None,
                 current_unit: String::new(),
                 current_stage: String::new(),
                 current_index: -1,
@@ -356,8 +378,14 @@ pub fn run_with_ready(
             }
         }
     };
-    let restore_only = state.restoring || matches!(state.state.as_str(), "succeeded" | "failed");
-    marker(&config.request_path)?;
+    let restore_only =
+        state.restoring || matches!(state.state.as_str(), "succeeded" | "failed" | "cancelled");
+    // Reboot recovery must not rewrite the marker. Its persisted inode/time
+    // identity distinguishes leftover terminal intent from a new touch/replacement.
+    if requested.is_none() {
+        marker(&config.request_path)?;
+    }
+    state.request_identity = request_identity(&config.request_path)?;
     if !restore_only {
         state.state = "running".into();
         state.result = "running".into();
@@ -391,6 +419,7 @@ pub fn run_with_ready(
                 "succeeded" => Ok(Outcome::Succeeded),
                 "failed" => Ok(Outcome::Failed),
                 "interrupted" => Ok(Outcome::Interrupted),
+                "cancelled" => Ok(Outcome::Cancelled),
                 _ => Err(invalid(
                     "restoration state has no recorded execution result",
                 )),
@@ -482,6 +511,7 @@ pub fn run_with_ready(
     state.result = match &execution {
         Ok(Outcome::Succeeded) => "succeeded",
         Ok(Outcome::Failed) => "failed",
+        Ok(Outcome::Cancelled) => "cancelled",
         _ => "interrupted",
     }
     .into();
@@ -510,6 +540,7 @@ pub fn run_with_ready(
         Outcome::Succeeded => "succeeded",
         Outcome::Failed => "failed",
         Outcome::Interrupted => "interrupted",
+        Outcome::Cancelled => "cancelled",
     }
     .into();
     state.restoring = recovery_error.is_some();

@@ -11,6 +11,21 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   binding, kernel locking, synchronized checkpoints, bounded retries and worker
   restoration. Interrupted runs reject a changed package/argument contract and
   preserve legacy shell state for explicit reconciliation.
+## [0.2.0] - 2026-10-04
+
+### Added
+
+- Provider-neutral, revision-bound PR review contracts and durable request
+  accounting, with an explicit Greptile GitHub-comment adapter.
+- `review ensure`, read-only `review gate`, evidence-backed finding dispositions,
+  and a separate protected, expected-head-bound `merge --apply` command.
+- Complete parent-review findings, trusted writer request/disposition markers,
+  bounded HTTP/polling, rate-limit checkpoints, and ambiguous-submission recovery.
+
+### Fixed
+
+- Replace the yanked `yoke-derive 0.8.3` lockfile entry with compatible `0.8.4`
+  so locked crate verification and installation use a non-yanked dependency.
 
 ## [0.1.1] - 2026-10-02
 
@@ -35,3 +50,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   release configuration, and exported maintainer trust root.
 - Registry Fleetix `0.2` integration, allowing downstream consumers to share
   one supported Fleetix series with the runtime loader.
+
+[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0

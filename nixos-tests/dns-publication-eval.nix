@@ -18,9 +18,12 @@
         };
         canix-toolbelt.services.httpSites = lib.mkOption {
           type = lib.types.attrsOf (lib.types.submodule {
-            options =
-              lib.genAttrs ["hostname" "access" "dnsPublication" "publicationTarget"] (_:
-                lib.mkOption {type = lib.types.str;});
+            options = {
+              hostname = lib.mkOption {type = lib.types.str;};
+              access = lib.mkOption {type = lib.types.str;};
+              dnsPublication = lib.mkOption {type = lib.types.str;};
+              publicationTarget = lib.mkOption {type = lib.types.nullOr lib.types.str;};
+            };
           });
           default = {};
         };
@@ -55,13 +58,7 @@
     }).config;
   valid = eval {};
   records = valid.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.test";
-  # The stub exposes an untyped attrs option: override at its option boundary,
-  # so a nested mkForce value is not passed through as the hostname itself.
-  apex = eval {
-    canix-toolbelt.services.httpSites = lib.mkForce {
-      media = site // {hostname = "example.test";};
-    };
-  };
+  apex = eval {canix-toolbelt.services.httpSites.media.hostname = lib.mkForce "example.test";};
   conflicts = eval {
     canix-toolbelt.dns.zones."example.test".exclude = [
       {
