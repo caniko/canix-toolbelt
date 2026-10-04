@@ -639,6 +639,12 @@ impl Provider for GreptileGitHub {
                             .is_some_and(|id| !intent.baseline_review_ids.contains(&id.to_string()))
                 })
             {
+                let body = text(parent, "/body")?;
+                if credit_limit_notice(body) {
+                    return Err(Error(
+                        "Greptile review unavailable: account credit limit reached; restore provider capacity and request a fresh review".into(),
+                    ));
+                }
                 let id = number(parent, "/id")?.to_string();
                 let raw = self.github.pages(
                     &format!(
@@ -668,7 +674,6 @@ impl Provider for GreptileGitHub {
                         url: text(&item, "/html_url")?.into(),
                     });
                 }
-                let body = text(parent, "/body")?;
                 if !body.trim().is_empty() || text(parent, "/state")? == "CHANGES_REQUESTED" {
                     findings.push(Finding {
                         id: format!("review-{id}"),
@@ -813,6 +818,12 @@ fn severity(body: &str) -> Option<String> {
         .into_iter()
         .find(|p| body.contains(&format!("alt=\"{p}\"")) || body.starts_with(&format!("**{p}")))
         .map(str::to_owned)
+}
+fn credit_limit_notice(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    body.contains("has reached")
+        && body.contains("credit limit")
+        && body.contains("to continue receiving code reviews")
 }
 fn timestamp(value: &str) -> Result<i64, Error> {
     chrono::DateTime::parse_from_rfc3339(value)
@@ -1126,6 +1137,24 @@ mod tests {
         let error = github.get("/fixture").unwrap_err();
         assert!(github.next_poll_at().unwrap() >= before + 120);
         assert!(!error.to_string().contains("fixture-credential"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_revision_bound_credit_limit_notice_is_not_a_completed_code_review() {
+        let mut notice = parent("a".repeat(40), "2026-10-03T12:01:00Z");
+        notice["body"] = json!(
+            "`caniko` has reached the 50-credit limit for trial accounts. To continue receiving code reviews, upgrade your plan."
+        );
+        let (github, handle) = server(vec![
+            (200, json!([notice])),
+            (200, json!([marker_comment()])),
+            (200, json!({"permission":"write"})),
+        ]);
+        let error = GreptileGitHub::new(github)
+            .inspect(&candidate(), &Policy::default(), None)
+            .unwrap_err();
+        assert!(error.to_string().contains("credit limit"));
         handle.join().unwrap();
     }
 }
