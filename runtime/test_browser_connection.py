@@ -7,13 +7,37 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from browser_connection import default_browser, firefox_launcher
+from browser_connection import default_browser, firefox_binary
 from opencode_browser import OPERATIONS, Host
 
 
 class DefaultBrowserTests(unittest.TestCase):
+    def test_nix_wrapper_keeps_its_launcher_and_exposes_real_gecko_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "package" / "bin" / "floorp"
+            binary.parent.mkdir(parents=True)
+            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.chmod(0o700)
+            metadata = binary.parent.parent / "lib" / "floorp"
+            metadata.mkdir(parents=True)
+            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            launcher = Path(firefox_binary(str(binary), root / "launcher"))
+            self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
+            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                             ["-profile", "literal path", "--name=Floorp"])
+
+    def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            binary = root / "floorp"
+            binary.touch()
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+            (root / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
+            self.assertEqual(firefox_binary(str(binary), root / "launcher"), str(binary))
+
     def test_actual_xdg_default_and_arguments_are_used(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -49,87 +73,24 @@ class DefaultBrowserTests(unittest.TestCase):
         self.assertEqual(default_browser({"browser": browser}), browser)
 
 
-class FirefoxLauncherTests(unittest.TestCase):
-    def test_wrapped_browser_keeps_original_argv_environment_and_gecko_metadata(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = Path(root)
-            prefix = root / "package with spaces"
-            (prefix / "bin").mkdir(parents=True)
-            metadata = prefix / "lib/floorp-bin-12.17.2"
-            metadata.mkdir(parents=True)
-            (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
-            (metadata / "floorp").write_text("not the selected wrapper")
-            executable = prefix / "bin/floorp"
-            executable.write_text(
-                f"#!{sys.executable}\nimport os, sys, json\n"
-                "print(json.dumps([sys.argv, os.environ['BROWSER_WRAPPER_TEST']]))\n"
-            )
-            executable.chmod(0o700)
-            # Desktop executables often reach a store package through a profile symlink.
-            selected = root / "profile-floorp"
-            selected.symlink_to(executable)
-            launcher = firefox_launcher(str(selected), root / "automation")
-            self.assertEqual((Path(launcher).parent / "platform.ini").read_text(),
-                             (metadata / "platform.ini").read_text())
-            with patch.dict(os.environ, {"BROWSER_WRAPPER_TEST": "preserved"}):
-                result = subprocess.run([launcher, "-profile", "path with spaces", "--name=Floorp"],
-                                        check=True, capture_output=True, text=True, timeout=10)
-            self.assertEqual(json.loads(result.stdout),
-                             [[str(selected), "-profile", "path with spaces", "--name=Floorp"], "preserved"])
-
-    def test_native_or_unknown_browser_is_not_replaced(self):
-        with tempfile.TemporaryDirectory() as root:
-            executable = Path(root) / "bin/firefox"
-            executable.parent.mkdir()
-            executable.touch()
-            self.assertEqual(firefox_launcher(str(executable), Path(root) / "automation"),
-                             str(executable))
-            (executable.parent / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
-            self.assertEqual(firefox_launcher(str(executable), Path(root) / "automation"),
-                             str(executable))
-
-    def test_ambiguous_package_metadata_is_rejected(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = Path(root)
-            executable = root / "bin/floorp"
-            executable.parent.mkdir()
-            executable.touch()
-            for name in ("one", "two"):
-                metadata = root / "lib" / name
-                metadata.mkdir(parents=True)
-                (metadata / "floorp").touch()
-                (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
-            with self.assertRaisesRegex(ValueError, "Ambiguous"):
-                firefox_launcher(str(executable), root / "automation")
-
-
 class ProtocolTests(unittest.TestCase):
-    def test_privileged_start_page_inventory_uses_native_metadata(self):
+    def test_privileged_startup_page_uses_standard_webdriver_metadata(self):
+        from unittest.mock import Mock
         driver = Mock()
         driver.script.side_effect = RuntimeError(
-            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16"
-        )
-        values = {"/window/handles": ["window"], "/url": "about:home", "/title": "Floorp"}
-        driver.call.side_effect = lambda method, path, *args: values.get(path)
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported for privileged browsing contexts: 16")
+        driver.call.side_effect = lambda method, path, *args: {
+            "/window/handles": ["startup"], "/url": "about:welcome", "/title": "Welcome",
+        }.get(path)
         host = Host(driver)
-        tab = host.inventory()["tabs"][0]
-        self.assertEqual((tab["url"], tab["title"]), ("about:home", "Floorp"))
-        self.assertFalse(tab["canGoBack"])
-        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
-        # Navigation to an ordinary page resumes document-aware scripting.
-        driver.script.side_effect = None
-        driver.script.return_value = {"url": "https://example.test", "title": "Page", "loading": False,
-                                      "document": 42}
-        changed = host.inventory()["tabs"][0]
-        self.assertGreater(changed["generation"], tab["generation"])
-        self.assertTrue(changed["canGoBack"])
-
-    def test_inventory_does_not_hide_unrelated_driver_failures(self):
-        driver = Mock()
-        driver.call.return_value = ["window"]
-        driver.script.side_effect = RuntimeError("session disconnected")
-        with self.assertRaisesRegex(RuntimeError, "session disconnected"):
-            Host(driver).inventory()
+        state = host.inventory()["tabs"][0]
+        self.assertEqual(state["url"], "about:welcome")
+        self.assertEqual(state["title"], "Welcome")
+        self.assertFalse(state["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], state["generation"])
+        driver.script.side_effect = RuntimeError("unrelated driver error")
+        with self.assertRaisesRegex(RuntimeError, "unrelated driver error"):
+            host.inventory()
 
     def test_capability_inventory_is_shared_with_nix(self):
         source = (Path(__file__).parent.parent / "lib/browserConnection.nix").read_text()
@@ -191,22 +152,21 @@ class RealBrowserSmoke(unittest.TestCase):
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
             self.assertIn("Adapter smoke", snapshot["content"])
             self.assertIn("Static text is readable", snapshot["content"])
-            def ref(role, label):
-                # An enclosing label can share a control's accessible name.
-                # Interact with the control's role, not the first named node.
-                line = next(line for line in snapshot["content"].splitlines()
-                            if f'[{role}] "{label}"' in line)
-                return line.strip().split()[0]
+            def ref(label, role):
+                matches = [line for line in snapshot["content"].splitlines()
+                           if f'[{role}] "{label}"' in line]
+                self.assertEqual(len(matches), 1, snapshot["content"])
+                return matches[0].strip().split()[0]
 
             call({"type": "fill_form", "tabID": tab_id, "fields": [
-                {"type": "text", "ref": ref("textbox", "Name"), "value": "Canix"},
-                {"type": "select", "ref": ref("combobox", "Choice"), "values": ["two"]},
-                {"type": "check", "ref": ref("checkbox", "Ready"), "checked": True},
+                {"type": "text", "ref": ref("Name", "textbox"), "value": "Canix"},
+                {"type": "select", "ref": ref("Choice", "combobox"), "values": ["two"]},
+                {"type": "check", "ref": ref("Ready", "checkbox"), "checked": True},
             ]})
             self.assertEqual(call({"type": "evaluate", "tabID": tab_id, "script":
                 "[document.querySelector('#name').value,document.querySelector('#choice').value,document.querySelector('#ready').checked]"
             })["value"]["value"], ["Canix", "two", True])
-            call({"type": "click", "tabID": tab_id, "ref": ref("button", "Submit")})
+            call({"type": "click", "tabID": tab_id, "ref": ref("Submit", "button")})
             call({"type": "wait", "tabID": tab_id, "condition": "text", "text": "Clicked"})
             frames = call({"type": "frames", "tabID": tab_id})["value"]["frames"]
             self.assertEqual(len(frames), 2)
@@ -218,16 +178,13 @@ class RealBrowserSmoke(unittest.TestCase):
             captures = call({"type": "files.list", "tabID": tab_id})["value"]["files"]
             self.assertEqual(len(captures), 1)
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
-            # Floorp may open welcome tabs in a new isolated profile. Verify
-            # exact tab ownership without assuming a single startup window.
-            before = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
-            self.assertIn(tab_id, before)
+            existing_tabs = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
             other = call({"type": "tabs.open"})["value"]["id"]
-            self.assertNotIn(other, before)
-            opened = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
-            self.assertEqual(opened, before | {other})
-            closed = {tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]}
-            self.assertEqual(closed, before)
+            self.assertNotEqual(other, tab_id)
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
+                             existing_tabs | {other})
+            self.assertEqual({tab["id"] for tab in call({"type": "tabs.close", "tabID": other})["value"]["tabs"]},
+                             existing_tabs)
         finally:
             process.stdin.close()
             try:

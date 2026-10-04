@@ -53,29 +53,28 @@ def default_browser(settings):
     return {"family": family, "executable": executable, "arguments": arguments}
 
 
-def firefox_launcher(executable, directory):
-    """Expose packaged Gecko metadata while executing the selected wrapper."""
-    selected = Path(shutil.which(executable) or executable).absolute()
-    binary = selected.resolve()
-    if binary.parent.name != "bin" or (binary.parent / "platform.ini").is_file():
+def firefox_binary(executable, launcher_root):
+    """Expose genuine Gecko metadata beside Nix wrappers without bypassing them.
+
+    geckodriver's mozversion reads platform.ini beside the configured binary.
+    Nix puts it under lib; Floorp's --version cannot substitute for that metadata.
+    """
+    binary = Path(executable).resolve()
+    if (binary.parent / "platform.ini").is_file():
         return executable
-    # Nix's bin wrapper is outside lib/<browser>/, where Gecko keeps its
-    # platform.ini. geckodriver otherwise falls back to --version, whose
-    # Floorp-branded output is not recognized by mozversion. Do not bypass
-    # the wrapper: it supplies the package's runtime libraries and settings.
-    candidates = [ini for ini in (binary.parent.parent / "lib").glob("*/platform.ini")
-                  if (ini.parent / binary.name).is_file()]
-    if not candidates:
-        return executable
+    candidates = {
+        metadata.resolve()
+        for package in (binary.parent.parent, Path(executable).parent.parent)
+        for metadata in (package / "lib").glob("*/platform.ini")
+        if metadata.is_file()
+    }
     if len(candidates) != 1:
-        raise ValueError(f"Ambiguous Gecko metadata for selected browser: {binary}")
-    directory = Path(directory)
-    directory.mkdir(mode=0o700)
-    shutil.copyfile(candidates[0], directory / "platform.ini")
-    launcher = directory / "firefox"
+        return executable
+    launcher_root.mkdir()
+    (launcher_root / "platform.ini").symlink_to(candidates.pop())
+    launcher = launcher_root / "firefox"
     launcher.write_text(
-        f"#!{sys.executable}\nimport os, sys\n"
-        f"os.execv({str(selected)!r}, [{str(selected)!r}, *sys.argv[1:]])\n"
+        f"#!{sys.executable}\nimport os, sys\nos.execv({executable!r}, [{executable!r}, *sys.argv[1:]])\n"
     )
     launcher.chmod(0o700)
     return str(launcher)
@@ -126,8 +125,8 @@ class WebDriver:
                 args += ["-no-remote", "-profile", self.profile.name]
                 if settings.get("headless"):
                     args += ["-headless"]
-                executable = firefox_launcher(self.browser["executable"], Path(self.profile.name) / "launcher")
-                options = {"moz:firefoxOptions": {"binary": executable, "args": args}}
+                binary = firefox_binary(self.browser["executable"], Path(self.profile.name) / "launcher")
+                options = {"moz:firefoxOptions": {"binary": binary, "args": args}}
                 browser_name = "firefox"
             else:
                 args += ["--user-data-dir=" + self.profile.name]

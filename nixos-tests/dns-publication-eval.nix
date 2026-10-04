@@ -17,15 +17,10 @@
           default = [];
         };
         canix-toolbelt.services.httpSites = lib.mkOption {
-          # Nested mkForce overrides must merge as module options, as they do
-          # in the real service registry, rather than as opaque attr values.
           type = lib.types.attrsOf (lib.types.submodule {
-            options = {
-              hostname = lib.mkOption {type = lib.types.str;};
-              access = lib.mkOption {type = lib.types.str;};
-              dnsPublication = lib.mkOption {type = lib.types.str;};
-              publicationTarget = lib.mkOption {type = lib.types.nullOr lib.types.str;};
-            };
+            options =
+              lib.genAttrs ["hostname" "access" "dnsPublication" "publicationTarget"] (_:
+                lib.mkOption {type = lib.types.str;});
           });
           default = {};
         };
