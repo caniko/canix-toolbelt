@@ -11,6 +11,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   binding, kernel locking, synchronized checkpoints, bounded retries and worker
   restoration. Interrupted runs reject a changed package/argument contract and
   preserve legacy shell state for explicit reconciliation.
+
+### Fixed
+
+- Load cold systemd stage units before resetting their failed state, retaining
+  bounded retries for missing units and service-manager errors.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added
