@@ -62,7 +62,7 @@ jobs:
           test -r /dev/kvm && test -w /dev/kvm
           {
             printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
-            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
             printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
           } >> "$GITHUB_ENV"
 
