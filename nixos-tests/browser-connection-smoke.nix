@@ -1,5 +1,7 @@
 {pkgs}: let
   python = pkgs.python3.withPackages (p: [p.pillow]);
+  # Instrument the entrypoint, then exec the actual selected desktop wrapper.
+  # Metadata discovery still follows its package lib directory.
   browser = pkgs.runCommand "floorp-wrapper-fixture" {} ''
     mkdir -p "$out/bin"
     ln -s ${pkgs.floorp-bin}/lib "$out/lib"
@@ -15,8 +17,6 @@
   settings = {
     browser = {
       family = "firefox";
-      # Exercise the selected production wrapper. The metadata-adjacent
-      # launcher in browser_connection.py preserves its environment and argv.
       executable = "${browser}/bin/floorp";
       arguments = ["--name" "Toolbelt literal argument"];
     };

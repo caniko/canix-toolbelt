@@ -12,6 +12,8 @@ nix_builds = [
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.harbor-db-compat-eval",
+  ".#checks.x86_64-linux.harbor-db-compat-runtime",
   ".#checks.x86_64-linux.dns-publication-eval",
 ]
 with_msrv = true
@@ -19,6 +21,8 @@ with_audit = true
 with_docs = true
 publish_crates = true
 extra_env= { RUSTDOCFLAGS = "-D warnings" }
+# Full flake checks include NixOS guests. Require hosted KVM before boot and
+# serialize realizations so concurrent VM checks fit the hosted runner budget.
 extra_setup = ['''
 set -eu
 test "${RUNNER_ENVIRONMENT:-}" = github-hosted

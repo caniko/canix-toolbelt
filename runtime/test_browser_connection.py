@@ -19,15 +19,16 @@ class DefaultBrowserTests(unittest.TestCase):
             root = Path(root)
             binary = root / "package" / "bin" / "floorp"
             binary.parent.mkdir(parents=True)
-            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.write_text(f"#!{sys.executable}\nimport json, os, sys\nprint(json.dumps([sys.argv[1:], os.environ['WRAPPER_FIXTURE']]))\n")
             binary.chmod(0o700)
             metadata = binary.parent.parent / "lib" / "floorp"
             metadata.mkdir(parents=True)
             (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
             launcher = Path(firefox_binary(str(binary), root / "launcher"))
             self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
-            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
-                             ["-profile", "literal path", "--name=Floorp"])
+            with patch.dict(os.environ, {"WRAPPER_FIXTURE": "literal environment"}):
+                self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                                 [["-profile", "literal path", "--name=Floorp"], "literal environment"])
 
     def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
         with tempfile.TemporaryDirectory() as root:
