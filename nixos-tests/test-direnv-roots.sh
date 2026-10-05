@@ -70,8 +70,15 @@ if [[ ${REAL_ROOTS:-0} == 1 ]]; then
   [[ ${args[9]} == "$first" && ${args[10]} == "$second" ]]
   [[ $(readlink "${args[7]}") == "$first" ]]
   [[ $(readlink "${args[7]}-1") == "$second" ]]
-  "$NIX_STORE_BINARY" --query --roots "$first" | grep -F "${args[7]}"
-  "$NIX_STORE_BINARY" --query --roots "$second" | grep -F "${args[7]}-1"
+  # Nix canonicalizes the doubled separator in nix-direnv's input directory.
+  # Normalize the link pathname without following it into the store.
+  root_link=$(realpath --canonicalize-missing --no-symlinks "${args[7]}")
+  roots=$("$NIX_STORE_BINARY" --query --roots "$first")
+  printf '%s\n' "$roots"
+  grep -F -- "$root_link" <<<"$roots"
+  roots=$("$NIX_STORE_BINARY" --query --roots "$second")
+  printf '%s\n' "$roots"
+  grep -F -- "$root_link-1" <<<"$roots"
 else
   [[ ${args[9]} == /nix/store/aaaaaaaa-source && ${args[10]} == /nix/store/bbbbbbbb-source ]]
 fi

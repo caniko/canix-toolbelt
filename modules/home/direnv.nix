@@ -27,6 +27,7 @@ in {
           # survives that copy, preserving the base package's patches/hooks.
           postFixup =
             (old.postFixup or "")
+            + "\n"
             + ''
               chmod u+w "$out/share/nix-direnv/direnvrc"
               ${lib.getExe pkgs.patch} --directory="$out" --strip=1 < ${pkgs.replaceVars ./nix-direnv-gcroots.patch {inherit (pkgs) coreutils;}}
