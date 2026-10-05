@@ -32,9 +32,9 @@
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
     harbor-rs.follows = "fleetix/harbor-rs";
     # Transitional compatibility only: database-specific modules now live in
-    # db-harbor and this input can be removed after consumers migrate.
+    # harbor-db; keep the compatibility facade on its qualified storage release.
     harbor-db = {
-      url = "git+https://github.com/caniko/harbor-db.git";
+      url = "github:caniko/harbor-db/99aca6956890ca347a06fe73ca93bbe22fa72368";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     git-hooks = {
@@ -107,15 +107,16 @@
               ];
             };
             # Compatibility alias. Database-specific backup mechanics are
-            # owned by db-harbor; keep the old option path during migration.
+            # owned by harbor-db; keep the old option path during migration.
             pg-backup = {
               imports = [
                 inputs.harbor-db.nixosModules.pg-backup
                 (nixpkgs.lib.mkAliasOptionModule
                   ["canix-toolbelt" "services" "pgBackup"]
-                  ["services" "db-harbor" "pgBackup"])
+                  ["services" "harbor-db" "pgBackup"])
               ];
             };
+            postgres-lifecycle = inputs.harbor-db.nixosModules.postgres-lifecycle;
           };
         homeModules = import ./modules/home {
           inherit (inputs) wrapper-manager;
@@ -160,6 +161,10 @@
               pkgs.writeText "gatus-instances-eval" "ok";
             gatus-publisher-eval = builtins.deepSeq (import ./nixos-tests/gatus-publisher-eval.nix {inherit pkgs;}) (pkgs.writeText "gatus-publisher-eval" "ok");
             attic-projects-registry-eval = import ./nixos-tests/attic-projects-registry-eval.nix {inherit pkgs;};
+            harbor-db-compat-eval = import ./nixos-tests/harbor-db-compat-eval.nix {
+              inherit pkgs;
+              modules = inputs.self.nixosModules;
+            };
             chromium-gpu-eval = import ./nixos-tests/chromium-gpu-eval.nix {inherit inputs pkgs;};
             gpu-media-eval = import ./nixos-tests/gpu-media-eval.nix {inherit inputs pkgs;};
             gpu-render-eval = import ./nixos-tests/gpu-render-eval.nix {inherit inputs pkgs;};
@@ -207,6 +212,11 @@
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
             direnv-runtime = import ./nixos-tests/direnv-runtime.nix {inherit pkgs;};
+            resumable-operator-runtime = import ./nixos-tests/resumable-operator-runtime.nix {inherit pkgs;};
+            harbor-db-compat-runtime = import ./nixos-tests/harbor-db-compat-runtime.nix {
+              inherit pkgs;
+              modules = inputs.self.nixosModules;
+            };
             public-edge = import ./nixos-tests/public-edge.nix {inherit pkgs;};
             cloud-host-install-bios = import ./nixos-tests/cloud-host-install.nix {
               inherit inputs pkgs;
@@ -221,6 +231,7 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
+        packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.

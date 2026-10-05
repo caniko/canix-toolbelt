@@ -7,7 +7,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from browser_connection import default_browser, firefox_binary
 from opencode_browser import OPERATIONS, Host
@@ -19,15 +19,16 @@ class DefaultBrowserTests(unittest.TestCase):
             root = Path(root)
             binary = root / "package" / "bin" / "floorp"
             binary.parent.mkdir(parents=True)
-            binary.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+            binary.write_text(f"#!{sys.executable}\nimport json, os, sys\nprint(json.dumps([sys.argv[1:], os.environ['WRAPPER_FIXTURE']]))\n")
             binary.chmod(0o700)
             metadata = binary.parent.parent / "lib" / "floorp"
             metadata.mkdir(parents=True)
             (metadata / "platform.ini").write_text("[Build]\nMilestone=155.0\n")
             launcher = Path(firefox_binary(str(binary), root / "launcher"))
             self.assertEqual((launcher.parent / "platform.ini").read_text(), "[Build]\nMilestone=155.0\n")
-            self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
-                             ["-profile", "literal path", "--name=Floorp"])
+            with patch.dict(os.environ, {"WRAPPER_FIXTURE": "literal environment"}):
+                self.assertEqual(json.loads(subprocess.check_output([str(launcher), "-profile", "literal path", "--name=Floorp"])),
+                                 [["-profile", "literal path", "--name=Floorp"], "literal environment"])
 
     def test_native_binary_or_missing_metadata_keeps_the_requested_executable(self):
         with tempfile.TemporaryDirectory() as root:
@@ -109,6 +110,37 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expired"):
             host.element({"refs": {}}, "@e1")
 
+    def test_privileged_startup_tab_does_not_block_inventory(self):
+        driver = Mock()
+        def call(method, path, body=None):
+            if (method, path) == ("GET", "/window/handles"):
+                return ["welcome"]
+            if (method, path) == ("GET", "/url"):
+                return "about:welcome"
+            if (method, path) == ("GET", "/title"):
+                return "Welcome to Floorp"
+            return None
+        driver.call.side_effect = call
+        driver.script.side_effect = RuntimeError(
+            "unsupported operation: ExecuteScript and ExecuteAsyncScript are not supported "
+            "for privileged browsing contexts: 16"
+        )
+        host = Host(driver)
+        inventory = host.inventory()
+        tab = inventory["tabs"][0]
+        self.assertEqual(tab["url"], "about:welcome")
+        self.assertEqual(tab["title"], "Welcome to Floorp")
+        self.assertEqual(inventory["focusedTabID"], tab["id"])
+        self.assertFalse(tab["loading"])
+        self.assertEqual(host.inventory()["tabs"][0]["generation"], tab["generation"])
+
+    def test_inventory_does_not_hide_unrelated_script_failures(self):
+        driver = Mock()
+        driver.call.return_value = ["window"]
+        driver.script.side_effect = RuntimeError("unknown error: connection lost")
+        with self.assertRaisesRegex(RuntimeError, "connection lost"):
+            Host(driver).inventory()
+
 
 class RealBrowserSmoke(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("BROWSER_CONNECTION_SMOKE_CONFIG"), "requires explicit real-browser fixture")
@@ -132,14 +164,23 @@ class RealBrowserSmoke(unittest.TestCase):
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        command = [os.environ["BROWSER_CONNECTION_SMOKE_COMMAND"]] if os.environ.get("BROWSER_CONNECTION_SMOKE_COMMAND") else [
+            sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
+            "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]]
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).with_name("opencode_browser.py")),
-             "--config", os.environ["BROWSER_CONNECTION_SMOKE_CONFIG"]],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
         try:
             ready = json.loads(process.stdout.readline())
             self.assertEqual(ready["version"], 1)
+            if os.environ.get("BROWSER_WRAPPER_RECEIPT"):
+                arguments, environment = json.loads(Path(os.environ["BROWSER_WRAPPER_RECEIPT"]).read_text())
+                index = arguments.index("--name")
+                self.assertEqual(arguments[index + 1], "Toolbelt literal argument")
+                self.assertIn("-profile", arguments)
+                self.assertIn("-headless", arguments)
+                self.assertEqual(environment, "literal environment preserved")
             def call(action, files=None):
                 process.stdin.write(json.dumps({"id": "test", "command": {"action": action, "files": files or []}}) + "\n")
                 process.stdin.flush()
@@ -147,6 +188,7 @@ class RealBrowserSmoke(unittest.TestCase):
                 self.assertEqual(response["type"], "success", response)
                 return response["result"]
             tabs = call({"type": "tabs.list"})["value"]["tabs"]
+            original_tab_ids = {tab["id"] for tab in tabs}
             tab_id = tabs[0]["id"]
             call({"type": "navigate", "tabID": tab_id, "url": f"http://127.0.0.1:{server.server_port}/"})
             snapshot = call({"type": "snapshot", "tabID": tab_id})["value"]
@@ -180,6 +222,7 @@ class RealBrowserSmoke(unittest.TestCase):
             self.assertEqual(call({"type": "files.get", "tabID": tab_id, "fileID": captures[0]["id"]})["files"], screenshot["files"])
             existing_tabs = {tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]}
             other = call({"type": "tabs.open"})["value"]["id"]
+            self.assertNotIn(other, original_tab_ids)
             self.assertNotEqual(other, tab_id)
             self.assertEqual({tab["id"] for tab in call({"type": "tabs.list"})["value"]["tabs"]},
                              existing_tabs | {other})
