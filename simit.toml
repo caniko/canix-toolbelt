@@ -52,7 +52,7 @@ timeout_minutes = 30
 
 [[ci.required_gates]]
 id = "generated-parity"
-run = "nix run --max-jobs 1 --cores 2 github:caniko/simit/1f5a180b7bd8d3cf4f1e8c3a105b33c251fac0e1 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
+run = "nix run --max-jobs 1 --cores 2 github:caniko/simit/afb7939d925d3e8e9b8507387ada7efad6460df8 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
 timeout_minutes = 30
 
 [[ci.required_gates]]
