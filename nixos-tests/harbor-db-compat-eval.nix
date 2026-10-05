@@ -40,6 +40,7 @@
     };
   };
   guard = guarded.system.preSwitchChecksScript;
+  brokenHooks.harbor-db-postgresql-adoption = throw "injected broken adoption guard";
   broken = evaluate {
     services.postgresql = {
       enable = true;
@@ -49,13 +50,13 @@
       enable = true;
       switchAdoption.systemIdentifier = "12345";
     };
-    system.preSwitchChecks.harbor-db-postgresql-adoption = pkgs.lib.mkForce (throw "injected broken adoption guard");
+    system.preSwitchChecks.harbor-db-postgresql-adoption = pkgs.lib.mkForce brokenHooks.harbor-db-postgresql-adoption;
   };
   forcedBroken = builtins.tryEval (builtins.deepSeq broken.system.preSwitchChecks.harbor-db-postgresql-adoption true);
 in
-  # Demonstrate the previous existence-only predicate's false acceptance, then
-  # require rejection when the injected generated value is actually forced.
-  assert broken.system.preSwitchChecks ? harbor-db-postgresql-adoption;
+  # Attribute presence does not validate its value. Keep the module merge and
+  # generated-value forcing inside tryEval so the injected fault is contained.
+  assert brokenHooks ? harbor-db-postgresql-adoption;
   assert !forcedBroken.success;
   assert legacy.services.harbor-db.pgBackup.enable;
   assert legacy.services.harbor-db.pgBackup.sourceSettings.replicatorPasswordFile == "/run/secrets/replicator";
