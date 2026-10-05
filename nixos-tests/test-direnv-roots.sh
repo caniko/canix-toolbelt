@@ -3,6 +3,7 @@
 set -euo pipefail
 source "$1"
 calls=0
+profile_calls=0
 _nix() {
   case "$1" in
   print-dev-env)
@@ -36,7 +37,11 @@ _nix_direnv_watches() {
   local -n watched=$1
   watched=()
 }
-_nix_add_gcroot() { touch "$2"; }
+_nix_add_gcroot() {
+  profile_calls=$((profile_calls + 1))
+  [[ ${profile_failure:-0} == 0 ]] || return 1
+  touch "$2"
+}
 _nix_import_env() { cat "$1" >/dev/null; }
 
 layout="$PWD/layout"
@@ -90,9 +95,21 @@ else
 fi
 [[ $(cat "$profile_rc") == old ]]
 [[ $calls == 2 ]]
-printf 'Packaged renewal: duplicates, empty input, conditional archive/root failures, previous-cache retention passed\n'
 
 root_failure=0
+archive_failure=0
+profile_failure=1
+if renew_cache; then
+  exit 1
+else
+  [[ $? == 1 ]]
+fi
+[[ $(cat "$profile_rc") == old ]]
+[[ $calls == 3 ]]
+[[ $profile_calls == 3 ]]
+printf 'Packaged renewal: profile-root failure cannot publish the cache\n'
+
+profile_failure=0
 archive_failure=1
 if renew_cache; then
   exit 1
@@ -100,4 +117,6 @@ else
   [[ $? == 1 ]]
 fi
 [[ $(cat "$profile_rc") == old ]]
-[[ $calls == 2 ]]
+[[ $calls == 3 ]]
+[[ $profile_calls == 3 ]]
+printf 'Packaged renewal: duplicates, empty input, conditional archive/root failures, previous-cache retention passed\n'
