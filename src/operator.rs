@@ -660,15 +660,19 @@ impl ServiceManager for Systemd {
         self.checked(&["start", unit])
     }
     fn start(&mut self, unit: &str, cancelled: &AtomicBool) -> io::Result<StageResult> {
-        // show loads an installed unit; reset-failed only accepts loaded units.
-        // Keep missing/masked units and property-query failures in the retry path.
+        // Validate the installed unit without assuming show keeps it loaded:
+        // systemd may collect inactive units before the next command.
         let load_state = self.property(unit, "LoadState")?;
         if load_state != "loaded" {
             return Err(io::Error::other(format!(
                 "cannot load systemd stage {unit}: {load_state}"
             )));
         }
-        self.checked(&["reset-failed", unit])?;
+        // Failed units stay loaded; cold units need no reset and start loads them.
+        // Reset/query errors still consume the same persisted retry budget.
+        if self.property(unit, "ActiveState")? == "failed" {
+            self.checked(&["reset-failed", unit])?;
+        }
         let mut child = self.command(&["start", "--wait", unit]).spawn()?;
         let status = loop {
             if cancelled.load(Ordering::SeqCst) {

@@ -14,8 +14,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
-- Load cold systemd stage units before resetting their failed state, retaining
-  bounded retries for missing units and service-manager errors.
+- Start cold systemd stage units without resetting nonexistent failed state,
+  retaining bounded retries for missing units and service-manager errors.
 
 ## [0.2.0] - 2026-10-04
 

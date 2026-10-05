@@ -16,7 +16,8 @@ with (root / "calls").open("a") as log:
     log.write(json.dumps(args) + "\n")
 fault = os.environ.get("FIXTURE_FAULT", "")
 if args[0] == "reset-failed":
-    if fault == "reset" or not (root / (args[1] + ".loaded")).exists():
+    # A cold inactive unit may be collected immediately after a show query.
+    if fault == "reset" or not fault:
         sys.exit(1)
 if args[0] == "show":
     prop = args[2]
@@ -26,10 +27,10 @@ if args[0] == "show":
         if fault == "not-found":
             print("not-found")
         else:
-            (root / (args[-1] + ".loaded")).touch()
             print("loaded")
     else:
-        print({"ActiveState": "inactive", "Result": "success", "ExecMainStatus": "0"}[prop])
+        print({"ActiveState": "failed" if fault else "inactive",
+               "Result": "success", "ExecMainStatus": "0"}[prop])
 '''
 
 with tempfile.TemporaryDirectory() as directory:
@@ -58,8 +59,6 @@ with tempfile.TemporaryDirectory() as directory:
         reset_count = 0 if fault in ("LoadState", "not-found") else 2 * len(policy["stages"])
         assert len([call for call in calls if call[0] == "reset-failed"]) == reset_count
         (root / "calls").unlink()
-        for loaded in root.glob("*.loaded"):
-            loaded.unlink()
         print(f"Packaged Systemd adapter: {fault} failures exhaust durable retries")
     # A genuinely fresh marker after a terminal failure starts a new run.
     previous = state["run_id"]
@@ -68,4 +67,6 @@ with tempfile.TemporaryDirectory() as directory:
     state = json.loads((root / "state.json").read_text())
     assert state["run_id"] != previous
     assert state["completed"] == [stage["name"] for stage in policy["stages"]]
+    calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
+    assert not any(call[0] == "reset-failed" for call in calls)
     print("Packaged controller: fresh terminal request executes a distinct run")
