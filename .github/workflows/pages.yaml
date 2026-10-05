@@ -36,6 +36,19 @@ jobs:
           git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
 
+      - name: Project setup
+        run: |
+          set -eu
+          test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          {
+            printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
+            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+            printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
+          } >> "$GITHUB_ENV"
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - name: Build Pages site
