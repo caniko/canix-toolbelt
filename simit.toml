@@ -5,6 +5,9 @@ runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
+  ".#canix-toolbelt",
+  ".#checks.x86_64-linux.resumable-operator-eval",
+  ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#opencode-browser-adapter",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
@@ -28,7 +31,7 @@ sudo chmod a+rw /dev/kvm
 test -r /dev/kvm && test -w /dev/kvm
 {
   printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
-  printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+  printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
   printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
 } >> "$GITHUB_ENV"
 ''']
@@ -48,6 +51,11 @@ canonical_domain = "canix-toolbelt.tartanoglu.com"
 [[ci.required_gates]]
 id = "crate-release"
 run = "nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "operator-regressions"
+run = "nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh"
 timeout_minutes = 30
 
 [[ci.required_gates]]

@@ -22,6 +22,9 @@ jobs:
       max-parallel: 2
       matrix:
         installable:
+          - ".#canix-toolbelt"
+          - ".#checks.x86_64-linux.resumable-operator-eval"
+          - ".#checks.x86_64-linux.resumable-operator-runtime"
           - ".#opencode-browser-adapter"
           - ".#checks.x86_64-linux.browser-connection-eval"
           - ".#checks.x86_64-linux.browser-connection-runtime"
@@ -61,7 +64,7 @@ jobs:
           test -r /dev/kvm && test -w /dev/kvm
           {
             printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
-            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2'
+            printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
             printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
           } >> "$GITHUB_ENV"
 

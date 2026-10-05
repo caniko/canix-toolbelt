@@ -5,6 +5,18 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Durable systemd-stage operator with an optional Unix CLI, execution-contract
+  binding, kernel locking, synchronized checkpoints, bounded retries and worker
+  restoration. Interrupted runs reject a changed package/argument contract and
+  preserve legacy shell state for explicit reconciliation.
+
+### Fixed
+
+- Start cold systemd stage units without resetting nonexistent failed state,
+  retaining bounded retries for missing units and service-manager errors.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

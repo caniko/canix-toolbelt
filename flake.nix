@@ -210,6 +210,7 @@
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            resumable-operator-runtime = import ./nixos-tests/resumable-operator-runtime.nix {inherit pkgs;};
             harbor-db-compat-runtime = import ./nixos-tests/harbor-db-compat-runtime.nix {
               inherit pkgs;
               modules = inputs.self.nixosModules;
@@ -228,6 +229,7 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
+        packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
