@@ -54,7 +54,7 @@ jobs:
         run: |
           # Expand formatter variables inside the Nix shell.
           # shellcheck disable=SC2016
-          nix develop -c sh -c 'formatter=$(nix eval --impure --raw --expr "let root = toString ./.; flake = builtins.getFlake (if builtins.pathExists ./.git then \"git+file://\" + root else root); in if flake ? formatter.\${builtins.currentSystem} then flake.formatter.\${builtins.currentSystem}.drvPath else \"\"") || exit; if [ -n "$formatter" ]; then formatter_path=$(nix build --no-link --print-out-paths "$formatter^out") || exit; if [ -x "$formatter_path/bin/treefmt" ]; then exec "$formatter_path/bin/treefmt" --ci; fi; fi; if command -v treefmt >/dev/null 2>&1; then exec treefmt --ci; else exec cargo fmt --all -- --check; fi'
+          nix develop -c sh -c 'formatter=$(nix eval --impure --raw --expr "let root = toString ./.; flake = builtins.getFlake (if builtins.pathExists ./.git then \"git+file://\" + root else root); in if flake ? formatter.\${builtins.currentSystem} then flake.formatter.\${builtins.currentSystem}.drvPath else \"\"") || exit; if [ -n "$formatter" ]; then formatter_path=$(nix build --no-link --print-out-paths "$formatter^out") || exit; test -x "$formatter_path/bin/treefmt" || { echo "project formatter does not provide bin/treefmt" >&2; exit 1; }; exec "$formatter_path/bin/treefmt" --ci; fi; if [ -f nix/treefmt.nix ] || [ -f treefmt.toml ] || [ -f .treefmt.toml ]; then echo "treefmt policy requires a flake formatter output; run simit init flake" >&2; exit 1; fi; exec cargo fmt --all -- --check'
 
       - name: Check flake
         run: nix flake check
@@ -136,7 +136,7 @@ jobs:
           git config --global --add url.https://github.com/.insteadOf git@github.com:
 
       - name: Required gate generated-parity
-        run: nix run --max-jobs 1 --cores 2 github:caniko/simit/1f5a180b7bd8d3cf4f1e8c3a105b33c251fac0e1 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
+        run: nix run --max-jobs 1 --cores 2 github:caniko/simit/afb7939d925d3e8e9b8507387ada7efad6460df8 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
 
   gate-supported-systems:
     runs-on: ubuntu-24.04
