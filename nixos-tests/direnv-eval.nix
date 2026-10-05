@@ -5,8 +5,8 @@
     postFixup = (old.postFixup or "") + ''touch "$out/existing-hook"'';
   });
   existingPatch = pkgs.writeText "existing-direnv.patch" ''
-    --- a/direnvrc
-    +++ b/direnvrc
+    --- a/share/nix-direnv/direnvrc
+    +++ b/share/nix-direnv/direnvrc
     @@ -1,2 +1,3 @@
      # -*- mode: sh -*-
      # shellcheck shell=bash

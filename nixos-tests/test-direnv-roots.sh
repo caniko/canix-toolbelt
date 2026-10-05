@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the complete packaged function with deterministic Nix responses.
-set -euo pipefail
+set -Eeuo pipefail
+trap 'status=$?; printf "Packaged renewal failed at line %s: %s (status %s)\n" "$LINENO" "$BASH_COMMAND" "$status" >&2; exit "$status"' ERR
 source "$1"
 calls=0
 profile_calls=0
