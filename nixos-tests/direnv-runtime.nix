@@ -1,5 +1,6 @@
 {pkgs}: let
-  inherit ((pkgs.lib.evalModules {
+  inherit
+    ((pkgs.lib.evalModules {
       specialArgs = {inherit pkgs;};
       modules = [
         ../modules/home/direnv.nix
@@ -8,7 +9,9 @@
           config.canix-toolbelt.direnv.enable = true;
         }
       ];
-    })) config;
+    }))
+    config
+    ;
   package = config.programs.direnv.nix-direnv.package;
 in
   pkgs.testers.runNixOSTest {
