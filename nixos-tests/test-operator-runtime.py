@@ -15,13 +15,21 @@ args = sys.argv[1:]
 with (root / "calls").open("a") as log:
     log.write(json.dumps(args) + "\n")
 fault = os.environ.get("FIXTURE_FAULT", "")
-if args[0] == "reset-failed" and fault == "reset":
-    sys.exit(1)
+if args[0] == "reset-failed":
+    if fault == "reset" or not (root / (args[1] + ".loaded")).exists():
+        sys.exit(1)
 if args[0] == "show":
     prop = args[2]
     if fault == prop:
         sys.exit(1)
-    print({"ActiveState": "inactive", "Result": "success", "ExecMainStatus": "0"}[prop])
+    if prop == "LoadState":
+        if fault == "not-found":
+            print("not-found")
+        else:
+            (root / (args[-1] + ".loaded")).touch()
+            print("loaded")
+    else:
+        print({"ActiveState": "inactive", "Result": "success", "ExecMainStatus": "0"}[prop])
 '''
 
 with tempfile.TemporaryDirectory() as directory:
@@ -37,7 +45,7 @@ with tempfile.TemporaryDirectory() as directory:
     path.write_text(json.dumps(policy))
     command = [controller, "operator", "run", "--config", str(path),
                "--systemctl", str(manager)]
-    for fault in ("reset", "Result", "ExecMainStatus"):
+    for fault in ("LoadState", "not-found", "reset", "Result", "ExecMainStatus"):
         environment = dict(os.environ, FIXTURE_ROOT=str(root), FIXTURE_FAULT=fault)
         result = subprocess.run(command, env=environment, timeout=30, check=False)
         assert result.returncode == 20, (fault, result.returncode)
@@ -47,8 +55,11 @@ with tempfile.TemporaryDirectory() as directory:
         assert not (root / "requested").exists()
         assert not (root / "running").exists()
         calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
-        assert len([call for call in calls if call[0] == "reset-failed"]) == 2 * len(policy["stages"])
+        reset_count = 0 if fault in ("LoadState", "not-found") else 2 * len(policy["stages"])
+        assert len([call for call in calls if call[0] == "reset-failed"]) == reset_count
         (root / "calls").unlink()
+        for loaded in root.glob("*.loaded"):
+            loaded.unlink()
         print(f"Packaged Systemd adapter: {fault} failures exhaust durable retries")
     # A genuinely fresh marker after a terminal failure starts a new run.
     previous = state["run_id"]

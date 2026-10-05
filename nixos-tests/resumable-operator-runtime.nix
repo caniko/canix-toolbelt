@@ -34,6 +34,7 @@ in
       start_all()
       machine.wait_for_unit("multi-user.target")
       machine.succeed("systemctl start fixture-worker")
+      machine.fail("systemctl list-units --all --plain --no-legend | grep -F fixture-stage.service")
       try:
           for expected in (1, 2):
               machine.succeed("touch /var/lib/fixture-operator/requested; systemctl start fixture-operator")
