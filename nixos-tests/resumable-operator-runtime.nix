@@ -34,14 +34,19 @@ in
       start_all()
       machine.wait_for_unit("multi-user.target")
       machine.succeed("systemctl start fixture-worker")
-      for expected in (1, 2):
-          machine.succeed("touch /var/lib/fixture-operator/requested; systemctl start fixture-operator")
-          machine.succeed("test -f /var/lib/fixture-operator/running")
-          machine.fail("systemctl is-active --quiet fixture-worker")
-          machine.wait_until_succeeds("test ! -e /var/lib/fixture-operator/requested")
-          machine.succeed("test ! -e /var/lib/fixture-operator/running")
-          machine.wait_for_unit("fixture-worker")
-          assert int(machine.succeed("wc -l < /var/lib/fixture-operator/events").strip()) == expected
-      machine.succeed("test $(systemctl show fixture-operator -p ExecMainStatus --value) = 0")
+      try:
+          for expected in (1, 2):
+              machine.succeed("touch /var/lib/fixture-operator/requested; systemctl start fixture-operator")
+              machine.succeed("test -f /var/lib/fixture-operator/running")
+              machine.fail("systemctl is-active --quiet fixture-worker")
+              machine.wait_until_succeeds("test ! -e /var/lib/fixture-operator/requested")
+              machine.succeed("test ! -e /var/lib/fixture-operator/running")
+              machine.wait_for_unit("fixture-worker")
+              assert int(machine.succeed("wc -l < /var/lib/fixture-operator/events").strip()) == expected
+          machine.succeed("test $(systemctl show fixture-operator -p ExecMainStatus --value) = 0")
+      except Exception:
+          print(machine.execute("journalctl -b --no-pager -u fixture-operator -u fixture-stage -u fixture-worker")[1])
+          print(machine.execute("cat /var/lib/fixture-operator/state.json; find /var/lib/fixture-operator/runs -type f -exec cat {} +")[1])
+          raise
     '';
   }

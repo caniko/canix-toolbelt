@@ -7,7 +7,7 @@ git fetch --no-tags --depth=1 origin \
   7c6a21ffbf6dbc71fd42ba3d78f99fd50ab9e37d
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
-cp Cargo.toml Cargo.lock "$fixture/"
+cp Cargo.toml Cargo.lock RUST.md "$fixture/"
 cp -R src tests examples runtime "$fixture/"
 export CARGO_TARGET_DIR="$PWD/target/operator-regressions"
 old=9832d14caa59106c31c68787869ba234beafe19e
