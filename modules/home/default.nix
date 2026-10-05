@@ -17,6 +17,7 @@
   agent-safety = ./agent-safety.nix;
   project-tree = ./project-tree.nix;
   browser-connection = ./browser-connection.nix;
+  direnv = ./direnv.nix;
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
   gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};

@@ -1,0 +1,49 @@
+diff --git a/share/nix-direnv/direnvrc b/share/nix-direnv/direnvrc
+--- a/share/nix-direnv/direnvrc
++++ b/share/nix-direnv/direnvrc
+@@ -373,6 +373,1 @@ use_flake() {
+-        _nix_clean_old_gcroots "$layout_dir"
+-
+-        # We need to update our cache
+-        echo "$tmp_profile_rc" >"$profile_rc"
+-        _nix_add_gcroot "$tmp_profile" "$profile"
+-        @coreutils@/bin/rm -f "$tmp_profile" "$tmp_profile"*
++        # Retain the previous cache and its roots until renewal succeeds.
+@@ -384,11 +379,35 @@ use_flake() {
+           --json --no-write-lock-file \
+-          -- "$flake_uri")
++          -- "$flake_uri") || return 1
+
++        local -A seen_inputs=()
++        local -a unique_inputs=()
+         while [[ $flake_input_paths =~ /nix/store/[^\"]+ ]]; do
+           local store_path="${BASH_REMATCH[0]}"
+-          _nix_add_gcroot "${store_path}" "${flake_inputs}/${store_path##*/}"
++          if [[ ! -v seen_inputs["$store_path"] ]]; then
++            seen_inputs["$store_path"]=1
++            unique_inputs+=("$store_path")
++          fi
+           flake_input_paths="${flake_input_paths/${store_path}/}"
+         done
++        local input_root=""
++        if [ "${#unique_inputs[@]}" -gt 0 ]; then
++          input_root="${flake_inputs}/input-$$-$RANDOM"
++          _nix build --max-jobs 0 --option builders "" --out-link "$input_root" -- "${unique_inputs[@]}" || return 1
++        fi
++        _nix_add_gcroot "$tmp_profile" "$profile" || return 1
++        @coreutils@/bin/rm -f "$tmp_profile" "$tmp_profile"*
++        # Publish a fresh cache only after all input roots succeeded.
++        local next_cache="${profile_rc}.tmp.$$-$RANDOM"
++        printf '%s\n' "$tmp_profile_rc" >"$next_cache" || return 1
++        @coreutils@/bin/mv -f -- "$next_cache" "$profile_rc" || return 1
++        # Nix registers each output link (prefix, prefix-1, ...) as an
++        # indirect root. Do not rename them after registration.
++        for old_root in "${flake_inputs}"/*; do
++          if [[ -n ${input_root:-} && ( $old_root == "$input_root" || $old_root == "$input_root"-* ) ]]; then
++            continue
++          fi
++          @coreutils@/bin/rm -rf -- "$old_root"
++        done
+
+         _nix_direnv_info "Renewed cache"
+       else

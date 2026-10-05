@@ -151,6 +151,7 @@
         checks =
           {
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
+            direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
@@ -210,6 +211,7 @@
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            direnv-runtime = import ./nixos-tests/direnv-runtime.nix {inherit pkgs;};
             resumable-operator-runtime = import ./nixos-tests/resumable-operator-runtime.nix {inherit pkgs;};
             harbor-db-compat-runtime = import ./nixos-tests/harbor-db-compat-runtime.nix {
               inherit pkgs;
