@@ -48,6 +48,39 @@ Two output families:
 }
 ```
 
+### Game-render routing
+
+Import `homeModules.modde-gpu` alongside modde's own Home Manager module, then
+set `canix-toolbelt.gpuRender = { enable = true; renderNode =
+"/dev/dri/by-path/pci-0000:03:00.0-render"; };`. The adapter supplies
+`programs.modde.gpu.renderNode` as a default; explicit application settings
+and saved installation choices take precedence. A topology adapter can provide
+the same route through the `gpuRender` special argument from Fleetix's
+`host.gpu.render` declaration. This is separate from `gpuMedia` and compute.
+
+Prefer `gpuRoutes = fleetix.lib.gpu.routes host.gpu` for all purpose-specific
+defaults. The legacy `gpuRender` and `gpuMedia` arguments remain accepted.
+Integrated Home Manager inherits the NixOS route; standalone Home Manager uses
+topology defaults. Explicit Home Manager route settings override either.
+Browser wrappers read that resolved route, and `homeModules.mpv-gpu` projects
+media routing to default `hwdec`/`vaapi-device` settings. Import `gpu-media`
+alongside these media adapters. mpv keeps automatic presentation selection and
+uses copy-mode decoding; NVIDIA uses `nvdec-copy` without a VA-API device.
+Explicit mpv settings override the adapter's defaults.
+
+The route is disabled by default. modde validates the device at launch and
+uses Mesa's PCI selector for AMD/Intel games; proprietary NVIDIA selection
+continues through explicit launch environment settings. Enabling the adapter
+with an older modde module fails its compatibility assertion. The module
+does not install diagnostic tools or alter the GUI renderer.
+
+### OpenCode Muse Code adapter
+
+`homeModules.opencode-muse-code` provides the host-independent subscription
+adapter with an explicit opt-in and V2 by default. Protocol, V1 compatibility
+patches and both plugin test suites live in `runtime/opencode-muse-code`.
+See [the module and validation guide](docs/opencode-muse-code.md).
+
 ### Cloud-host configurator
 
 `nixosModules.cloud-host` composes a complete small NixOS guest using Disko and
