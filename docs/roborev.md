@@ -13,8 +13,10 @@ resource values, fleet placement and qualified dependency pins.
   the program and service default to disabled. The module has no `osConfig`
   dependency and does not enroll repositories, install hooks or migrate state.
 - `lib.mkRoborevPackage { pkgs; harborGo; harborJs; buildPkgs ? pkgs.buildPackages; }`
-  builds stock Roborev v0.71.0 with the selected Go/Bun helpers. Consumer package
-  sets remain explicit, including cross-build native tools.
+  builds stock Roborev v0.71.0 with the selected Go/Bun helpers. Bun 1.3.14 installs
+  the frozen dependencies; native Node 24.2+ runs generation, typechecking, bundling
+  and asset verification without PRoot tracing. Consumer package sets remain
+  explicit, including cross-build native tools.
 - `lib.mkRoborevFlakeModule { nixpkgs; harborGo; harborJs; harborMeta; homeManager; }`
   composes the package, frontend/dependency artifacts, development shell and
   module/unit regression checks. `flakeModules.roborev` selects those arguments
