@@ -355,7 +355,7 @@ impl Admission {
             binding: binding.clone(),
         };
         save(&journal)?;
-        let fence = ExecutionFence::register(state, binding)?;
+        let fence = ExecutionFence::register_admitted(state, binding)?;
         journal.state = State::ExecutionRegistered {
             fence: fence.clone(),
         };
@@ -370,7 +370,7 @@ impl Admission {
         let State::ExecutionRegistered { fence } = journal.state else {
             anyhow::bail!("no confirmed original execution registration; retain UNKNOWN");
         };
-        fence.reserve()
+        fence.reserve_admitted()
     }
 
     /// Retain a successful independently verified OFFLINE envelope result before

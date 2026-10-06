@@ -75,6 +75,28 @@ pub enum ExecutionState {
 /// dispatch. Loading/reserving never recreates missing state. Registration belongs
 /// only to the controller's pre-dispatch new-request path; loss of its wider ledger
 /// must not be repaired by registering a replacement under fresh identities.
+#[cfg_attr(
+    not(any(feature = "roborev-execution-tests", feature = "roborev-worker-tests")),
+    doc = r#"
+Production controllers obtain reservations through original `Admission` custody.
+Standalone registration, loading and reservation are native-fixture APIs only.
+
+```compile_fail
+use canix_toolbelt_roborev_worker::execution::ExecutionFence;
+let _ = ExecutionFence::register;
+```
+
+```compile_fail
+use canix_toolbelt_roborev_worker::execution::ExecutionFence;
+let _ = ExecutionFence::load;
+```
+
+```compile_fail
+use canix_toolbelt_roborev_worker::execution::ExecutionFence;
+let _ = ExecutionFence::reserve;
+```
+"#
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionFence {
@@ -181,7 +203,7 @@ impl ExecutionFence {
     /// backend invocation. Actual adapter inputs become available after daemon
     /// dispatch. Admission must already fence enqueue and dispatch; neither state
     /// loss nor ambiguous installation permits registering a replacement.
-    pub fn register(state: &Path, binding: &ExecutionBinding) -> Result<Self> {
+    pub(super) fn register_admitted(state: &Path, binding: &ExecutionBinding) -> Result<Self> {
         binding.validate()?;
         let root = private_directory(state)?;
         let entry = state.join(binding.request.key());
@@ -214,6 +236,8 @@ impl ExecutionFence {
     }
 
     /// Read only existing registration; never initialize, replace or rebind it.
+    #[cfg(any(feature = "roborev-execution-tests", feature = "roborev-worker-tests"))]
+    #[doc(hidden)]
     pub fn load(state: &Path, binding: &ExecutionBinding) -> Result<Self> {
         binding.validate()?;
         private_directory(state)?;
@@ -253,7 +277,7 @@ impl ExecutionFence {
     /// Persist UNKNOWN, fsync file and directory, then return exactly one possible
     /// execution reservation. Any error forbids backend invocation. Retries or
     /// restarts cannot reserve again, including when no backend actually started.
-    pub fn reserve(&self) -> Result<ReservedExecution> {
+    pub(super) fn reserve_admitted(&self) -> Result<ReservedExecution> {
         let (mut journal, lock) = self.checked()?;
         ensure!(
             journal.state == ExecutionState::Ready,
@@ -265,5 +289,19 @@ impl ExecutionFence {
             binding: self.binding.clone(),
             _lock: lock,
         })
+    }
+
+    /// Native-fixture entrypoint; production must retain original Admission custody.
+    #[cfg(any(feature = "roborev-execution-tests", feature = "roborev-worker-tests"))]
+    #[doc(hidden)]
+    pub fn register(state: &Path, binding: &ExecutionBinding) -> Result<Self> {
+        Self::register_admitted(state, binding)
+    }
+
+    /// Native-fixture entrypoint; unavailable in the production feature set.
+    #[cfg(any(feature = "roborev-execution-tests", feature = "roborev-worker-tests"))]
+    #[doc(hidden)]
+    pub fn reserve(&self) -> Result<ReservedExecution> {
+        self.reserve_admitted()
     }
 }

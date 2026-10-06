@@ -47,7 +47,7 @@ impl PullRequest {
             || url.query().is_some()
         {
             return Err(Error(
-                "unsupported forge/provider pairing; GitHub + Greptile is implemented".into(),
+                "unsupported forge; the review adapters require GitHub".into(),
             ));
         }
         let parts: Vec<_> = url
@@ -189,6 +189,20 @@ impl Default for Policy {
 }
 
 impl Policy {
+    /// Exact dedicated App required by the extra forge gate. Unbound or
+    /// conflicting requirements cannot authenticate a policy coordinator.
+    pub fn policy_app_id(&self) -> Result<u64, Error> {
+        let mut checks = self
+            .required_checks
+            .iter()
+            .filter(|check| check.name == "review-policy");
+        let app = checks.next().and_then(|check| check.app_id);
+        if checks.next().is_some() || app.is_none_or(|id| id == 0 || id == 15368) {
+            return Err(Error("policy requires one review-policy check bound to the configured dedicated GitHub App".into()));
+        }
+        app.ok_or_else(|| Error("missing dedicated policy App identity".into()))
+    }
+
     /// Load explicit consumer-owned JSON or Pkl policy; never discover policy
     /// from the untrusted source branch of the request being reviewed.
     pub fn load(path: &std::path::Path) -> Result<Self, Error> {
@@ -261,6 +275,9 @@ impl Policy {
         if !review.complete_findings {
             return Verdict::Blocked;
         }
+        if self.provider == "roborev" && review.reviewed_base.as_ref() != Some(&candidate.base) {
+            return Verdict::Blocked;
+        }
         if !review.findings.is_empty() {
             return Verdict::Findings;
         }
@@ -298,12 +315,22 @@ pub struct Finding {
 pub struct Review {
     /// Provider run or parent forge review ID; never an inline remapped commit.
     pub id: String,
+    /// Durable provider job identity, distinct from forge publication identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_job_id: Option<String>,
+    /// Durable provider review identity, distinct from forge publication identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_review_id: Option<String>,
     /// Provider name.
     pub provider: String,
     /// Proven reviewed source commit.
     pub reviewed_head: Option<String>,
     /// Base observed at request dispatch and rechecked during collection.
     pub requested_base: Option<String>,
+    /// Actual compared base, when attested by the provider receipt. Older
+    /// Greptile records lack base attestation and remain explicitly historical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_base: Option<String>,
     /// Policy used to request the review.
     pub policy_digest: String,
     /// Whether the provider has submitted its completed review.

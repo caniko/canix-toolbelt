@@ -13,6 +13,11 @@ roots, immutable executable paths, resource policy and actual custody. Preparati
 does not authorize dispatch. The offline runner has no live provider or forge
 credential interface and does not qualify production headless execution.
 
+Production callers register and reserve through the original `Admission` handle.
+`ExecutionFence` exposes binding/state inspection; its standalone
+register/load/reserve methods exist only with native test features enabled.
+Default-feature compile-fail doctests enforce that production API boundary.
+
 The `roborev-worker` executable implements the existing
 `__canix-roborev-prepare` and `__canix-roborev-worker` helper arguments. These names,
 hash domains, journal schemas and persistent lock anchors are compatibility
