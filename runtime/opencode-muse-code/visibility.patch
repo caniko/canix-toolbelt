@@ -1,0 +1,62 @@
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/provider.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/provider.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/provider.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/provider.ts
+@@ -54,9 +54,20 @@
+         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
+         connected,
+       )
++      // Subscription discovery is empty before login; do not invent an entitled
++      // model just to make its plugin authentication visible in /connect.
++      const muse = config.provider?.["muse-code"]
++      if (muse && !connected["muse-code"] && !disabled.has("muse-code") && (!enabled || enabled.has("muse-code"))) {
++        providers["muse-code"] = {
++          id: ProviderV2.ID.make("muse-code"), name: muse.name ?? "Muse Code (Subscription)",
++          env: [], source: "config", options: {}, models: {},
++        }
++      }
+       return {
+         all: Object.values(providers).map(Provider.toPublicInfo),
+-        default: Provider.defaultModelIDs(providers),
++        default: Provider.defaultModelIDs(
++          Object.fromEntries(Object.entries(providers).filter(([, item]) => Object.keys(item.models).length > 0)),
++        ),
+         connected: Object.keys(providers).filter((id) => id in connected || credentials[id]),
+       }
+     })
+diff --git a/packages/core/src/filesystem/search.ts b/packages/core/src/filesystem/search.ts
+--- a/packages/core/src/filesystem/search.ts
++++ b/packages/core/src/filesystem/search.ts
+@@ -8,1 +8,2 @@
+-import { FileSystem } from "../filesystem"
++import { Entry, Match, type FindInput } from "@opencode-ai/schema/filesystem"
++import type { GlobInput, GrepInput } from "../filesystem"
+@@ -16,3 +17,3 @@
+-  readonly find: (input: FileSystem.FindInput) => Effect.Effect<FileSystem.Entry[]>
+-  readonly glob: (input: FileSystem.GlobInput) => Effect.Effect<readonly FileSystem.Entry[]>
+-  readonly grep: (input: FileSystem.GrepInput) => Effect.Effect<readonly FileSystem.Match[]>
++  readonly find: (input: FindInput) => Effect.Effect<Entry[]>
++  readonly glob: (input: GlobInput) => Effect.Effect<readonly Entry[]>
++  readonly grep: (input: GrepInput) => Effect.Effect<readonly Match[]>
+@@ -64,1 +65,1 @@
+-                  FileSystem.Entry.make({
++                  Entry.make({
+@@ -89,1 +90,1 @@
+-                  FileSystem.Match.make({
++                  Match.make({
+@@ -91,1 +92,1 @@
+-                    entry: FileSystem.Entry.make({
++                    entry: Entry.make({
+@@ -112,1 +113,1 @@
+-            return FileSystem.Entry.make({
++            return Entry.make({
+@@ -157,1 +158,1 @@
+-            FileSystem.Entry.make({
++            Entry.make({
+@@ -175,2 +176,2 @@
+-            return FileSystem.Match.make({
+-              entry: FileSystem.Entry.make({
++            return Match.make({
++              entry: Entry.make({
+@@ -225,1 +226,1 @@
+-              return FileSystem.Entry.make({
++              return Entry.make({

@@ -1,0 +1,68 @@
+diff --git a/packages/opencode/src/provider/transform.ts b/packages/opencode/src/provider/transform.ts
+index 89b9c88ae3..b3e972776f 100644
+--- a/packages/opencode/src/provider/transform.ts
++++ b/packages/opencode/src/provider/transform.ts
+@@ -572,6 +572,26 @@ export function topK(model: Provider.Model) {
+
+ const WIDELY_SUPPORTED_EFFORTS = ["low", "medium", "high"]
+ const OPENAI_EFFORTS = ["none", "minimal", ...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
++// Muse subscription models share Meta's Responses reasoning controls, without
++// the OpenAI-specific `none` tier. muse-spark-1.3 additionally accepts `max`.
++// Order is weakest to strongest; the muse-code plugin supplies the same key
++// order so the provider merge preserves it.
++const MUSE_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"]
++
++// Single owner for OpenAI Responses variant settings shared by the Meta
++// API-key provider and the Muse subscription provider.
++function openaiResponsesVariants(efforts: readonly string[]) {
++  return Object.fromEntries(
++    efforts.map((effort) => [
++      effort,
++      {
++        reasoningEffort: effort,
++        reasoningSummary: "auto",
++        include: INCLUDE_ENCRYPTED_REASONING,
++      },
++    ]),
++  )
++}
+ const OPENAI_GPT5_1_EFFORTS = ["none", ...WIDELY_SUPPORTED_EFFORTS]
+ const OPENAI_GPT5_2_PLUS_EFFORTS = [...OPENAI_GPT5_1_EFFORTS, "xhigh"]
+ const OPENAI_GPT5_PRO_EFFORTS = ["high"]
+@@ -1003,18 +1023,14 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
+       )
+     case "@ai-sdk/amazon-bedrock/mantle":
+     case "@ai-sdk/openai": {
+-      if (model.providerID === "meta") {
+-        return Object.fromEntries(
+-          OPENAI_EFFORTS.map((effort) => [
+-            effort,
+-            {
+-              reasoningEffort: effort,
+-              reasoningSummary: "auto",
+-              include: INCLUDE_ENCRYPTED_REASONING,
+-            },
+-          ]),
++      if (model.providerID === "muse-code") {
++        return openaiResponsesVariants(
++          model.api.id === "muse-spark-1.3" ? [...MUSE_EFFORTS, "max"] : [...MUSE_EFFORTS],
+         )
+       }
++      if (model.providerID === "meta") {
++        return openaiResponsesVariants(OPENAI_EFFORTS)
++      }
+       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/openai
+       const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
+       return Object.fromEntries(
+@@ -1259,7 +1275,10 @@ export function options(input: {
+     }
+   }
+
+-  if (input.model.providerID === "meta" && input.model.api.npm === "@ai-sdk/openai") {
++  if (
++    (input.model.providerID === "meta" || input.model.providerID === "muse-code") &&
++    input.model.api.npm === "@ai-sdk/openai"
++  ) {
+     result["reasoningSummary"] = "auto"
+     result["include"] = INCLUDE_ENCRYPTED_REASONING
+   }
