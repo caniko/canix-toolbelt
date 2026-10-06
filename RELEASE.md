@@ -1,5 +1,22 @@
 # Rust release execution
 
+## 0.3.0 Roborev publication
+
+The producer implementation was merged in [PR #9](https://github.com/caniko/canix-toolbelt/pull/9).
+Toolbelt publishes `0.3.0`; the independent Linux worker publishes `0.1.0`.
+Before either publication, qualify the release candidate through full CI,
+all declared Nix installables, worker native regression/publication gates,
+maintainer trust and package-content inspection. The final receipt coverage and
+ID/UUID custody fixes belong to the `0.3.0` release notes.
+
+Create a signed annotated numeric `0.3.0` tag for the Toolbelt publisher and a
+signed annotated `roborev-worker-0.1.0` tag for the independent worker. Verify both
+against the pinned maintainer keyring. The root `publish-crate.yaml` publishes
+only Toolbelt; publish the independently qualified worker archive through Cargo
+from the same tagged source. Verify both registry versions and archive checksums
+before migrating consumers. Nix consumers separately pin the qualified producer
+revision; registry availability alone does not qualify a flake revision.
+
 ## 0.2.0 publication
 
 The release adds the provider-review library and guarded standalone CLI merged

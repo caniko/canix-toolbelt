@@ -366,3 +366,44 @@ fn local_advisory_range_does_not_attest_or_qualify_a_different_pr_base() {
         0
     );
 }
+
+#[test]
+fn advisory_comparisons_must_still_attest_the_selected_head() {
+    for git_ref in [
+        format!("{}..{}", "c".repeat(40), "d".repeat(40)),
+        format!("trunk..{}", candidate().head),
+        "dirty".into(),
+    ] {
+        let job = json!({"id":7,"uuid":"range-job","git_ref":git_ref});
+        let raw = json!({"id":9,"job_id":7,"job":job,
+            "structured_output":{"schema_version":2,"summary":"No findings","verdict":"pass","findings":[]},
+            "file_coverage":{"reviewed":1,"excluded":0}});
+        assert!(
+            normalize_roborev_local(
+                &raw,
+                &job,
+                &candidate(),
+                &policy(),
+                1,
+                RoborevLocalScope::Committed,
+            )
+            .is_err(),
+            "accepted unbound advisory comparison: {git_ref}"
+        );
+    }
+    let job = json!({"id":7,"uuid":"range-job","git_ref":format!("{}..{}", candidate().base, candidate().head)});
+    let raw = json!({"id":9,"job_id":7,"job":job,
+        "structured_output":{"schema_version":2,"summary":"No findings","verdict":"pass","findings":[]},
+        "file_coverage":{"reviewed":1,"excluded":0}});
+    assert!(
+        normalize_roborev_local(
+            &raw,
+            &job,
+            &candidate(),
+            &policy(),
+            1,
+            RoborevLocalScope::WorkingTree,
+        )
+        .is_err()
+    );
+}

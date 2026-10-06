@@ -5,6 +5,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-06
+
 ### Fixed
 
 - Require independently verified full file coverage before publishing a complete
@@ -12,13 +14,23 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Preserve the original daemon job ID/UUID across dispatch and receipt recovery;
   numeric-ID-only journals require explicit reconciliation without replay.
 - Prepare namespace admission for the mandatory hosted Roborev worker tests.
+- Preserve the client comparison contract: advisory committed reviews still
+  require a full actual base and the selected head; working-tree reviews require
+  the captured `dirty` scope.
+- Run frontend qualification scripts with native Node instead of tracing their
+  processes through Bun's FHS runner, retaining every generation and asset check.
+- Reject truncated HTTP chunk terminators/trailers even when the received JSON
+  is valid; enforce a single deadline across local daemon reads and writes.
+- Retain earlier review attempts across comparison changes and preserve UNKNOWN
+  outcomes during legacy journal migration instead of granting replay.
 
 ### Changed
 
 - Roborev dispatches carry `expected_files`, and runner enqueue replies return
   `RoborevJobIdentity`. Saved-review construction consumes both frozen contracts.
-
-## [0.3.0] - 2026-10-06
+- `Review` gains optional provider job/review and actual compared-base identities;
+  `GitHub::publish_check` requires an explicit dedicated-App policy.
+- Review commands require consumer-owned policy.
 
 ### Added
 
@@ -30,6 +42,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   retained completion and mandatory offline-boundary verification.
 - Reusable Roborev Nix package, Home Manager modules, flake composition and
   qualification fixtures, extracted from Canix.
+
+## [0.2.1] - 2026-10-06
+
+### Added
+
+- Explicit roborev receipt collection, request-bound publication and durable
+  dispatch through a provisioned Unix socket, with complete canonical findings.
 - Durable systemd-stage operator with an optional Unix CLI, execution-contract
   binding, kernel locking, synchronized checkpoints, bounded retries and worker
   restoration. Interrupted runs reject a changed package/argument contract and
@@ -37,19 +56,22 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
-- Reject truncated HTTP chunk terminators/trailers even when the received JSON
-  is valid; enforce a single deadline across local daemon reads and writes.
-- Retain earlier review attempts across comparison changes and preserve UNKNOWN
-  outcomes during legacy journal migration instead of granting replay.
 - Start cold systemd stage units without resetting nonexistent failed state,
   retaining bounded retries for missing units and service-manager errors.
+- Retain CI qualification when branch protection requires only the review-policy
+  check; failed, pending, cancelled, skipped or missing CI still blocks merging.
+- Match App-bound required checks by both context and GitHub App identity, so
+  unrelated advisory checks and legacy statuses cannot block satisfied requirements.
+- Preserve comparison and policy history across review retries, and keep unknown
+  submissions fenced when their journal is missing.
+- Bind receipt publication to the original forge request so edited markers or
+  changed evidence cannot open another publication lifetime.
+- Provide Git for Nix-packaged review comparison tests.
 
 ### Changed
 
-- `Review` gains optional provider job/review and actual compared-base identities;
-  `GitHub::publish_check` requires an explicit dedicated-App policy.
-- Native merge checks remain mandatory; provider review is selected explicitly
-  with `merge --require-review`. Review commands require consumer-owned policy.
+- Validate native CI and forge protection independently of optional provider
+  review; `merge --require-review` retains the explicit provider acceptance gate.
 
 ## [0.2.0] - 2026-10-04
 
@@ -92,5 +114,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   one supported Fleetix series with the runtime loader.
 
 [Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.3.0...HEAD
-[0.3.0]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...0.3.0
+[0.3.0]: https://github.com/caniko/canix-toolbelt/compare/0.2.1...0.3.0
+[0.2.1]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0

@@ -49,7 +49,7 @@
   frontend = buildPkgs.stdenvNoCC.mkDerivation {
     pname = "roborev-web";
     inherit version src;
-    nativeBuildInputs = [bunToolchain.bun buildPkgs.nodejs];
+    nativeBuildInputs = [buildPkgs.nodejs];
     configurePhase = ''
       runHook preConfigure
       export HOME="$TMPDIR/home" BUN_INSTALL_CACHE_DIR="$TMPDIR/bun-cache"
@@ -61,10 +61,15 @@
     '';
     buildPhase = ''
       runHook preBuild
-      bun run --cwd web generate:check
-      bun run --cwd web typecheck
-      bun run --cwd web build
-      bun run --cwd web assets:check
+      # These scripts use Node APIs and erasable TypeScript. Run them natively
+      # to avoid tracing frontend checks through Bun's PRoot FHS runner.
+      (
+        cd web
+        time node scripts/generate-api.ts --check
+        time node node_modules/svelte-check/bin/svelte-check --tsconfig ./tsconfig.json --fail-on-warnings
+        time node node_modules/vite/bin/vite.js build
+        time node scripts/validate-assets.ts dist
+      )
       runHook postBuild
     '';
     installPhase = ''
@@ -131,6 +136,8 @@
     };
   };
 in
+  assert lib.assertMsg (lib.versionAtLeast buildPkgs.nodejs.version "24.2.0")
+  "roborev frontend checks require Node 24.2+ for native TypeScript and import.meta.main";
   assert lib.assertMsg (toolchain.go.version == "1.27.1")
   "roborev's frozen Harbor contract requires Go 1.27.1; requalify before changing toolchains";
   assert lib.assertMsg

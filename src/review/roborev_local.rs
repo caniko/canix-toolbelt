@@ -161,11 +161,31 @@ fn verify_comparison(
     scope: RoborevLocalScope,
 ) -> Result<(), Error> {
     candidate.validate()?;
+    if scope == RoborevLocalScope::WorkingTree {
+        return if git_ref == "dirty" {
+            Ok(())
+        } else {
+            Err(Error(
+                "working-tree review requires the captured dirty comparison".into(),
+            ))
+        };
+    }
     if scope == RoborevLocalScope::PullRequest
         && git_ref != format!("{}..{}", candidate.base, candidate.head)
     {
         return Err(Error(
             "PR review must compare the full observed target SHA to the source SHA".into(),
+        ));
+    }
+    let (base, head) = git_ref
+        .split_once("..")
+        .ok_or_else(|| Error("review comparison must contain two full commit IDs".into()))?;
+    if !matches!(base.len(), 40 | 64)
+        || !base.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || head != candidate.head
+    {
+        return Err(Error(
+            "review comparison must attest the actual base and intended source SHA".into(),
         ));
     }
     Ok(())
