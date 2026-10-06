@@ -38,6 +38,17 @@ insufficient. `RoborevGitHub` authenticates receipts against the dedicated polic
 App and fresh forge facts. Policy loading is explicit and never falls back to an
 unselected provider.
 
+`RoborevDispatch.expected_files` is the independently verified full comparison
+census. The preparation callback returns `(checkout, agent, expected_files, runner)`;
+the runner verifies the checkout and census on every dispatch. A complete receipt
+requires persisted coverage with no excluded files and exactly that reviewed count.
+`RoborevRunner::enqueue` returns `RoborevJobIdentity { id, uuid }`; dispatch journals
+retain both identities and correlate every listing and saved review against them.
+`RoborevReceipt::from_saved_review` accepts the frozen dispatch, policy, original
+job identity and persisted review. Dispatch journal version 2 preserves UNKNOWN
+recovery; older numeric-ID-only journals remain intact and require reconciliation
+with their original implementation rather than acquiring UUID authority implicitly.
+
 Version 0.3 adds fields to `Review` and binds `GitHub::publish_check` to an explicit
 policy. Downstream struct literals must initialize `provider_job_id`,
 `provider_review_id` and `reviewed_base`; older serialized records still decode.
@@ -61,3 +72,7 @@ broker, root-owned custody or live provider/forge execution. A consumer adopts
 registry APIs only after verifying the released artifact, and Nix interfaces only
 after exact-source producer CI passes. Existing UNKNOWN attempts are never
 reset or replayed during migration.
+
+The required native-worker CI job prepares namespace admission on its disposable
+GitHub-hosted Ubuntu runner before running Nix-store Bubblewrap. This prerequisite
+does not change the worker's confinement policy or skip isolation tests.

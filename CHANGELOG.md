@@ -5,6 +5,19 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Require independently verified full file coverage before publishing a complete
+  Roborev review receipt; unknown coverage and excluded files cannot qualify.
+- Preserve the original daemon job ID/UUID across dispatch and receipt recovery;
+  numeric-ID-only journals require explicit reconciliation without replay.
+- Prepare namespace admission for the mandatory hosted Roborev worker tests.
+
+### Changed
+
+- Roborev dispatches carry `expected_files`, and runner enqueue replies return
+  `RoborevJobIdentity`. Saved-review construction consumes both frozen contracts.
+
 ## [0.3.0] - 2026-10-06
 
 ### Added
