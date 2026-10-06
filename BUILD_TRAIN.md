@@ -1,13 +1,19 @@
-# Shared construction candidate
+# Shared construction
 
 The build-train adapter composes Fleetix's builder-local coordinator with the
-specialist `nix-manager-core` native frontier. It is a candidate for toolbelt's
-next minor release, not an interface in the currently published crate.
+specialist `nix-manager-core` native frontier. Toolbelt's `0.4.0` release candidate
+adds this optional interface while preserving the published `0.3.0` review APIs.
 
-The intended Cargo feature is `build-train`; the service executable additionally
-requires `cli`. Ordinary registry integration waits for qualified Fleetix 0.5 and
-the native backend's first registry publication. Local path-patched tests qualify
-the candidate code only.
+The Cargo feature is `build-train`; the service executable additionally requires
+`cli`. Fleetix `0.5.1` and nix-manager-core `0.3.0` are published registry
+dependencies. Toolbelt's candidate has passed all-feature and library-only tests,
+warnings-denied Clippy and rustdoc, and compilation of the packaged archive using
+those registry dependencies. Local path-patched lifecycle fixtures separately
+qualify their captured candidate sources.
+
+Fleetix `0.5.1` preserves request-local terminal failures before importing store
+evidence during worker completion and restart. Materialized outputs do not clear
+a failed request; its own explicit retry and live admission remain required.
 
 ## Service and policy
 

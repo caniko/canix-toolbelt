@@ -184,6 +184,8 @@
       in {
         checks =
           {
+            build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs;};
+            build-train-policy = assert import ./nixos-tests/build-train-policy.nix != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
@@ -275,6 +277,10 @@
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
+        packages.canix-toolbelt-build-train = import ./nix/package.nix {
+          inherit pkgs;
+          buildTrain = true;
+        };
         packages.canix-toolbelt-roborev-worker = import ./nix/roborev-worker.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let

@@ -6,6 +6,9 @@ runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
   ".#canix-toolbelt",
+  ".#canix-toolbelt-build-train",
+  ".#checks.x86_64-linux.build-train-eval",
+  ".#checks.x86_64-linux.build-train-policy",
   ".#canix-toolbelt-roborev-worker",
   ".#roborev",
   ".#checks.x86_64-linux.roborev-module",

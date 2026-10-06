@@ -1,5 +1,21 @@
 # canix-toolbelt Rust library and CLI
 
+## Shared construction
+
+The optional Unix `build-train` feature composes Fleetix's coordinator with
+`nix-manager-core`'s native named-output frontier. The `cli` feature exposes
+`canix-toolbelt build-train serve --config <service.json>` and request inspection,
+cancellation, held retry, retirement and fence commands using a deployment-owned
+connection file. Library consumers use `build_train::Connection` and Fleetix's
+typed request protocol directly.
+
+The NixOS module `nixosModules.build-train` supplies a private builder-local service
+and immutable discovery contract. Its `package` must enable both `cli` and
+`build-train`; `packages.<system>.canix-toolbelt-build-train` provides that output.
+Consumers retain their own admission, attempt checkpoints, publication and
+activation stages. See [BUILD_TRAIN.md](BUILD_TRAIN.md) for lifecycle guarantees
+and qualification evidence.
+
 ## Before merging changes
 
 Install the CLI with `cargo install canix-toolbelt --features cli`. From the
