@@ -131,13 +131,15 @@
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
           roborev = {inputs, ...}: {
-            imports = [(import ./flake-modules/roborev.nix {
-              nixpkgs = inputs.nixpkgs;
-              harborGo = inputs.harbor-go;
-              harborJs = inputs.harbor-js;
-              harborMeta = inputs.harbor-meta;
-              homeManager = inputs.home-manager;
-            })];
+            imports = [
+              (import ./flake-modules/roborev.nix {
+                inherit (inputs) nixpkgs;
+                harborGo = inputs.harbor-go;
+                harborJs = inputs.harbor-js;
+                harborMeta = inputs.harbor-meta;
+                homeManager = inputs.home-manager;
+              })
+            ];
           };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
