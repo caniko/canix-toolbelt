@@ -123,6 +123,15 @@
           git-hooks = ./flake-modules/git-hooks.nix;
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
+          roborev = {inputs, ...}: {
+            imports = [(import ./flake-modules/roborev.nix {
+              nixpkgs = inputs.nixpkgs;
+              harborGo = inputs.harbor-go;
+              harborJs = inputs.harbor-js;
+              harborMeta = inputs.harbor-meta;
+              homeManager = inputs.home-manager;
+            })];
+          };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
           topology = ./flake-modules/topology.nix;
@@ -144,6 +153,16 @@
         checks =
           {
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
+            roborev-module = let
+              results = import ./tests/roborev/eval.nix {
+                inherit pkgs;
+                homeManager = inputs.home-manager;
+              };
+            in
+              assert pkgs.lib.assertMsg
+              (builtins.all (value: value) (builtins.attrValues results))
+              "roborev module regression failed";
+                pkgs.writeText "roborev-module-results.json" (builtins.toJSON results);
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
@@ -211,6 +230,7 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
+        packages.canix-toolbelt-roborev-worker = import ./nix/roborev-worker.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
