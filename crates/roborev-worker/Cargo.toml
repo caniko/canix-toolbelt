@@ -10,7 +10,7 @@ documentation = "https://docs.rs/canix-toolbelt-roborev-worker"
 keywords = ["roborev", "review", "linux", "isolation"]
 categories = ["development-tools", "os::linux-apis"]
 readme = "README.md"
-include = ["/src/**", "/tests/**", "/README.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
+include = ["/src/**", "/tests/**", "/README.md", "/CHANGELOG.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
 
 # Independent Linux package: the portable Toolbelt library keeps forbidding
 # unsafe code and does not require a Linux worker to consume review contracts.

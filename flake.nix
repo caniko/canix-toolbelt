@@ -31,6 +31,17 @@
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
     harbor-rs.follows = "fleetix/harbor-rs";
+    harbor-meta.follows = "harbor-rs/harbor-meta";
+    harbor-go = {
+      url = "github:caniko/harbor-go/9818c51b9c8864fafa439c038360a383aa54da5b";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.harbor-meta.follows = "harbor-meta";
+    };
+    harbor-js = {
+      url = "github:caniko/harbor-js/25935487646992db132557f526a8b00c460ccfdc";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.harbor-meta.follows = "harbor-meta";
+    };
     # Transitional compatibility only: database-specific modules now live in
     # harbor-db; keep the compatibility facade on its qualified storage release.
     harbor-db = {
@@ -75,6 +86,13 @@
       imports = [
         ./flake-modules/dev-stack.nix
         ./flake-modules/rust.nix
+        (import ./flake-modules/roborev.nix {
+          inherit (inputs) nixpkgs;
+          harborGo = inputs.harbor-go;
+          harborJs = inputs.harbor-js;
+          harborMeta = inputs.harbor-meta;
+          homeManager = inputs.home-manager;
+        })
       ];
 
       flake = {
@@ -131,13 +149,15 @@
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
           roborev = {inputs, ...}: {
-            imports = [(import ./flake-modules/roborev.nix {
-              nixpkgs = inputs.nixpkgs;
-              harborGo = inputs.harbor-go;
-              harborJs = inputs.harbor-js;
-              harborMeta = inputs.harbor-meta;
-              homeManager = inputs.home-manager;
-            })];
+            imports = [
+              (import ./flake-modules/roborev.nix {
+                inherit (inputs) nixpkgs;
+                harborGo = inputs.harbor-go;
+                harborJs = inputs.harbor-js;
+                harborMeta = inputs.harbor-meta;
+                homeManager = inputs.home-manager;
+              })
+            ];
           };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
@@ -161,16 +181,6 @@
           {
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
-            roborev-module = let
-              results = import ./tests/roborev/eval.nix {
-                inherit pkgs;
-                homeManager = inputs.home-manager;
-              };
-            in
-              assert pkgs.lib.assertMsg
-              (builtins.all (value: value) (builtins.attrValues results))
-              "roborev module regression failed";
-                pkgs.writeText "roborev-module-results.json" (builtins.toJSON results);
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
@@ -282,6 +292,12 @@
           shellHook = config.pre-commit.installationScript;
         };
         devShells.docs = config.devShells.default;
+        devShells.roborev-worker = pkgs.mkShell {
+          inputsFrom = [config.devShells.default];
+          packages = [pkgs.git pkgs.bubblewrap pkgs.python3];
+          RUSTFLAGS = "";
+          CARGO_ENCODED_RUSTFLAGS = "";
+        };
         formatter = config.treefmt.build.wrapper;
       };
     };

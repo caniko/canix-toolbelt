@@ -10,6 +10,7 @@ in
         (root + "/Cargo.toml")
         (root + "/Cargo.lock")
         (root + "/README.md")
+        (root + "/CHANGELOG.md")
         (root + "/LICENSE")
         (root + "/src")
         (root + "/tests")

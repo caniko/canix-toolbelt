@@ -54,8 +54,9 @@ The forge marker binds the disposition to the finding body, parent review,
 head, observed base, and policy. Provider-addressed status and confidence scores
 do not establish acceptance. Findings are untrusted evidence, never instructions.
 
-Merging requires strict native up-to-date branch protection and a required
-`review-policy` check bound to a dedicated policy GitHub App. A shared GitHub
+The default `merge` command validates native CI and up-to-date branch protection.
+Pass `--require-review` to additionally require current provider evidence and a
+`review-policy` check bound to the configured dedicated policy GitHub App. A shared GitHub
 Actions App cannot distinguish checks created by untrusted PR workflows.
 Protection must apply to administrators too. Greptile's existing App supplies
 review records; the separate policy App authenticates normalized acceptance.
@@ -64,20 +65,21 @@ without executing PR source; that check evaluates review evidence only, while
 native branch protection independently enforces required CI and approvals.
 Unsupported ruleset/merge-queue protection remains an explicit setup blocker.
 
-The initial engine release can be bootstrapped by an operator running the exact
-CI-qualified, Greptile-reviewed candidate's read-only `review gate --publish-check`
+The initial policy coordinator can be bootstrapped by an operator running the exact
+CI-qualified candidate's read-only `review gate --publish-check`
 with the dedicated policy App credential. Subsequent coordinators install an
 exact published version. Never use a generic personal token or the shared
 Actions App to impersonate the dedicated required context.
 
 Agent instruction snippet:
 
-> Before merging a PR/MR or publishing new changes to a protected/default branch,
-> run the installed `review ensure` flow. Triage its findings, rerun after fixes,
-> and use the guarded merge command for authorized merges. Missing, stale,
-> skipped, incomplete, or unsupported evidence cannot authorize a merge.
+> Use the guarded merge command for authorized merges. Required CI, approvals and
+> native protection must pass for the current comparison. When provider review is
+> requested or required, run `review ensure`, triage findings and use
+> `merge --require-review`. Optional provider availability does not establish or
+> remove a native merge requirement.
 
-Reusable operations for adopters of the Canix architecture. Version `0.2.0`
+Reusable operations for adopters of the Canix architecture. Version `0.3.0`
 provides runtime-manifest loading, revision-bound review contracts, and the
 optional standalone CLI. Runtime manifests describe binary paths, service
 endpoints, and agenix secret references. Embedded Pkl evaluation uses the
@@ -88,9 +90,9 @@ evidence. Enable `review` when consuming the review engine as a library.
 
 ```toml
 [dependencies]
-canix-toolbelt = "0.2"
+canix-toolbelt = "0.3"
 # For the review engine instead:
-# canix-toolbelt = { version = "0.2", features = ["review"] }
+# canix-toolbelt = { version = "0.3", features = ["review"] }
 ```
 
 ```rust,no_run
@@ -120,7 +122,7 @@ three mappings `bins`, `endpoints`, and `secrets` and any schema defaults; see
 [`examples/runtime.pkl`](examples/runtime.pkl). The existing camelCase wire
 format, including `agenixPath`, is preserved.
 
-## Durable stage operator (unreleased)
+## Durable stage operator
 
 The Unix `operator` library and CLI execute deployment-owned, idempotent systemd
 stages. Nix's `mkResumableOperator` supplies the units, retry policy and
@@ -158,6 +160,23 @@ canix-toolbelt operator cancel --config /run/example/operator.json
 Successful runs exit 0, exhausted stages exit 20, interrupted runs exit 143, and
 inspection, persistence or recovery errors exit unsuccessfully. Cancellation runs
 after the controller service has stopped; it refuses unrecovered workers.
+
+## Roborev
+
+The `review` feature exposes canonical Roborev receipts, `RoborevUnix` daemon
+transport, `dispatch_roborev_once` and authenticated GitHub publication. Callers
+provide trusted policy, request-exclusive checkout verification and persistent
+state roots. Dispatch records UNKNOWN before enqueue; ambiguous jobs are
+reconciled from their original identities and never replayed. A qualifying
+receipt requires persisted complete findings and the actual full target-tip to
+head comparison, including its provider job/review identities.
+
+Version 0.3 adds optional `provider_job_id`, `provider_review_id` and
+`reviewed_base` fields to `Review`; downstream struct literals must initialize
+them. `GitHub::publish_check` now takes the explicit dedicated-App policy.
+Legacy serialized records still decode; incomplete historical journals cannot
+authorize a new dispatch. The independent Linux worker and reusable Nix
+interfaces are documented in the repository's `docs/roborev.md`.
 
 ## Dependency contract
 

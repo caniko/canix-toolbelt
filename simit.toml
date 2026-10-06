@@ -6,6 +6,10 @@ runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
   ".#canix-toolbelt",
+  ".#canix-toolbelt-roborev-worker",
+  ".#roborev",
+  ".#checks.x86_64-linux.roborev-module",
+  ".#checks.x86_64-linux.roborev-unit",
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#opencode-browser-adapter",
@@ -68,4 +72,9 @@ timeout_minutes = 30
 [[ci.required_gates]]
 id = "supported-systems"
 run = "bash scripts/qualify-source.sh"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "roborev-worker"
+run = "nix develop --max-jobs 1 --cores 2 .#roborev-worker -c bash scripts/roborev-worker-regressions.sh"
 timeout_minutes = 30
