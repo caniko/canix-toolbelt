@@ -23,11 +23,17 @@ impl AuthorizedRoborevRequest {
         &self.intent
     }
     /// Bind a consumer-owned exclusive checkout and approved adapter.
-    pub fn dispatch(&self, checkout: String, agent: String) -> RoborevDispatch {
+    pub fn dispatch(
+        &self,
+        checkout: String,
+        agent: String,
+        expected_files: usize,
+    ) -> RoborevDispatch {
         RoborevDispatch {
             intent: self.intent.clone(),
             checkout,
             agent,
+            expected_files,
         }
     }
 }
@@ -135,7 +141,8 @@ impl RoborevGitHub {
     /// Discover authorization, prepare the consumer's exclusive immutable checkout,
     /// revalidate authorization, dispatch/collect once, then revalidate and publish.
     /// Preparation must not enqueue reviews or launch agents. Its runner must
-    /// verify the actual checkout and qualified worker policy on every dispatch.
+    /// verify the actual checkout, full file census and qualified worker policy on
+    /// every dispatch.
     /// Consumer-owned confinement/credential separation remain mandatory; this
     /// orchestration does not make a personal checkout or same-UID daemon safe.
     /// Errors retain the underlying UNKNOWN ledgers and must not be retried through
@@ -145,13 +152,13 @@ impl RoborevGitHub {
         url: &str,
         policy: &Policy,
         state_dir: &Path,
-        prepare: impl FnOnce(&AuthorizedRoborevRequest) -> Result<(String, String, R), Error>,
+        prepare: impl FnOnce(&AuthorizedRoborevRequest) -> Result<(String, String, usize, R), Error>,
     ) -> Result<RoborevProgress, Error> {
         let Some(request) = self.authorized_request(url, policy)? else {
             return Ok(RoborevProgress::Unrequested);
         };
-        let (checkout, agent, mut runner) = prepare(&request)?;
-        let dispatch = request.dispatch(checkout, agent);
+        let (checkout, agent, expected_files, mut runner) = prepare(&request)?;
+        let dispatch = request.dispatch(checkout, agent, expected_files);
         runner.verify_checkout(&dispatch)?;
         let current = self.authorized_request(url, policy)?;
         if current
@@ -581,17 +588,25 @@ mod tests {
         fn jobs(&mut self, _: &RoborevDispatch) -> Result<Vec<Value>, Error> {
             Ok(self.jobs.clone())
         }
-        fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<u64, Error> {
+        fn enqueue(
+            &mut self,
+            dispatch: &RoborevDispatch,
+        ) -> Result<crate::review::RoborevJobIdentity, Error> {
             self.enqueues.set(self.enqueues.get() + 1);
-            self.jobs.push(json!({"id":7,"repo_path":dispatch.checkout,
+            let identity = crate::review::RoborevJobIdentity {
+                id: 7,
+                uuid: "11111111-1111-1111-1111-111111111111".into(),
+            };
+            self.jobs.push(json!({"id":7,"uuid":identity.uuid,"repo_path":dispatch.checkout,
                 "git_ref":format!("{}..{}",dispatch.intent.candidate.base,dispatch.intent.candidate.head),
                 "agent":dispatch.agent,"status":"done","job_type":"range","agentic":false,
                 "prompt_prebuilt":false,"min_severity":"low"}));
-            Ok(7)
+            Ok(identity)
         }
         fn saved_review(&mut self, id: u64) -> Result<Value, Error> {
             Ok(
                 json!({"id":9,"job_id":id,"agent":"opencode","job":self.jobs[0],
+                "file_coverage":{"reviewed":1,"excluded":0},
                 "structured_output":receipt().document}),
             )
         }
@@ -611,7 +626,7 @@ mod tests {
                 &candidate().url,
                 &policy(),
                 &state,
-                |_| -> Result<(String, String, CoordinatorRunner), Error> {
+                |_| -> Result<(String, String, usize, CoordinatorRunner), Error> {
                     panic!("unauthorized request reached worker preparation")
                 },
             )
@@ -640,7 +655,7 @@ mod tests {
                     &candidate().url,
                     &policy(),
                     &directory.path().join("state"),
-                    |_| Ok(("/fixture/exclusive".into(), "opencode".into(), runner)),
+                    |_| Ok(("/fixture/exclusive".into(), "opencode".into(), 1, runner)),
                 )
                 .is_err()
         );
@@ -664,7 +679,12 @@ mod tests {
         let (github, handle) = server(responses);
         let progress = RoborevGitHub::new(github)
             .coordinate_request_once(&candidate().url, &policy(), &state, |_| {
-                Ok(("/fixture/exclusive".into(), "opencode".into(), &mut runner))
+                Ok((
+                    "/fixture/exclusive".into(),
+                    "opencode".into(),
+                    1,
+                    &mut runner,
+                ))
             })
             .unwrap();
         assert!(
@@ -677,7 +697,12 @@ mod tests {
         let (github, handle) = server(responses);
         let again = RoborevGitHub::new(github)
             .coordinate_request_once(&candidate().url, &policy(), &state, |_| {
-                Ok(("/fixture/exclusive".into(), "opencode".into(), &mut runner))
+                Ok((
+                    "/fixture/exclusive".into(),
+                    "opencode".into(),
+                    1,
+                    &mut runner,
+                ))
             })
             .unwrap();
         assert!(matches!(again, RoborevProgress::Published { .. }));

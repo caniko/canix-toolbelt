@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         checkout: String,
         socket: PathBuf,
         state: PathBuf,
+        expected_files: usize,
     }
     let input: Input = serde_json::from_slice(&fs::read(
         std::env::args_os()
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         intent,
         checkout: input.checkout,
         agent: "opencode".into(),
+        expected_files: input.expected_files,
     };
     let mut runner = RoborevUnix::new(
         input.socket,
@@ -83,6 +85,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     return Err(Error("fixture full comparison commit mismatch".into()));
                 }
+            }
+            let paths = git(&[
+                "diff",
+                "--name-only",
+                "-z",
+                &format!(
+                    "{}..{}",
+                    selected.intent.candidate.base, selected.intent.candidate.head
+                ),
+            ])?;
+            if paths.bytes().filter(|byte| *byte == 0).count() != selected.expected_files {
+                return Err(Error("fixture complete comparison census mismatch".into()));
             }
             Ok(())
         },

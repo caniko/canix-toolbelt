@@ -81,7 +81,8 @@ def main():
         assert base != head
         comparison = f"{base}..{head}"
         candidate = {"url": "https://github.com/example/fixture/pull/1", "sourceRepository": "example/fixture",
-                     "sourceBranch": "main", "targetBranch": "main", "head": head, "base": base, "draft": False, "open": True}
+                      "sourceBranch": "main", "targetBranch": "main", "head": head, "base": base, "draft": False, "open": True}
+        expected_files = run(["git", "diff", "--name-only", "-z", comparison]).count("\0")
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify, (scratch / "daemon.log").open("w") as log:
             notify.bind(str(root / "notify"))
             notify.settimeout(30)
@@ -100,7 +101,8 @@ def main():
                 else:
                     producer_input = root / "producer-input.json"
                     producer_input.write_text(json.dumps({"candidate": candidate, "checkout": str(repo),
-                                                          "socket": str(endpoints[0]), "state": str(root / "dispatch-state")}))
+                                                          "socket": str(endpoints[0]), "state": str(root / "dispatch-state"),
+                                                          "expected_files": expected_files}))
                     published = json.loads(run([producer, str(producer_input)]))
                     assert published["candidate"] == candidate and published["document"] == document, published
                     assert published["status"] == "done" and published["completeFindings"] is True, published
@@ -115,6 +117,7 @@ def main():
                 assert saved["job"]["git_ref"] == comparison and saved["job"]["status"] == "done", saved
                 assert saved["job_id"] == saved["job"]["id"] and saved["agent"] == saved["job"]["agent"] == "opencode", saved
                 assert saved["structured_output"] == document, saved
+                assert saved["file_coverage"] == {"reviewed": expected_files, "excluded": 0}, saved
                 assert saved["job"]["repo_path"] == str(repo) and saved["job"]["min_severity"] == "low", saved
                 (scratch / "saved-comparison.json").write_text(json.dumps({"candidate": candidate, "saved": saved}, indent=2) + "\n")
                 receipt.update(head=head, base=base, git_ref=comparison, job_id=saved["job_id"], review_id=saved["id"],

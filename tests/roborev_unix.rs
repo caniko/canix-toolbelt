@@ -68,6 +68,7 @@ fn dispatch() -> canix_toolbelt::review::RoborevDispatch {
     RoborevDispatch {
         checkout: "/fixture/exclusive repo".into(),
         agent: "opencode".into(),
+        expected_files: 1,
         intent: Intent {
             schema_version: 1,
             id: "request".into(),
@@ -92,7 +93,7 @@ fn unix_api_preserves_exact_range_and_reads_every_page_and_persisted_review() {
     let (directory, socket, server) = fixture(vec![
         json!({"jobs":[{"id":2}],"has_more":true,"next_cursor":"opaque cursor"}),
         json!({"jobs":[{"id":1}],"has_more":false}),
-        json!({"id":7}),
+        json!({"id":7,"uuid":"11111111-1111-1111-1111-111111111111"}),
         json!({"id":9,"job_id":7}),
     ]);
     let verified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -105,7 +106,9 @@ fn unix_api_preserves_exact_range_and_reads_every_page_and_persisted_review() {
     let selected = dispatch();
     runner.verify_checkout(&selected).unwrap();
     assert_eq!(runner.jobs(&selected).unwrap().len(), 2);
-    assert_eq!(runner.enqueue(&selected).unwrap(), 7);
+    let enqueued = runner.enqueue(&selected).unwrap();
+    assert_eq!(enqueued.id, 7);
+    assert_eq!(enqueued.uuid, "11111111-1111-1111-1111-111111111111");
     assert_eq!(runner.saved_review(7).unwrap()["job_id"], 7);
     assert_eq!(verified.load(std::sync::atomic::Ordering::SeqCst), 1);
     let requests = server.join().unwrap();

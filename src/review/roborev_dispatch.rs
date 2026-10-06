@@ -19,20 +19,62 @@ pub struct RoborevDispatch {
     pub checkout: String,
     /// Explicit approved adapter selection; no model/provider override is supplied.
     pub agent: String,
+    /// Full comparison file count independently verified in the immutable checkout.
+    pub expected_files: usize,
+}
+
+/// Persisted daemon identity. Numeric IDs alone are local to one database.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoborevJobIdentity {
+    /// Positive database-local job ID.
+    pub id: u64,
+    /// Original canonical UUID, retained across every observation and recovery.
+    pub uuid: String,
+}
+
+impl RoborevJobIdentity {
+    pub(super) fn validate(&self) -> Result<(), Error> {
+        if self.id == 0
+            || self.uuid.len() != 36
+            || !self.uuid.bytes().enumerate().all(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+        {
+            return Err(Error(
+                "persisted roborev job requires its original ID and UUID".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn from_job(job: &Value) -> Result<Self, Error> {
+        let identity = Self {
+            id: job["id"].as_u64().unwrap_or(0),
+            uuid: job["uuid"].as_str().unwrap_or_default().into(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
 }
 
 /// Actual daemon/checkout boundary. Implementations must perform bounded I/O,
 /// return all pages, and never substitute Markdown for persisted review content.
 pub trait RoborevRunner {
     /// Verify both full commits in the immutable request checkout and the trusted
-    /// worker policy. PR-controlled settings/hooks must not alter execution.
+    /// worker policy and independently counted expected_files. PR-controlled
+    /// settings/hooks must not alter execution.
     fn verify_checkout(&mut self, dispatch: &RoborevDispatch) -> Result<(), Error>;
     /// All jobs for the request-exclusive checkout, including failed jobs. This
     /// must not hide jobs by range, status, severity, or default pagination.
     fn jobs(&mut self, dispatch: &RoborevDispatch) -> Result<Vec<Value>, Error>;
     /// Submit the full base..head range once, no panel, default review type and
     /// low/unfiltered findings. Any error is an UNKNOWN mutation outcome.
-    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<u64, Error>;
+    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<RoborevJobIdentity, Error>;
     /// Complete persisted review with its job metadata and canonical document.
     fn saved_review(&mut self, job_id: u64) -> Result<Value, Error>;
 }
@@ -44,7 +86,7 @@ impl<T: RoborevRunner + ?Sized> RoborevRunner for &mut T {
     fn jobs(&mut self, dispatch: &RoborevDispatch) -> Result<Vec<Value>, Error> {
         (**self).jobs(dispatch)
     }
-    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<u64, Error> {
+    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<RoborevJobIdentity, Error> {
         (**self).enqueue(dispatch)
     }
     fn saved_review(&mut self, job_id: u64) -> Result<Value, Error> {
@@ -58,7 +100,7 @@ struct Ledger {
     schema_version: u32,
     dispatch: RoborevDispatch,
     // None means UNKNOWN, never permission to retry an enqueue.
-    job_id: Option<u64>,
+    job: Option<RoborevJobIdentity>,
 }
 
 fn open_private(path: &Path, create_new: bool) -> Result<fs::File, std::io::Error> {
@@ -156,6 +198,7 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
         || !dispatch.intent.matches(&dispatch.intent.candidate, policy)
         || !dispatch.intent.candidate.open
         || dispatch.intent.id.is_empty()
+        || dispatch.expected_files == 0
         || !matches!(
             dispatch.agent.as_str(),
             "opencode" | "codex" | "claude-code"
@@ -178,12 +221,15 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
     let (_lock, fresh, path) = claim(state_dir, &key)?;
     let mut ledger = read_ledger::<Ledger>(&path, fresh)?;
     if let Some(old) = &ledger {
-        if old.schema_version != 1
+        if old.schema_version != 2
             || serde_json::to_value(&old.dispatch)? != serde_json::to_value(dispatch)?
         {
             return Err(Error(
                 "roborev request identity was reused with different dispatch content".into(),
             ));
+        }
+        if let Some(job) = &old.job {
+            job.validate()?;
         }
     }
     runner.verify_checkout(dispatch)?;
@@ -193,19 +239,15 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
             return Err(Error("request checkout already has roborev history; no job may be adopted before dispatch".into()));
         }
         let mut new = Ledger {
-            schema_version: 1,
+            schema_version: 2,
             dispatch: dispatch.clone(),
-            job_id: None,
+            job: None,
         };
         super::engine::save(&path, &new)?;
         // UNKNOWN is durable before this effect, including crashes and timeouts.
-        let id = runner.enqueue(dispatch)?;
-        if id == 0 {
-            return Err(Error(
-                "roborev enqueue did not return a persisted job identity".into(),
-            ));
-        }
-        new.job_id = Some(id);
+        let identity = runner.enqueue(dispatch)?;
+        identity.validate()?;
+        new.job = Some(identity);
         super::engine::save(&path, &new)?;
         ledger = Some(new);
         jobs = runner.jobs(dispatch)?;
@@ -214,10 +256,7 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
         return Err(Error("roborev dispatch is unknown or ambiguous; reconcile persisted jobs without another enqueue".into()));
     }
     let job = &jobs[0];
-    let id = job["id"]
-        .as_u64()
-        .filter(|id| *id > 0)
-        .ok_or_else(|| Error("missing persisted roborev job identity".into()))?;
+    let identity = RoborevJobIdentity::from_job(job)?;
     let range = format!(
         "{}..{}",
         dispatch.intent.candidate.base, dispatch.intent.candidate.head
@@ -231,25 +270,23 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
         || !matches!(job["min_severity"].as_str(), Some("" | "low"))
         || ledger
             .as_ref()
-            .and_then(|old| old.job_id)
-            .is_some_and(|old| old != id)
+            .and_then(|old| old.job.as_ref())
+            .is_some_and(|old| old != &identity)
     {
         return Err(Error(
             "persisted job does not match the exclusive frozen roborev dispatch".into(),
         ));
     }
     let mut ledger = ledger.ok_or_else(|| Error("missing write-ahead roborev intent".into()))?;
-    ledger.job_id = Some(id);
+    ledger.job = Some(identity.clone());
     super::engine::save(&path, &ledger)?;
     match job["status"].as_str() {
         Some("queued" | "running") => Ok(None),
         Some("done") => RoborevReceipt::from_saved_review(
-            &dispatch.intent,
+            dispatch,
             policy,
-            id,
-            &dispatch.checkout,
-            &dispatch.agent,
-            &runner.saved_review(id)?,
+            &identity,
+            &runner.saved_review(identity.id)?,
         )
         .map(Some),
         Some(status @ ("failed" | "skipped" | "cancelled")) => Ok(Some(RoborevReceipt {
@@ -257,7 +294,7 @@ pub fn dispatch_roborev_once<R: RoborevRunner>(
             request_id: dispatch.intent.id.clone(),
             candidate: dispatch.intent.candidate.clone(),
             policy_digest: dispatch.intent.policy_digest.clone(),
-            job_id: Some(id),
+            job_id: Some(identity.id),
             review_id: None,
             reviewed_head: dispatch.intent.candidate.head.clone(),
             reviewed_base: dispatch.intent.candidate.base.clone(),

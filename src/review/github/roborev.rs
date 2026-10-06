@@ -88,15 +88,17 @@ impl RoborevReceipt {
     /// checkout and selected agent; a same-head single-commit review cannot
     /// attest the requested base-to-head comparison.
     pub fn from_saved_review(
-        intent: &Intent,
+        dispatch: &crate::review::RoborevDispatch,
         policy: &Policy,
-        dispatched_job: u64,
-        checkout: &str,
-        agent: &str,
+        dispatched_job: &crate::review::RoborevJobIdentity,
         saved: &Value,
     ) -> Result<Self, Error> {
+        let intent = &dispatch.intent;
+        let checkout = &dispatch.checkout;
+        let agent = &dispatch.agent;
+        dispatched_job.validate()?;
         if !intent.matches(&intent.candidate, policy)
-            || dispatched_job == 0
+            || dispatch.expected_files == 0
             || checkout.is_empty()
             || agent.is_empty()
         {
@@ -106,8 +108,8 @@ impl RoborevReceipt {
             .get("job")
             .ok_or_else(|| Error("persisted review lacks its job evidence".into()))?;
         let range = format!("{}..{}", intent.candidate.base, intent.candidate.head);
-        if number(job, "/id")? != dispatched_job
-            || number(saved, "/job_id")? != dispatched_job
+        if crate::review::RoborevJobIdentity::from_job(job)? != *dispatched_job
+            || number(saved, "/job_id")? != dispatched_job.id
             || text(job, "/repo_path")? != checkout
             || text(job, "/git_ref")? != range
             || text(job, "/agent")? != agent
@@ -131,6 +133,19 @@ impl RoborevReceipt {
         {
             return Err(Error("persisted roborev job does not prove the dispatched complete comparison and selected agent".into()));
         }
+        if saved
+            .pointer("/file_coverage/excluded")
+            .and_then(Value::as_u64)
+            != Some(0)
+            || saved
+                .pointer("/file_coverage/reviewed")
+                .and_then(Value::as_u64)
+                != Some(dispatch.expected_files as u64)
+        {
+            return Err(Error(
+                "persisted roborev review does not prove complete file coverage".into(),
+            ));
+        }
         let document =
             serde_json::from_value(saved.get("structured_output").cloned().ok_or_else(|| {
                 Error("persisted review lacks canonical structured output".into())
@@ -141,7 +156,7 @@ impl RoborevReceipt {
             request_id: intent.id.clone(),
             candidate: intent.candidate.clone(),
             policy_digest: intent.policy_digest.clone(),
-            job_id: Some(dispatched_job),
+            job_id: Some(dispatched_job.id),
             review_id: Some(number(saved, "/id")?),
             reviewed_head: intent.candidate.head.clone(),
             reviewed_base: intent.candidate.base.clone(),
@@ -549,23 +564,28 @@ mod tests {
     #[test]
     fn producer_requires_actual_persisted_range_job_and_canonical_output() {
         let frozen = intent();
+        let dispatch = crate::review::RoborevDispatch {
+            intent: frozen.clone(),
+            checkout: "/frozen/request".into(),
+            agent: "opencode".into(),
+            expected_files: 1,
+        };
+        let identity = crate::review::RoborevJobIdentity {
+            id: 7,
+            uuid: "11111111-1111-1111-1111-111111111111".into(),
+        };
         let saved = json!({"id":9,"job_id":7,"agent":"opencode","structured_output":receipt().document,
-            "job":{"id":7,"repo_path":"/frozen/request","git_ref":format!("{}..{}",frozen.candidate.base,frozen.candidate.head),
-                "agent":"opencode","status":"done","job_type":"range","agentic":false,"prompt_prebuilt":false,"min_severity":"low"}});
+            "job":{"id":7,"uuid":identity.uuid,"repo_path":"/frozen/request","git_ref":format!("{}..{}",frozen.candidate.base,frozen.candidate.head),
+                "agent":"opencode","status":"done","job_type":"range","agentic":false,"prompt_prebuilt":false,"min_severity":"low"},
+            "file_coverage":{"reviewed":1,"excluded":0}});
         let build = |value: &Value| {
-            RoborevReceipt::from_saved_review(
-                &frozen,
-                &policy(),
-                7,
-                "/frozen/request",
-                "opencode",
-                value,
-            )
+            RoborevReceipt::from_saved_review(&dispatch, &policy(), &identity, value)
         };
         assert!(build(&saved).is_ok());
         for (pointer, value) in [
             ("/job/git_ref", json!(frozen.candidate.head)),
             ("/job/id", json!(8)),
+            ("/job/uuid", json!("22222222-2222-2222-2222-222222222222")),
             ("/job_id", json!(8)),
             ("/job/repo_path", json!("/other/request")),
             ("/job/agent", json!("codex")),
@@ -580,6 +600,51 @@ mod tests {
             *invalid.pointer_mut(pointer).unwrap() = value;
             assert!(build(&invalid).is_err(), "accepted invalid field {pointer}");
         }
+    }
+
+    #[test]
+    fn producer_rejects_unmeasured_or_excluded_comparisons() {
+        let frozen = intent();
+        let dispatch = crate::review::RoborevDispatch {
+            intent: frozen.clone(),
+            checkout: "/frozen/request".into(),
+            agent: "opencode".into(),
+            expected_files: 1,
+        };
+        let identity = crate::review::RoborevJobIdentity {
+            id: 7,
+            uuid: "11111111-1111-1111-1111-111111111111".into(),
+        };
+        let saved = json!({"id":9,"job_id":7,"agent":"opencode","structured_output":receipt().document,
+            "job":{"id":7,"uuid":identity.uuid,"repo_path":"/frozen/request","git_ref":format!("{}..{}",frozen.candidate.base,frozen.candidate.head),
+                "agent":"opencode","status":"done","job_type":"range","agentic":false,"prompt_prebuilt":false,"min_severity":"low"},
+            "file_coverage":{"reviewed":1,"excluded":0}});
+        for coverage in [
+            Value::Null,
+            json!({"reviewed":0,"excluded":4}),
+            json!({"reviewed":0,"excluded":0}),
+            json!({"reviewed":2,"excluded":0}),
+            json!({"reviewed":-1,"excluded":0}),
+            json!({"reviewed":1}),
+            json!({"excluded":0}),
+        ] {
+            let mut invalid = saved.clone();
+            invalid["file_coverage"] = coverage;
+            assert!(
+                RoborevReceipt::from_saved_review(&dispatch, &policy(), &identity, &invalid,)
+                    .is_err(),
+                "accepted incomplete coverage: {}",
+                invalid["file_coverage"]
+            );
+        }
+        let mut absent = saved.clone();
+        absent.as_object_mut().unwrap().remove("file_coverage");
+        assert!(
+            RoborevReceipt::from_saved_review(&dispatch, &policy(), &identity, &absent).is_err()
+        );
+        let mut empty = dispatch.clone();
+        empty.expected_files = 0;
+        assert!(RoborevReceipt::from_saved_review(&empty, &policy(), &identity, &saved).is_err());
     }
 
     #[test]

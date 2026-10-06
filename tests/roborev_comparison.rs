@@ -1,6 +1,9 @@
 #![cfg(feature = "review")]
 
-use canix_toolbelt::review::{Candidate, CheckRequirement, Intent, Policy, RoborevReceipt};
+use canix_toolbelt::review::{
+    Candidate, CheckRequirement, Intent, Policy, RoborevDispatch, RoborevJobIdentity,
+    RoborevReceipt,
+};
 use serde_json::json;
 use std::{path::Path, process::Command};
 
@@ -87,20 +90,30 @@ fn divergent_history_attests_target_tip_instead_of_merge_base() {
         baseline_review_ids: vec![],
     };
     let checkout = repo.to_str().unwrap();
+    let dispatch = RoborevDispatch {
+        intent: intent.clone(),
+        checkout: checkout.into(),
+        agent: "opencode".into(),
+        expected_files: git(repo, &["diff", "--name-only", &exact_range])
+            .lines()
+            .count(),
+    };
+    let identity = RoborevJobIdentity {
+        id: 7,
+        uuid: "11111111-1111-1111-1111-111111111111".into(),
+    };
     let mut saved = json!({"id":9,"job_id":7,"agent":"opencode",
-        "job":{"id":7,"repo_path":checkout,"git_ref":exact_range,"agent":"opencode",
+        "job":{"id":7,"uuid":identity.uuid,"repo_path":checkout,"git_ref":exact_range,"agent":"opencode",
             "job_type":"range","status":"done","agentic":false,"prompt_prebuilt":false,"min_severity":"low"},
-        "structured_output":{"schema_version":2,"summary":"Full target-to-head comparison","verdict":"pass","findings":[]}});
-    let receipt =
-        RoborevReceipt::from_saved_review(&intent, &policy, 7, checkout, "opencode", &saved)
-            .unwrap();
+        "structured_output":{"schema_version":2,"summary":"Full target-to-head comparison","verdict":"pass","findings":[]},
+        "file_coverage":{"reviewed":2,"excluded":0}});
+    let receipt = RoborevReceipt::from_saved_review(&dispatch, &policy, &identity, &saved).unwrap();
     assert_eq!(receipt.reviewed_base, intent.candidate.base);
     assert_eq!(receipt.reviewed_head, intent.candidate.head);
     assert!(receipt.comment(&intent, &policy).is_ok());
     saved["job"]["git_ref"] = json!(merge_base_range);
     assert!(
-        RoborevReceipt::from_saved_review(&intent, &policy, 7, checkout, "opencode", &saved)
-            .is_err(),
+        RoborevReceipt::from_saved_review(&dispatch, &policy, &identity, &saved).is_err(),
         "echoing the requested target must not qualify a persisted merge-base job"
     );
 }

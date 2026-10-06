@@ -1,5 +1,5 @@
 //! Bounded local-only v0.71.0 daemon API. No implicit daemon startup or TCP.
-use super::{Error, RoborevDispatch, RoborevRunner};
+use super::{Error, RoborevDispatch, RoborevJobIdentity, RoborevRunner};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -310,15 +310,12 @@ impl<V: FnMut(&RoborevDispatch) -> Result<(), Error>> RoborevRunner for RoborevU
     fn jobs(&mut self, dispatch: &RoborevDispatch) -> Result<Vec<Value>, Error> {
         self.api.jobs(&dispatch.checkout)
     }
-    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<u64, Error> {
+    fn enqueue(&mut self, dispatch: &RoborevDispatch) -> Result<RoborevJobIdentity, Error> {
         let response = self.api.request("POST", "/api/enqueue", Some(&json!({
             "repo_path":dispatch.checkout,"git_ref":format!("{}..{}",dispatch.intent.candidate.base,dispatch.intent.candidate.head),
             "agent":dispatch.agent,"agentic":false,"panel":"none","review_type":"default","min_severity":"low",
         })))?;
-        response["id"]
-            .as_u64()
-            .filter(|id| *id > 0)
-            .ok_or_else(|| Error("roborev enqueue did not produce one persisted job".into()))
+        RoborevJobIdentity::from_job(&response)
     }
     fn saved_review(&mut self, job_id: u64) -> Result<Value, Error> {
         if job_id == 0 {

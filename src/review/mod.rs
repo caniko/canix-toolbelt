@@ -12,7 +12,9 @@ pub use github::roborev::{RoborevDocument, RoborevFinding, RoborevGitHub, Robore
 pub use github::roborev_producer::{AuthorizedRoborevRequest, RoborevProgress};
 pub use github::{GitHub, GreptileGitHub};
 mod roborev_dispatch;
-pub use roborev_dispatch::{RoborevDispatch, RoborevRunner, dispatch_roborev_once};
+pub use roborev_dispatch::{
+    RoborevDispatch, RoborevJobIdentity, RoborevRunner, dispatch_roborev_once,
+};
 #[cfg(unix)]
 mod roborev_unix;
 #[cfg(unix)]
