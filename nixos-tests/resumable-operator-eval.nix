@@ -31,9 +31,7 @@ in
   assert resume.unitConfig.ConditionPathExists == "/var/lib/fixture-operator/requested";
     pkgs.runCommand "resumable-operator-eval" {} ''
       test -x ${controller}
-      ${pkgs.bash}/bin/bash -n ${controller}
-      definition_line=$(grep -n '^run_stage()' ${controller} | cut -d: -f1)
-      call_line=$(grep -n '^run_stage first ' ${controller} | head -1 | cut -d: -f1)
-      test "$definition_line" -lt "$call_line"
+      ${controller} operator run --help | grep -F -- --config
+      ${controller} operator cancel --help | grep -F -- --config
       touch $out
     ''
