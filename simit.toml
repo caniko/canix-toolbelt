@@ -6,6 +6,9 @@ runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
   ".#canix-toolbelt",
+  ".#canix-toolbelt-build-train",
+  ".#checks.x86_64-linux.build-train-eval",
+  ".#checks.x86_64-linux.build-train-policy",
   ".#canix-toolbelt-roborev-worker",
   ".#roborev",
   ".#checks.x86_64-linux.roborev-module",
@@ -13,6 +16,9 @@ nix_builds = [
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#opencode-browser-adapter",
+  ".#opencode-with-claude",
+  ".#checks.x86_64-linux.opencode-claude-eval",
+  ".#checks.x86_64-linux.opencode-jev-runtime",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",

@@ -12,6 +12,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run or inspect the builder-local shared construction service
+    #[cfg(all(unix, feature = "build-train"))]
+    #[command(subcommand)]
+    BuildTrain(canix_toolbelt::build_train::cli::TrainCommand),
     /// Ensure revision-bound PR review, inspect gates and disposition findings
     #[command(subcommand)]
     Review(canix_toolbelt::review::cli::ReviewCommand),
@@ -57,6 +61,10 @@ enum RuntimeCommand {
 
 fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
+        #[cfg(all(unix, feature = "build-train"))]
+        Command::BuildTrain(command) => {
+            return canix_toolbelt::build_train::cli::run(command).map_err(Into::into);
+        }
         Command::Review(command) => {
             return canix_toolbelt::review::cli::run(command)
                 .map(std::process::ExitCode::from)

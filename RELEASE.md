@@ -1,5 +1,32 @@
 # Rust release execution
 
+## 0.4.0 shared construction
+
+The optional Unix `build-train` feature uses the published Fleetix `0.5.1` and
+nix-manager-core `0.3.0` crates directly. The release preserves the `0.3.0` Roborev
+interfaces and qualification fixtures. The feature-enabled production output is
+`packages.<system>.canix-toolbelt-build-train`; the default package remains a
+library/CLI consumer without a coordinator service.
+
+The native backend publication passed all 18 steps of
+[run 37512848122](https://github.com/caniko/nix-manager-core/actions/runs/37512848122).
+Its downloaded registry artifact has SHA-256
+`927c3eb02e457b2a8f7b4c44d86b9d6ccf136234c87e977b13813f2e13ad1253`.
+Canix provisioned its publication credential through targeted Secret Manager
+sync; the source is `age/secrets/users/can/crates_io.age`.
+
+Fleetix's recovery correction passed all 20 publication steps of
+[run 37526212444](https://github.com/caniko/fleetix/actions/runs/37526212444).
+Its unyanked `0.5.1` artifact has SHA-256
+`430f1aa9a8a5f7a3581c0d6e9fa25a3067355fe560bb3a8c798c723906153987`.
+
+Before tagging `0.4.0`, require full exact-candidate hosted CI, all declared Nix
+installable builds, generator parity against Simit `afb7939`, maintainer trust,
+and package-content inspection. After publication, verify the unyanked registry
+version and checksum, then compile a registry-only consumer with `build-train`.
+Production admission, host activation and Atlas/Murph behavior remain separate
+consumer qualification gates documented in [BUILD_TRAIN.md](BUILD_TRAIN.md).
+
 ## 0.3.0 Roborev publication
 
 The producer implementation was merged in [PR #9](https://github.com/caniko/canix-toolbelt/pull/9).

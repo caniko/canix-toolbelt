@@ -5,6 +5,27 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
+  with a pinned Meridian backend, per-user Fleetix loopback endpoints and
+  runtime credentials. Preserve per-session project context and external
+  service ownership through the native plugin lifecycle.
+
+## [0.4.0] - 2026-10-06
+
+### Added
+
+- Optional dependency-aware build-train adapter over Fleetix's coordinator and
+  nix-manager-core's exact named-output frontier, with a builder-local CLI/service
+  and deployment-generated discovery and immutable policy contracts.
+- Request-reachable GC-root retention and archived retirement, sharing the exact
+  evidence closure while excluding unused native sibling outputs and preserving
+  dependency evidence when cached-parent restoration prunes source dispatch.
+- Nix/Rust policy parity and service configuration fixtures, plus source-qualified
+  real Nix lifecycle and signed-cache restore-only evidence. Production activation,
+  resource admission and Atlas/Murph performance remain consumer gates.
+
 ## [0.3.0] - 2026-10-06
 
 ### Fixed

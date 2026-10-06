@@ -1,0 +1,12 @@
+{
+  "name": "opencode-with-claude",
+  "version": "1.11.1",
+  "description": "OpenCode plugin to use a Claude subscription via Meridian",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": ["dist"],
+  "dependencies": {
+    "@rynfar/meridian": "1.79.0",
+    "@rynfar/meridian-plugin-opencode-scrub": "0.2.0"
+  }
+}

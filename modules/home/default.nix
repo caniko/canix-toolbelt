@@ -6,6 +6,7 @@
 {
   wrapper-manager,
   fleetixGpu,
+  fleetixLib ? null,
 }: {
   # Shared readiness contracts for Home Manager features with activation
   # hooks, runtime credentials, or mutable external state.
@@ -20,6 +21,8 @@
   browser-connection = ./browser-connection.nix;
   direnv = ./direnv.nix;
   opencode-environment = ./opencode-environment.nix;
+  opencode-jev = ./opencode-jev.nix;
+  opencode-claude = import ./opencode-claude.nix {inherit fleetixLib;};
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
   gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};
