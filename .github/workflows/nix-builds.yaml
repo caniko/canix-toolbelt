@@ -38,6 +38,9 @@ jobs:
           - ".#checks.x86_64-linux.harbor-db-compat-eval"
           - ".#checks.x86_64-linux.harbor-db-compat-runtime"
           - ".#checks.x86_64-linux.dns-publication-eval"
+          - ".#checks.x86_64-linux.opencode-environment-eval"
+          - ".#checks.x86_64-linux.opencode-environment-runtime"
+          - ".#checks.x86_64-linux.opencode-environment-legacy"
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
     steps:

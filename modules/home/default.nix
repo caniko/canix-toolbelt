@@ -19,6 +19,7 @@
   roborev = ./roborev;
   browser-connection = ./browser-connection.nix;
   direnv = ./direnv.nix;
+  opencode-environment = ./opencode-environment.nix;
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)
   gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};

@@ -6799,6 +6799,23 @@
         "type": "github"
       }
     },
+    "opencode-environment-legacy": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788871898,
+        "narHash": "sha256-1BWlap/LyLC/iOGE9R96kE3vJY7Dohn66L73y5ZR8tM=",
+        "owner": "caniko",
+        "repo": "opencode",
+        "rev": "b79c099b61ed0e67b5020844367cb6c1ba61c1eb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "caniko",
+        "repo": "opencode",
+        "rev": "b79c099b61ed0e67b5020844367cb6c1ba61c1eb",
+        "type": "github"
+      }
+    },
     "osxcross": {
       "inputs": {
         "flake-utils": "flake-utils_2",
@@ -7396,6 +7413,7 @@
         ],
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs_6",
+        "opencode-environment-legacy": "opencode-environment-legacy",
         "plinth": "plinth_3",
         "secret-manager": "secret-manager",
         "treefmt-nix": "treefmt-nix_31",

@@ -73,6 +73,11 @@
       url = "github:caniko/crush/feat/api-key-file";
       flake = false;
     };
+    # Source-only compatibility qualification; never select this as a V2 runtime.
+    opencode-environment-legacy = {
+      url = "github:caniko/opencode/b79c099b61ed0e67b5020844367cb6c1ba61c1eb";
+      flake = false;
+    };
   };
 
   outputs = inputs @ {
@@ -182,6 +187,15 @@
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
+            opencode-environment-eval = import ./nixos-tests/opencode-environment-eval.nix {inherit pkgs;};
+            opencode-environment-runtime = pkgs.runCommand "opencode-environment-runtime" {nativeBuildInputs = [pkgs.nodejs];} ''
+              node --test ${./runtime/opencode-environment}/server.test.mjs
+              touch "$out"
+            '';
+            opencode-environment-legacy = pkgs.runCommand "opencode-environment-legacy" {nativeBuildInputs = [pkgs.nodejs pkgs.git];} ''
+              node ${./runtime/opencode-environment}/check-legacy.mjs ${inputs.opencode-environment-legacy}
+              touch "$out"
+            '';
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
               inherit pkgs;
