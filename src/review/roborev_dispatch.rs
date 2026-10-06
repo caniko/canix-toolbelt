@@ -112,11 +112,19 @@ pub(super) fn read_ledger<T: serde::de::DeserializeOwned>(
     path: &Path,
     fresh: bool,
 ) -> Result<Option<T>, Error> {
+    read_ledger_with_limit(path, fresh, 1_048_576)
+}
+
+pub(super) fn read_ledger_with_limit<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    fresh: bool,
+    limit: u64,
+) -> Result<Option<T>, Error> {
     match open_private(path, false) {
         Ok(file) => {
             let mut bytes = Vec::new();
-            file.take(1_048_577).read_to_end(&mut bytes)?;
-            if bytes.len() > 1_048_576 {
+            file.take(limit + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > limit {
                 return Err(Error("oversized roborev ledger".into()));
             }
             Ok(Some(serde_json::from_slice::<T>(&bytes)?))

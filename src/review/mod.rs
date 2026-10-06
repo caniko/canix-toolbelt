@@ -16,7 +16,13 @@ pub use roborev_dispatch::{RoborevDispatch, RoborevRunner, dispatch_roborev_once
 #[cfg(unix)]
 mod roborev_unix;
 #[cfg(unix)]
-pub use roborev_unix::RoborevUnix;
+pub use roborev_unix::{RoborevHttp, RoborevUnix, decode_roborev_http};
+#[cfg(unix)]
+mod roborev_local;
+#[cfg(unix)]
+pub use roborev_local::{
+    RoborevLocal, RoborevLocalRequest, RoborevLocalScope, normalize_roborev_local,
+};
 
 /// Select exactly the configured provider/transport. Historical Greptile is
 /// available only when explicitly selected; roborev never falls back to it.
