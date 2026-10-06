@@ -144,6 +144,7 @@
         homeModules = import ./modules/home {
           inherit (inputs) wrapper-manager;
           fleetixGpu = inputs.fleetix.lib.gpu;
+          fleetixLib = inputs.fleetix.lib;
         };
         flakeModules = {
           agenix-rekey-auto = ./flake-modules/agenix-rekey-auto.nix;
@@ -190,6 +191,14 @@
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             opencode-environment-eval = import ./nixos-tests/opencode-environment-eval.nix {inherit pkgs;};
+            opencode-claude-eval = import ./nixos-tests/opencode-claude-eval.nix {
+              inherit pkgs;
+              fleetixLib = inputs.fleetix.lib;
+            };
+            opencode-jev-runtime = pkgs.runCommand "opencode-jev-runtime" {nativeBuildInputs = [pkgs.nodejs];} ''
+              node --test ${./runtime/opencode-jev}/server.test.mjs
+              touch "$out"
+            '';
             opencode-environment-runtime = pkgs.runCommand "opencode-environment-runtime" {nativeBuildInputs = [pkgs.nodejs];} ''
               node --test ${./runtime/opencode-environment}/server.test.mjs
               touch "$out"
@@ -276,6 +285,7 @@
 
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
+        packages.opencode-with-claude = pkgs.callPackage ./nix/opencode-with-claude {};
         packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
         packages.canix-toolbelt-build-train = import ./nix/package.nix {
           inherit pkgs;
