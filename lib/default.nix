@@ -30,6 +30,15 @@ in
     profiles = import ./profiles.nix {inherit lib;};
     peerRoute = import ./peerRoute.nix;
     projectTree = import ./projectTree.nix {inherit lib;};
+    mkRoborevPackage = import ../nix/roborev.nix;
+    mkRoborevFlakeModule = import ../flake-modules/roborev.nix;
+    roborevTests = {
+      eval = import ../tests/roborev/eval.nix;
+      activation = import ../tests/roborev/activation.nix;
+      unit = import ../tests/roborev/unit.nix;
+      switch = import ../tests/roborev/switch.nix;
+      unitVm = import ../tests/roborev/unit-vm.nix;
+    };
     rbac = import ./rbac.nix;
     sshAliases = import ./sshAliases.nix;
     storage = import ./storage.nix;
