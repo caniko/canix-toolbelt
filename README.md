@@ -29,6 +29,13 @@ Two output families:
 
 ## Usage
 
+### OpenCode Claude subscriptions
+
+`homeModules.opencode-claude` wires the native V2 plugin through Jev to a
+per-user Meridian service, using Fleetix-declared loopback endpoints. See
+[Claude subscription integration](docs/opencode-claude.md) for configuration,
+login and lifecycle details.
+
 ### GPU routing
 
 Fleetix owns the typed Pkl GPU contract and Nix projections. Supply

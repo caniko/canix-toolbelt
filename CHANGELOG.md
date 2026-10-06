@@ -5,6 +5,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
+  with a pinned Meridian backend, per-user Fleetix loopback endpoints and
+  runtime credentials. Preserve per-session project context and external
+  service ownership through the native plugin lifecycle.
+
 ## [0.4.0] - 2026-10-06
 
 ### Added
