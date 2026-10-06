@@ -3,7 +3,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -137,6 +137,74 @@ struct Run {
     outcome: Option<Outcome>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Journal {
+    schema_version: u32,
+    // An intact legacy run cannot prove that older comparisons were retained.
+    history_complete: bool,
+    runs: Vec<Run>,
+}
+
+impl Journal {
+    fn save_run(&mut self, path: &Path, run: &Run) -> Result<(), Error> {
+        if let Some(existing) = self.runs.iter_mut().find(|r| r.intent.id == run.intent.id) {
+            if serde_json::to_vec(&existing.intent)? != serde_json::to_vec(&run.intent)? {
+                return Err(Error(
+                    "retained request identity was rebound; reconcile without dispatch".into(),
+                ));
+            }
+            *existing = run.clone();
+        } else {
+            self.runs.push(run.clone());
+        }
+        save(path, self)
+    }
+}
+
+const HISTORY_ANCHOR: &str = "canix-review-history-v2\n";
+
+fn load_journal(path: &Path, lock: &mut File, fresh: bool) -> Result<Journal, Error> {
+    let mut anchor = String::new();
+    lock.read_to_string(&mut anchor)?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let journal = match (anchor.as_str(), bytes) {
+        (HISTORY_ANCHOR, Some(bytes)) => {
+            let journal: Journal = serde_json::from_slice(&bytes)?;
+            if journal.schema_version != 2 {
+                return Err(Error("unsupported review history format".into()));
+            }
+            return Ok(journal);
+        }
+        ("", None) if fresh => Journal { schema_version: 2, history_complete: true, runs: vec![] },
+        ("", Some(bytes)) if !fresh => {
+            // An interrupted migration may have saved the new journal before
+            // arming its sentinel. Its completeness cannot be inferred.
+            let mut journal = match serde_json::from_slice::<Journal>(&bytes) {
+                Ok(journal) if journal.schema_version == 2 => journal,
+                _ => Journal { schema_version: 2, history_complete: false,
+                    runs: vec![serde_json::from_slice::<Run>(&bytes)?] },
+            };
+            journal.history_complete = false;
+            journal
+        }
+        _ => return Err(Error("review history missing or unqualified; restore the original journal and reconcile without dispatch".into())),
+    };
+    // Journal first, sentinel second, both durable before provider effects.
+    // Keep the persistent lock inode intact throughout migration and recovery.
+    save(path, &journal)?;
+    lock.write_all(HISTORY_ANCHOR.as_bytes())?;
+    lock.sync_all()?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(journal)
+}
+
 /// Current Unix time; wall-clock rollback cannot authorize a previously deferred poll.
 pub fn now_seconds() -> u64 {
     SystemTime::now()
@@ -164,7 +232,7 @@ fn outcome(
     }
 }
 
-fn save(path: &Path, run: &Run) -> Result<(), Error> {
+pub(super) fn save<T: Serialize>(path: &Path, run: &T) -> Result<(), Error> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -197,7 +265,7 @@ fn save(path: &Path, run: &Run) -> Result<(), Error> {
 ///
 /// The lock protects only this tick, never a sleep or a Nix evaluation. Persisted
 /// ambiguous submissions reconcile from forge markers and are never replayed.
-pub fn ensure_once<F: Forge, P: Provider>(
+pub fn ensure_once<F: Forge, P: Provider + ?Sized>(
     forge: &mut F,
     provider: &mut P,
     policy: &Policy,
@@ -210,16 +278,29 @@ pub fn ensure_once<F: Forge, P: Provider>(
     candidate.validate()?;
     let key = hex_digest(candidate.url.as_bytes());
     fs::create_dir_all(state_dir)?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(state_dir.join(format!("{key}.lock")))?;
+    let lock_path = state_dir.join(format!("{key}.lock"));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    let (mut lock, fresh_lock) = match options.open(&lock_path) {
+        Ok(lock) => (lock, true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            options.create_new(false);
+            (options.open(&lock_path)?, false)
+        }
+        Err(e) => return Err(e.into()),
+    };
     lock.try_lock_exclusive().map_err(|_| {
         Error("another review tick owns this PR; resume ensure after it completes".into())
     })?;
     let path = state_dir.join(format!("{key}.json"));
+    let mut journal = load_journal(&path, &mut lock, fresh_lock)?;
     let capabilities = provider.capabilities();
     if capabilities.provider != policy.provider
         || capabilities.transport != policy.transport
@@ -235,17 +316,17 @@ pub fn ensure_once<F: Forge, P: Provider>(
             None,
         ));
     }
-    let mut run: Option<Run> = match fs::read(&path) {
-        Ok(bytes) => Some(serde_json::from_slice(&bytes)?),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.into()),
-    };
-    if run
-        .as_ref()
-        .is_some_and(|r| !r.intent.matches(&candidate, policy))
-    {
-        run = None;
+    let matches: Vec<_> = journal
+        .runs
+        .iter()
+        .filter(|r| r.intent.matches(&candidate, policy))
+        .collect();
+    if matches.len() > 1 {
+        return Err(Error(
+            "ambiguous retained review history; reconcile without dispatch".into(),
+        ));
     }
+    let mut run = matches.first().map(|r| (*r).clone());
     if let Some(previous) = run.as_ref().and_then(|r| r.outcome.as_ref()) {
         if previous.next_poll_at.is_some_and(|at| now_seconds() < at) {
             return Ok(previous.clone());
@@ -264,7 +345,7 @@ pub fn ensure_once<F: Forge, P: Provider>(
             result.next_poll_at = provider.next_poll_at();
             if let Some(run) = &mut run {
                 run.outcome = Some(result.clone());
-                save(&path, run)?;
+                journal.save_run(&path, run)?;
             }
             return Ok(result);
         }
@@ -290,6 +371,10 @@ pub fn ensure_once<F: Forge, P: Provider>(
             vec!["no authorized revision-bound review request; run review ensure".into()],
             None,
         ));
+    }
+    if run.is_none() && !journal.history_complete {
+        return Ok(outcome(&candidate, None, Verdict::Blocked,
+            vec!["legacy review history is incomplete; reconcile prior attempts before authorizing a new comparison".into()], None));
     }
     let policy_digest = policy.digest()?;
     let mut run = run.unwrap_or_else(|| {
@@ -363,7 +448,7 @@ pub fn ensure_once<F: Forge, P: Provider>(
         // Save UNKNOWN before the remote effect: a crash can never turn intent
         // into permission to replay an unacknowledged submission.
         run.submission = Submission::Unknown;
-        save(&path, &run)?;
+        journal.save_run(&path, &run)?;
         match provider.submit(&run.intent) {
             Ok(receipt) => {
                 run.request_receipt = Some(receipt);
@@ -420,6 +505,6 @@ pub fn ensure_once<F: Forge, P: Provider>(
     )
     .next_action;
     run.outcome = Some(result.clone());
-    save(&path, &run)?;
+    journal.save_run(&path, &run)?;
     Ok(result)
 }

@@ -6,6 +6,10 @@ runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
   ".#canix-toolbelt",
+  ".#canix-toolbelt-roborev-worker",
+  ".#roborev",
+  ".#checks.x86_64-linux.roborev-module",
+  ".#checks.x86_64-linux.roborev-unit",
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#opencode-browser-adapter",
@@ -45,6 +49,8 @@ cores = 2
 timeout_minutes = 40
 capture_results = true
 artifact_retention_days = 14
+# Preserve builder output even when a hosted timeout interrupts nix build.
+artifact_paths = ["/nix/var/log/nix/drvs"]
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"
@@ -68,4 +74,9 @@ timeout_minutes = 30
 [[ci.required_gates]]
 id = "supported-systems"
 run = "bash scripts/qualify-source.sh"
+timeout_minutes = 30
+
+[[ci.required_gates]]
+id = "roborev-worker"
+run = "bash scripts/roborev-worker-hosted.sh"
 timeout_minutes = 30

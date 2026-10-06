@@ -23,6 +23,10 @@ jobs:
       matrix:
         installable:
           - ".#canix-toolbelt"
+          - ".#canix-toolbelt-roborev-worker"
+          - ".#roborev"
+          - ".#checks.x86_64-linux.roborev-module"
+          - ".#checks.x86_64-linux.roborev-unit"
           - ".#checks.x86_64-linux.resumable-operator-eval"
           - ".#checks.x86_64-linux.resumable-operator-runtime"
           - ".#opencode-browser-adapter"
@@ -92,3 +96,4 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/simit-nix-build-${{ strategy.job-index }}
+            /nix/var/log/nix/drvs
