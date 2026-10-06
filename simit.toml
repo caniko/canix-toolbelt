@@ -76,5 +76,5 @@ timeout_minutes = 30
 
 [[ci.required_gates]]
 id = "roborev-worker"
-run = "nix develop --max-jobs 1 --cores 2 .#roborev-worker -c bash scripts/roborev-worker-regressions.sh"
+run = "bash scripts/roborev-worker-hosted.sh"
 timeout_minutes = 30
