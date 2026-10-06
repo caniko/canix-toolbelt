@@ -5,3 +5,5 @@ result-*
 .pre-commit-config.yaml
 graphify-out/
 target/
+__pycache__/
+*.py[cod]
