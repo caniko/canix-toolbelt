@@ -4,7 +4,7 @@
 }: let
   inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
-  module = ../modules/gpu-media.nix;
+  module = import ../modules/gpu-media.nix {fleetixGpu = inputs.fleetix.lib.gpu;};
   valid = {
     enable = true;
     vendor = "amd";

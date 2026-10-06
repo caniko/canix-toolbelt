@@ -10,12 +10,15 @@
 #
 # The route has no opinion about power profiles or battery state — that policy
 # belongs to the host, not to a reusable hardware module.
-{
+{fleetixGpu}: args @ {
   config,
   lib,
-  gpuMedia ? null,
   ...
 }: let
+  gpuMedia = import ../lib/gpu-route.nix {
+    role = "media";
+    inherit args config;
+  };
   cfg = config.canix-toolbelt.gpuMedia;
 in {
   options.canix-toolbelt.gpuMedia = {
@@ -63,8 +66,8 @@ in {
         message = "canix-toolbelt.gpuMedia: enable requires vendor, renderNode, and libvaDriver to be set";
       }
       {
-        assertion = cfg.renderNode == null || lib.hasPrefix "/dev/dri/" cfg.renderNode;
-        message = "canix-toolbelt.gpuMedia.renderNode must be an absolute /dev/dri/... path";
+        assertion = cfg.renderNode == null || fleetixGpu.validRenderNode cfg.renderNode;
+        message = "canix-toolbelt.gpuMedia.renderNode must be a stable PCI render-node alias";
       }
     ];
   };

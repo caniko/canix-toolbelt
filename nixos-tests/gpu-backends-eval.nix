@@ -4,7 +4,7 @@
 }: let
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
   inherit (inputs.nixpkgs) lib;
-  gpu = import ../lib/gpu.nix;
+  gpu = inputs.fleetix.lib.gpu;
   compute = data: (gpu.normalize data).compute;
   rejects = data: !(builtins.tryEval (builtins.deepSeq (compute data) true)).success;
 
