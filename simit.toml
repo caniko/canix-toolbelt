@@ -9,6 +9,9 @@ nix_builds = [
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.opencode-environment-eval",
+  ".#checks.x86_64-linux.opencode-environment-runtime",
+  ".#checks.x86_64-linux.opencode-environment-legacy",
 ]
 with_msrv = true
 with_audit = true

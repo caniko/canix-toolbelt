@@ -62,6 +62,11 @@
       url = "github:caniko/crush/feat/api-key-file";
       flake = false;
     };
+    # Source-only compatibility qualification; never select this as a V2 runtime.
+    opencode-environment-legacy = {
+      url = "github:caniko/opencode/b79c099b61ed0e67b5020844367cb6c1ba61c1eb";
+      flake = false;
+    };
   };
 
   outputs = inputs @ {
@@ -124,13 +129,15 @@
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
           roborev = {inputs, ...}: {
-            imports = [(import ./flake-modules/roborev.nix {
-              nixpkgs = inputs.nixpkgs;
-              harborGo = inputs.harbor-go;
-              harborJs = inputs.harbor-js;
-              harborMeta = inputs.harbor-meta;
-              homeManager = inputs.home-manager;
-            })];
+            imports = [
+              (import ./flake-modules/roborev.nix {
+                nixpkgs = inputs.nixpkgs;
+                harborGo = inputs.harbor-go;
+                harborJs = inputs.harbor-js;
+                harborMeta = inputs.harbor-meta;
+                homeManager = inputs.home-manager;
+              })
+            ];
           };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
@@ -164,6 +171,15 @@
               "roborev module regression failed";
                 pkgs.writeText "roborev-module-results.json" (builtins.toJSON results);
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
+            opencode-environment-eval = import ./nixos-tests/opencode-environment-eval.nix {inherit pkgs;};
+            opencode-environment-runtime = pkgs.runCommand "opencode-environment-runtime" {nativeBuildInputs = [pkgs.nodejs];} ''
+              node --test ${./runtime/opencode-environment}/server.test.mjs
+              touch "$out"
+            '';
+            opencode-environment-legacy = pkgs.runCommand "opencode-environment-legacy" {nativeBuildInputs = [pkgs.nodejs pkgs.git];} ''
+              node ${./runtime/opencode-environment}/check-legacy.mjs ${inputs.opencode-environment-legacy}
+              touch "$out"
+            '';
             garage-buckets-registry-eval = import ./nixos-tests/garage-buckets-registry-eval.nix {inherit pkgs;};
             gatus-instances-eval = assert import ./nixos-tests/gatus-instances-eval.nix {
               inherit pkgs;

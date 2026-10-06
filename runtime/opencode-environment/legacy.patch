@@ -1,0 +1,58 @@
+# Toolbelt's Canix-fork integration implements Harbor's neutral version-1
+# replacement capability. OOM preservation and the legacy execution gate are
+# architecture policy. Old markers remain here for mixed-version consumers.
+diff --git a/packages/opencode/src/plugin/shell-environment.ts b/packages/opencode/src/plugin/shell-environment.ts
+--- a/packages/opencode/src/plugin/shell-environment.ts
++++ b/packages/opencode/src/plugin/shell-environment.ts
+@@ -9,8 +9,17 @@
+   const env = Object.fromEntries(
+     Object.entries(inherited).filter((entry): entry is [string, string] => entry[1] !== undefined),
+   )
+-  const output: { env: Record<string, string>; unset?: string[] } = { env: {} }
++  const output: { env: Record<string, string>; unset?: string[]; harborLlmReplace?: boolean; harborCanixLlmReplace?: boolean } = {
++    env: {},
++    harborLlmReplace: false,
++  }
+   const extra = yield* plugin
+-    .trigger("shell.env", { ...input, env: Object.freeze({ ...env }) }, output)
++    .trigger("shell.env", { ...input, harborLlm: 1, harborCanixLlm: 1, env: Object.freeze({ ...env }) }, output)
+     .pipe(Effect.catchCause((cause) => (input.signal?.aborted ? Effect.interrupt : Effect.failCause(cause))))
++  // Permission checks precede shellEnv; replacement never wraps the command.
++  if (extra.harborLlmReplace || extra.harborCanixLlmReplace)
++    return {
++      env: { ...extra.env, OPENCODE_TOOL_OOM_SCORE_ADJ: process.env.OPENCODE_TOOL_OOM_SCORE_ADJ },
++      resolved: true,
++    }
+   // Keep the overlay separate: a later plugin may deliberately restore an unset key.
+   for (const key of extra.unset ?? []) if (!Object.hasOwn(extra.env, key)) delete env[key]
+   return { env: { ...env, ...extra.env }, resolved: extra.unset !== undefined }
+diff --git a/packages/plugin/src/index.ts b/packages/plugin/src/index.ts
+--- a/packages/plugin/src/index.ts
++++ b/packages/plugin/src/index.ts
+@@ -277,3 +277,5 @@
+       signal?: AbortSignal
++      harborCanixLlm?: 1
++      harborLlm?: 1
+     },
+     output: {
+@@ -280,5 +280,7 @@
+       env: Record<string, string>
+       /** Opt into per-operation lookup. Removals precede env assignments, so later overlays win. */
+       unset?: string[]
++      harborCanixLlmReplace?: boolean
++      harborLlmReplace?: boolean
+     },
+   ) => Promise<void>
+diff --git a/packages/core/src/tool/bash.ts b/packages/core/src/tool/bash.ts
+--- a/packages/core/src/tool/bash.ts
++++ b/packages/core/src/tool/bash.ts
+@@ -152,6 +152,9 @@
+               if ((yield* fs.stat(target.canonical)).type !== "Directory")
+                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
+
++              if (process.env.CANIX_TOOLBELT_OPENCODE_REQUIRE_LEGACY === "1" || process.env.HARBOR_CANIX_LLM_REQUIRE_LEGACY === "1")
++                return yield* Effect.fail(new Error("Toolbelt's legacy environment adapter requires ShellTool; V2 Bash has no replacement hook"))
++
+               const entries = yield* config.entries()
+               const shell =
+                 Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
