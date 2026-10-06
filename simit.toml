@@ -12,6 +12,8 @@ nix_builds = [
   ".#checks.x86_64-linux.opencode-environment-eval",
   ".#checks.x86_64-linux.opencode-environment-runtime",
   ".#checks.x86_64-linux.opencode-environment-legacy",
+  ".#checks.x86_64-linux.direnv-eval",
+  ".#checks.x86_64-linux.harbor-db-compat-eval",
 ]
 with_msrv = true
 with_audit = true
