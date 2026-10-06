@@ -49,6 +49,8 @@ cores = 2
 timeout_minutes = 40
 capture_results = true
 artifact_retention_days = 14
+# Preserve builder output even when a hosted timeout interrupts nix build.
+artifact_paths = ["/nix/var/log/nix/drvs"]
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"
