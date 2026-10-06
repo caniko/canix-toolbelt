@@ -1,9 +1,10 @@
 // Consumer-owned runtime policy. Load from user/deployment configuration,
 // never automatically from the pull request's source branch.
 schemaVersion: Int = 1
-provider: String = "greptile"
-transport: String = "github-comment"
-reviewerId: UInt = 165735046
+provider: String = "roborev"
+transport: String = "github-receipt-v1"
+// The deployment supplies its actual review-producing Bot user ID.
+reviewerId: UInt
 
 class CheckRequirement {
   name: String

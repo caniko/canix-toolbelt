@@ -13,6 +13,9 @@ use std::{
 const REQUEST_MARKER: &str = "<!-- toolbelt-review-request:v1 ";
 const DISPOSITION_MARKER: &str = "<!-- toolbelt-review-disposition:v1 ";
 
+pub(super) mod roborev;
+pub(super) mod roborev_producer;
+
 /// Native GitHub REST transport. Credentials never enter persisted receipts.
 #[derive(Clone)]
 pub struct GitHub {
@@ -225,12 +228,29 @@ impl GitHub {
     /// Merge with atomic expected-head protection and strict native branch protection.
     /// A transport error must be reconciled from the PR before any repeat.
     pub fn merge(&mut self, candidate: &Candidate, policy: &Policy) -> Result<Value, Error> {
+        self.merge_with_policy(candidate, Some(policy), true)
+    }
+
+    /// Validate CI and native protection without loading or contacting a reviewer.
+    /// `apply` performs an explicitly authorized merge; otherwise this is read-only.
+    pub fn merge_native(&mut self, candidate: &Candidate, apply: bool) -> Result<Value, Error> {
+        self.merge_with_policy(candidate, None, apply)
+    }
+
+    fn merge_with_policy(
+        &mut self,
+        candidate: &Candidate,
+        policy: Option<&Policy>,
+        apply: bool,
+    ) -> Result<Value, Error> {
         candidate.validate()?;
-        policy.validate()?;
+        if let Some(policy) = policy {
+            policy.validate()?;
+        }
         let current = self.candidate(&candidate.url)?;
         if !same_comparison(candidate, &current) || !current.open || current.draft {
             return Err(Error(
-                "merge candidate moved, closed or remains draft; rerun ensure".into(),
+                "merge candidate moved, closed or remains draft; refresh the candidate".into(),
             ));
         }
         let pr = PullRequest::parse(&candidate.url)?;
@@ -254,19 +274,27 @@ impl GitHub {
         if required.get("strict").and_then(Value::as_bool) != Some(true) {
             return Err(Error("merge requires strict up-to-date branch protection; merge-queue/ruleset support needs its own adapter".into()));
         }
-        let checks = required
-            .get("checks")
-            .and_then(Value::as_array)
-            .ok_or_else(|| Error("protected review-policy check is not configured".into()))?;
-        if !checks.iter().any(|c| {
-            c.get("context").and_then(Value::as_str) == Some("review-policy")
-                && c.get("app_id")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|id| id > 0 && id != 15368)
-        }) {
-            return Err(Error("merge requires review-policy bound to a dedicated policy GitHub App; the shared GitHub Actions App cannot distinguish untrusted PR workflows".into()));
+        if let Some(policy) = policy {
+            let checks = required
+                .get("checks")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error("protected review-policy check is not configured".into()))?;
+            let policy_app = policy.policy_app_id()?;
+            if !checks.iter().any(|c| {
+                c.get("context").and_then(Value::as_str) == Some("review-policy")
+                    && c.get("app_id").and_then(Value::as_u64) == Some(policy_app)
+            }) {
+                return Err(Error(
+                    "merge requires review-policy bound to the configured dedicated policy GitHub App"
+                        .into(),
+                ));
+            }
         }
-        let blockers = self.checks(candidate, policy)?;
+        let blockers = self.checks_required(
+            candidate,
+            policy.map_or(&[], |policy| policy.required_checks.as_slice()),
+            policy.is_some(),
+        )?;
         if !blockers.is_empty() {
             return Err(Error(format!("merge CI gate: {}", blockers.join("; "))));
         }
@@ -274,22 +302,33 @@ impl GitHub {
         if !same_comparison(candidate, &fresh) {
             return Err(Error("comparison changed immediately before merge".into()));
         }
-        // The public library merge entry point owns review enforcement too;
-        // callers cannot turn an earlier ready receipt into merge authority.
-        let evidence = GreptileGitHub::new(self.clone()).inspect(&fresh, policy, None)?;
-        if evidence
-            .review
-            .as_ref()
-            .is_none_or(|review| policy.evaluate(&fresh, review) != super::Verdict::Ready)
+        // Explicit review-gated callers still revalidate live provider evidence.
+        if let Some(policy) = policy {
+            let evidence =
+                super::github_provider(self.clone(), policy)?.inspect(&fresh, policy, None)?;
+            if evidence
+                .review
+                .as_ref()
+                .is_none_or(|review| policy.evaluate(&fresh, review) != super::Verdict::Ready)
+            {
+                return Err(Error(
+                    "completed current provider review no longer qualifies; rerun ensure".into(),
+                ));
+            }
+        }
+        let final_candidate = self.candidate(&candidate.url)?;
+        if !same_comparison(candidate, &final_candidate)
+            || !final_candidate.open
+            || final_candidate.draft
         {
             return Err(Error(
-                "completed current provider review no longer qualifies; rerun ensure".into(),
+                "comparison changed during final merge validation".into(),
             ));
         }
-        if !same_comparison(candidate, &self.candidate(&candidate.url)?) {
-            return Err(Error(
-                "comparison changed during final review validation".into(),
-            ));
+        if !apply {
+            return Ok(
+                json!({"verdict":"ready", "candidate":candidate, "applied":false, "reviewRequired":policy.is_some()}),
+            );
         }
         let (_, value) = self.request(
             "PUT",
@@ -308,17 +347,25 @@ impl GitHub {
     pub fn publish_check(
         &self,
         candidate: &Candidate,
+        policy: &Policy,
         ready: bool,
         details_url: &str,
     ) -> Result<(), Error> {
         let pr = PullRequest::parse(&candidate.url)?;
-        self.request("POST", &format!("/repos/{}/check-runs", pr.repository), Some(json!({
+        candidate.validate()?;
+        let app = policy.policy_app_id()?;
+        let (_, check) = self.request("POST", &format!("/repos/{}/check-runs", pr.repository), Some(json!({
             "name": "review-policy", "head_sha": candidate.head, "status": "completed",
             "conclusion": if ready { "success" } else { "failure" },
             "details_url": details_url,
             "output": {"title": if ready { "Current review qualifies" } else { "Review evidence does not qualify" },
                 "summary": "Revision-bound review policy evaluated by canix-toolbelt. Required CI remains independently enforced."}
         })))?;
+        if check.pointer("/app/id").and_then(Value::as_u64) != Some(app) {
+            return Err(Error(
+                "policy check was not published by the configured dedicated GitHub App".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -343,8 +390,23 @@ impl Forge for GitHub {
     }
 
     fn checks(&mut self, candidate: &Candidate, policy: &Policy) -> Result<Vec<String>, Error> {
+        self.checks_required(candidate, &policy.required_checks, true)
+    }
+
+    fn next_poll_at(&self) -> Option<u64> {
+        self.retry_at.lock().ok().and_then(|v| *v)
+    }
+}
+
+impl GitHub {
+    fn checks_required(
+        &mut self,
+        candidate: &Candidate,
+        additional: &[CheckRequirement],
+        all_ci: bool,
+    ) -> Result<Vec<String>, Error> {
         let pr = PullRequest::parse(&candidate.url)?;
-        let mut required = policy.required_checks.clone();
+        let mut required = additional.to_vec();
         let (status, protection) = self.request(
             "GET",
             &format!(
@@ -445,6 +507,23 @@ impl Forge for GitHub {
             }
         }
         let mut blockers = Vec::new();
+        let optional_review = |name: &str| {
+            name == "review-policy" && !required.iter().any(|check| check.name == name)
+        };
+        // Native merges enforce declared requirements. Advisory provider jobs
+        // are not promoted to requirements merely because they publish checks.
+        // With no declared CI, retain the full qualification-evidence fallback.
+        // The review-only policy App cannot supply CI qualification itself.
+        let qualification_fallback = required.iter().all(|check| check.name == "review-policy");
+        let inspect_present = |name: &str, app: Option<u64>| {
+            !optional_review(name)
+                && (all_ci
+                    || qualification_fallback
+                    || required.iter().any(|check| {
+                        check.name == name
+                            && check.app_id.is_none_or(|expected| app == Some(expected))
+                    }))
+        };
         for check in &required {
             let successful = latest.iter().any(|((name, app, _), v)| {
                 name == &check.name
@@ -462,7 +541,10 @@ impl Forge for GitHub {
                 ));
             }
         }
-        for ((name, _, _), v) in &latest {
+        for ((name, app, _), v) in &latest {
+            if !inspect_present(name, Some(*app)) {
+                continue;
+            }
             if v.get("status").and_then(Value::as_str) != Some("completed")
                 || v.get("conclusion").and_then(Value::as_str) != Some("success")
             {
@@ -470,20 +552,22 @@ impl Forge for GitHub {
             }
         }
         for ((name, _), v) in &legacy {
+            if !inspect_present(name, None) {
+                continue;
+            }
             if v.get("state").and_then(Value::as_str) != Some("success") {
                 blockers.push(format!("CI status has not passed: {name}"));
             }
         }
-        if required.is_empty() && latest.is_empty() && legacy.is_empty() {
+        if qualification_fallback
+            && latest.keys().all(|(name, _, _)| name == "review-policy")
+            && legacy.keys().all(|(name, _)| name == "review-policy")
+        {
             blockers.push("no CI qualification evidence or declared required contexts".into());
         }
         blockers.sort();
         blockers.dedup();
         Ok(blockers)
-    }
-
-    fn next_poll_at(&self) -> Option<u64> {
-        self.retry_at.lock().ok().and_then(|v| *v)
     }
 }
 
@@ -500,6 +584,23 @@ impl GreptileGitHub {
 
     /// Record an evidence-backed false-positive disposition on the forge.
     /// Authorization is rechecked when the disposition is consumed.
+    pub fn disposition(
+        &self,
+        candidate: &Candidate,
+        policy: &Policy,
+        review: &Review,
+        finding: &Finding,
+        reason: &str,
+        evidence: &str,
+    ) -> Result<(), Error> {
+        self.github
+            .disposition(candidate, policy, review, finding, reason, evidence)
+    }
+}
+
+impl GitHub {
+    /// Record a provider-neutral exact-finding disposition. Collection must
+    /// recheck the writer's authorization and every bound identity.
     pub fn disposition(
         &self,
         candidate: &Candidate,
@@ -529,7 +630,7 @@ impl GreptileGitHub {
             "{DISPOSITION_MARKER}{} -->\n\nEvidence-backed finding disposition recorded by the review CLI.",
             serde_json::to_string(&disposition)?
         );
-        self.github.request(
+        self.request(
             "POST",
             &format!("/repos/{}/issues/{}/comments", pr.repository, pr.number),
             Some(json!({"body": body})),
@@ -568,6 +669,11 @@ impl Provider for GreptileGitHub {
         policy: &Policy,
         local: Option<&Intent>,
     ) -> Result<Evidence, Error> {
+        if policy.provider != "greptile" || policy.transport != "github-comment" {
+            return Err(Error(
+                "Greptile adapter requires an explicitly selected Greptile policy".into(),
+            ));
+        }
         let pr = PullRequest::parse(&candidate.url)?;
         let reviews = self.github.pages(
             &format!("/repos/{}/pulls/{}/reviews", pr.repository, pr.number),
@@ -741,9 +847,12 @@ impl Provider for GreptileGitHub {
                 }
                 review = Some(Review {
                     id,
+                    provider_job_id: None,
+                    provider_review_id: None,
                     provider: policy.provider.clone(),
                     reviewed_head: Some(text(parent, "/commit_id")?.into()),
                     requested_base: Some(intent.candidate.base.clone()),
+                    reviewed_base: None,
                     policy_digest: intent.policy_digest.clone(),
                     completed: true,
                     complete_findings: true,
@@ -840,7 +949,7 @@ mod tests {
         thread,
     };
 
-    fn server(replies: Vec<(u16, Value)>) -> (GitHub, thread::JoinHandle<()>) {
+    pub(super) fn server(replies: Vec<(u16, Value)>) -> (GitHub, thread::JoinHandle<()>) {
         server_with_headers(replies, "")
     }
 
@@ -853,8 +962,38 @@ mod tests {
         let handle = thread::spawn(move || {
             for (status, value) in replies {
                 let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
                 let mut buffer = [0; 4096];
-                let _ = stream.read(&mut buffer).unwrap();
+                let header_end = loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0, "incomplete fixture HTTP request");
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() <= 64 * 1024, "oversized fixture request");
+                    if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let request_headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                let body_size = request_headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                assert!(
+                    header_end + body_size <= 64 * 1024,
+                    "oversized fixture request body"
+                );
+                while request.len() < header_end + body_size {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0, "incomplete fixture request body");
+                    request.extend_from_slice(&buffer[..count]);
+                }
                 let body = value.to_string();
                 write!(stream, "HTTP/1.1 {status} Test\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
@@ -874,6 +1013,331 @@ mod tests {
             base: "b".repeat(40),
             draft: false,
             open: true,
+        }
+    }
+
+    fn protected_policy() -> Policy {
+        Policy {
+            required_checks: vec![CheckRequirement {
+                name: "review-policy".into(),
+                app_id: Some(456),
+            }],
+            ..Policy::default()
+        }
+    }
+
+    #[test]
+    fn unavailable_optional_review_does_not_block_passing_ci() {
+        let current = candidate();
+        let (mut github, handle) = server(vec![
+            (
+                200,
+                json!({"required_status_checks":{"checks":[{"context":"CI","app_id":15368}]}}),
+            ),
+            (
+                200,
+                json!({"check_runs":[
+                    {"id":1,"name":"CI","head_sha":current.head,"app":{"id":15368},"status":"completed","conclusion":"success"},
+                    {"id":2,"name":"review-policy","head_sha":current.head,"app":{"id":456},"status":"completed","conclusion":"failure"}
+                ]}),
+            ),
+            (200, json!({"merge_commit_sha":null})),
+            (200, json!([])),
+        ]);
+        let blockers = github.checks(&current, &Policy::default()).unwrap();
+        handle.join().unwrap();
+        assert!(blockers.is_empty(), "{blockers:?}");
+    }
+
+    fn native_merge_replies(ci: &str, required_review: bool) -> Vec<(u16, Value)> {
+        let current = candidate();
+        let pull = json!({"html_url":current.url,"head":{"sha":current.head,"ref":current.source_branch,"repo":{"full_name":current.source_repository}},
+            "base":{"sha":current.base,"ref":current.target_branch},"state":"open","draft":false,"merge_commit_sha":null});
+        let mut checks = vec![json!({"context":"CI","app_id":15368})];
+        if required_review {
+            checks.push(json!({"context":"review-policy","app_id":456}));
+        }
+        let protection = json!({"enforce_admins":{"enabled":true},"required_status_checks":{"strict":true,"checks":checks}});
+        vec![
+            (200, pull.clone()),
+            (200, protection.clone()),
+            (200, protection),
+            (
+                200,
+                json!({"check_runs":[
+                {"id":1,"name":"CI","head_sha":current.head,"app":{"id":15368},"status":"completed","conclusion":ci},
+                {"id":2,"name":"review-policy","head_sha":current.head,"app":{"id":456},"status":"completed","conclusion":"failure"},
+                {"id":3,"name":"advisory-review-coordinator","head_sha":current.head,"app":{"id":15368},"status":"completed","conclusion":"failure"}
+                ]}),
+            ),
+            (200, pull.clone()),
+            (200, json!([])),
+            (200, pull.clone()),
+            (200, pull),
+        ]
+    }
+
+    #[test]
+    fn native_merge_and_preview_work_without_provider_evidence() {
+        for apply in [false, true] {
+            let mut replies = native_merge_replies("success", false);
+            if apply {
+                replies.push((200, json!({"merged":true})));
+            }
+            let (mut github, handle) = server(replies);
+            let outcome = github.merge_native(&candidate(), apply).unwrap();
+            handle.join().unwrap();
+            if apply {
+                assert_eq!(outcome["merged"], true);
+            } else {
+                assert_eq!(outcome["verdict"], "ready");
+                assert_eq!(outcome["applied"], false);
+                assert_eq!(outcome["reviewRequired"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn native_merge_preserves_failed_ci_and_required_review_blockers() {
+        for (ci, required_review) in [
+            ("failure", false),
+            ("skipped", false),
+            ("cancelled", false),
+            ("success", true),
+        ] {
+            let mut replies = native_merge_replies(ci, required_review);
+            replies.truncate(6);
+            let (mut github, handle) = server(replies);
+            let error = github.merge_native(&candidate(), true).unwrap_err();
+            handle.join().unwrap();
+            assert!(error.to_string().contains(if required_review {
+                "review-policy"
+            } else {
+                "CI"
+            }));
+        }
+    }
+
+    #[test]
+    fn native_merge_rejects_a_moving_comparison_and_forge_refusal() {
+        let mut replies = native_merge_replies("success", false);
+        replies.last_mut().unwrap().1["base"]["sha"] = json!("c".repeat(40));
+        let (mut github, handle) = server(replies);
+        assert!(
+            github
+                .merge_native(&candidate(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("comparison changed")
+        );
+        handle.join().unwrap();
+
+        let mut replies = native_merge_replies("success", false);
+        replies.push((405, json!({"message":"Required human approval is missing"})));
+        let (mut github, handle) = server(replies);
+        assert!(github.merge_native(&candidate(), true).is_err());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn advisory_review_alone_cannot_qualify_ci() {
+        let (mut github, handle) = server(vec![
+            (404, Value::Null),
+            (
+                200,
+                json!({"check_runs":[{"id":1,"name":"review-policy","head_sha":"a".repeat(40),"app":{"id":456},"status":"completed","conclusion":"success"}]}),
+            ),
+            (200, json!({"merge_commit_sha":null})),
+            (200, json!([])),
+        ]);
+        let blockers = github.checks(&candidate(), &Policy::default()).unwrap();
+        handle.join().unwrap();
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker.contains("no CI qualification"))
+        );
+    }
+
+    fn native_ci_fixture(
+        required: Vec<Value>,
+        checks: Vec<Value>,
+        statuses: Vec<Value>,
+    ) -> (GitHub, thread::JoinHandle<()>) {
+        server(vec![
+            (200, json!({"required_status_checks":{"checks":required}})),
+            (200, json!({"check_runs":checks})),
+            (200, json!({"merge_commit_sha":null})),
+            (200, json!(statuses)),
+        ])
+    }
+
+    fn ci_run(id: u64, name: &str, app: u64, conclusion: &str) -> Value {
+        json!({"id":id,"name":name,"head_sha":candidate().head,"app":{"id":app},
+            "status":if conclusion == "pending" {"in_progress"} else {"completed"},
+            "conclusion":if conclusion == "pending" {Value::Null} else {json!(conclusion)}})
+    }
+
+    #[test]
+    fn review_only_protection_keeps_ci_qualification_fallback() {
+        for conclusion in [
+            Some("failure"),
+            Some("pending"),
+            Some("cancelled"),
+            Some("skipped"),
+            Some("success"),
+            None,
+        ] {
+            let mut checks = vec![ci_run(1, "review-policy", 456, "success")];
+            if let Some(conclusion) = conclusion {
+                checks.push(ci_run(2, "CI", 15368, conclusion));
+            }
+            let (mut github, handle) = native_ci_fixture(
+                vec![json!({"context":"review-policy","app_id":456})],
+                checks,
+                vec![],
+            );
+            let blockers = github.checks_required(&candidate(), &[], false).unwrap();
+            handle.join().unwrap();
+            if conclusion == Some("success") {
+                assert!(blockers.is_empty(), "{blockers:?}");
+            } else if conclusion.is_none() {
+                assert!(
+                    blockers.iter().any(|b| b.contains("no CI qualification")),
+                    "{blockers:?}"
+                );
+            } else {
+                assert!(
+                    blockers
+                        .iter()
+                        .any(|b| b.contains("CI check has not passed: CI")),
+                    "{blockers:?}"
+                );
+            }
+        }
+        for state in ["pending", "error", "failure", "success"] {
+            let (mut github, handle) = native_ci_fixture(
+                vec![json!({"context":"review-policy","app_id":456})],
+                vec![ci_run(1, "review-policy", 456, "success")],
+                vec![json!({"context":"CI","state":state})],
+            );
+            let blockers = github.checks_required(&candidate(), &[], false).unwrap();
+            handle.join().unwrap();
+            assert_eq!(blockers.is_empty(), state == "success", "{blockers:?}");
+        }
+    }
+
+    #[test]
+    fn native_ci_filter_keeps_required_app_identity_for_advisory_names() {
+        for all_ci in [false, true] {
+            for legacy in [false, true] {
+                let mut checks = vec![ci_run(1, "CI", 15368, "success")];
+                let mut statuses = vec![];
+                if legacy {
+                    statuses.push(json!({"context":"CI","state":"failure"}));
+                } else {
+                    checks.push(ci_run(2, "CI", 789, "failure"));
+                }
+                let (mut github, handle) = native_ci_fixture(
+                    vec![json!({"context":"CI","app_id":15368})],
+                    checks,
+                    statuses,
+                );
+                let blockers = github.checks_required(&candidate(), &[], all_ci).unwrap();
+                handle.join().unwrap();
+                assert_eq!(blockers.is_empty(), !all_ci, "{blockers:?}");
+            }
+        }
+        for app in [Some(15368), None] {
+            let (mut github, handle) = native_ci_fixture(
+                vec![json!({"context":"CI","app_id":app})],
+                vec![
+                    ci_run(1, "CI", 15368, "failure"),
+                    ci_run(2, "CI", 789, "success"),
+                ],
+                vec![json!({"context":"CI","state":"success"})],
+            );
+            let blockers = github.checks_required(&candidate(), &[], false).unwrap();
+            handle.join().unwrap();
+            assert!(
+                blockers
+                    .iter()
+                    .any(|b| b.contains("CI check has not passed: CI")),
+                "{blockers:?}"
+            );
+            if app.is_some() {
+                assert!(
+                    blockers
+                        .iter()
+                        .any(|b| b.contains("required CI context is missing")),
+                    "{blockers:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_required_review_cannot_be_replaced_by_another_app_or_legacy_status() {
+        for app in [456, 789] {
+            let (mut github, handle) = native_ci_fixture(
+                vec![
+                    json!({"context":"review-policy","app_id":456}),
+                    json!({"context":"CI","app_id":15368}),
+                ],
+                vec![
+                    ci_run(1, "review-policy", app, "failure"),
+                    ci_run(2, "review-policy", 789, "success"),
+                    ci_run(3, "CI", 15368, "success"),
+                ],
+                vec![json!({"context":"review-policy","state":"success"})],
+            );
+            let blockers = github.checks_required(&candidate(), &[], false).unwrap();
+            handle.join().unwrap();
+            assert!(
+                blockers
+                    .iter()
+                    .any(|b| b
+                        .contains("required CI context is missing or unsuccessful: review-policy")),
+                "{blockers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_rejects_a_different_dedicated_app_even_with_strict_protection() {
+        let current = candidate();
+        let (mut github, handle) = server(vec![
+            (
+                200,
+                json!({"html_url":current.url,"head":{"sha":current.head,"ref":current.source_branch,"repo":{"full_name":current.source_repository}},
+                "base":{"sha":current.base,"ref":current.target_branch},"state":"open","draft":false}),
+            ),
+            (
+                200,
+                json!({"enforce_admins":{"enabled":true},"required_status_checks":{"strict":true,"checks":[{"context":"review-policy","app_id":789}]}}),
+            ),
+        ]);
+        let error = github.merge(&current, &protected_policy()).unwrap_err();
+        assert!(error.to_string().contains("configured dedicated"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn policy_check_publication_requires_exact_app_response() {
+        for identity in [json!(456), json!(789), json!(15368), Value::Null] {
+            let (github, handle) = server(vec![(201, json!({"app":{"id":identity}}))]);
+            let published = github.publish_check(
+                &candidate(),
+                &protected_policy(),
+                true,
+                "https://github.com/example/project/actions/runs/1",
+            );
+            assert_eq!(
+                published.is_ok(),
+                identity == json!(456),
+                "identity {identity}: {published:?}"
+            );
+            handle.join().unwrap();
         }
     }
     fn intent() -> Intent {

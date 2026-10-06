@@ -1,7 +1,7 @@
 //! Shared Clap surface for standalone toolbelt and direct Cargo consumers.
 use super::{
-    Candidate, Error, Forge, GitHub, GreptileGitHub, Outcome, Policy, Provider, Verdict,
-    ensure_once, now_seconds,
+    Candidate, Error, Forge, GitHub, Outcome, Policy, Verdict, ensure_once, github_provider,
+    now_seconds,
 };
 use clap::{Args, Subcommand};
 use std::{
@@ -84,7 +84,10 @@ pub struct MergeArgs {
     /// Candidate and policy selection.
     #[command(flatten)]
     pub common: CommonArgs,
-    /// Apply the merge after a fresh review, CI and native protection check
+    /// Explicitly require current provider review and its dedicated policy check
+    #[arg(long)]
+    pub require_review: bool,
+    /// Apply the merge after fresh CI and native protection checks
     #[arg(long)]
     pub apply: bool,
 }
@@ -132,7 +135,7 @@ pub fn policy_from_environment(explicit: Option<PathBuf>) -> Result<Policy, Erro
     if path.exists() {
         Policy::load(&path)
     } else {
-        Ok(Policy::default())
+        Err(Error("explicit consumer-owned review policy is required; configure CANIX_REVIEW_POLICY or canix-toolbelt/review.pkl".into()))
     }
 }
 
@@ -216,7 +219,7 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
     ));
     let pr = resolve_pr(&args, &github)?;
     let path = state_dir(args.state_dir.clone())?;
-    let mut provider = GreptileGitHub::new(github.clone());
+    let mut provider = github_provider(github.clone(), &policy)?;
     if let Some(expected) = &args.expected_head {
         if &github.candidate(&pr)?.head != expected {
             return Err(Error("candidate is stale relative to the caller's expected head; no review was submitted".into()));
@@ -227,7 +230,7 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
         let mut result = if review_only {
             ensure_once(
                 &mut ReviewOnly(&mut github),
-                &mut provider,
+                provider.as_mut(),
                 &policy,
                 &pr,
                 &path,
@@ -236,7 +239,7 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
         } else {
             ensure_once(
                 &mut github,
-                &mut provider,
+                provider.as_mut(),
                 &policy,
                 &pr,
                 &path,
@@ -287,9 +290,10 @@ fn print(value: &impl serde::Serialize) -> Result<(), Error> {
 pub fn run(command: ReviewCommand) -> Result<u8, Error> {
     match command {
         ReviewCommand::Doctor => {
+            let policy = policy_from_environment(None)?;
             let github = github_from_environment()?;
             github.authenticate()?;
-            print(&GreptileGitHub::new(github).capabilities())?;
+            print(&github_provider(github, &policy)?.capabilities())?;
             Ok(0)
         }
         ReviewCommand::Ensure(args) => {
@@ -298,6 +302,7 @@ pub fn run(command: ReviewCommand) -> Result<u8, Error> {
             Ok(result.verdict.exit_code())
         }
         ReviewCommand::Gate(args) => {
+            let policy = policy_from_environment(args.common.policy.clone())?;
             if args.publish_check {
                 // Invalidate older passing evidence before fallible collection.
                 let mut github = github_from_environment()?;
@@ -316,6 +321,7 @@ pub fn run(command: ReviewCommand) -> Result<u8, Error> {
                 }
                 github.publish_check(
                     &candidate,
+                    &policy,
                     false,
                     args.details_url.as_deref().ok_or_else(|| {
                         Error("check publication requires a coordinator permalink".into())
@@ -330,6 +336,7 @@ pub fn run(command: ReviewCommand) -> Result<u8, Error> {
                 })?;
                 github_from_environment()?.publish_check(
                     &result.candidate,
+                    &policy,
                     result.verdict == Verdict::Ready,
                     &details,
                 )?;
@@ -349,7 +356,7 @@ pub fn run(command: ReviewCommand) -> Result<u8, Error> {
                 .iter()
                 .find(|f| f.id == args.finding)
                 .ok_or_else(|| Error("finding is not in the current review".into()))?;
-            GreptileGitHub::new(github_from_environment()?).disposition(
+            github_from_environment()?.disposition(
                 &result.candidate,
                 &policy,
                 &review,
@@ -367,6 +374,34 @@ pub fn run(command: ReviewCommand) -> Result<u8, Error> {
 
 /// Execute or preview an authorized merge after fresh gate evaluation.
 pub fn merge(args: MergeArgs) -> Result<u8, Error> {
+    if !args.require_review {
+        if args.common.policy.is_some() || args.common.state_dir.is_some() {
+            return Err(Error(
+                "--policy and --state-dir require --require-review for merge".into(),
+            ));
+        }
+        let mut github = github_from_environment()?.with_deadline(Duration::from_secs(
+            if args.common.timeout_seconds == 0 {
+                60
+            } else {
+                args.common.timeout_seconds
+            },
+        ));
+        let pr = resolve_pr(&args.common, &github)?;
+        let candidate = github.candidate(&pr)?;
+        if args
+            .common
+            .expected_head
+            .as_ref()
+            .is_some_and(|head| head != &candidate.head)
+        {
+            return Err(Error(
+                "merge candidate does not match the caller's expected head".into(),
+            ));
+        }
+        print(&github.merge_native(&candidate, args.apply)?)?;
+        return Ok(0);
+    }
     let policy = policy_from_environment(args.common.policy.clone())?;
     let result = ensure(args.common, true, false)?;
     print(&result)?;

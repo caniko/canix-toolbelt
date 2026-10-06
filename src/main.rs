@@ -15,7 +15,7 @@ enum Command {
     /// Ensure revision-bound PR review, inspect gates and disposition findings
     #[command(subcommand)]
     Review(canix_toolbelt::review::cli::ReviewCommand),
-    /// Revalidate review and CI before an explicitly authorized PR merge
+    /// Validate CI and native protection before an explicitly authorized PR merge
     Merge(canix_toolbelt::review::cli::MergeArgs),
     /// Inspect deployment-provided runtime facts
     #[command(subcommand)]

@@ -5,8 +5,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-06
+
 ### Added
 
+- Explicit roborev receipt collection, request-bound publication and durable
+  dispatch through a provisioned Unix socket, with complete canonical findings.
 - Durable systemd-stage operator with an optional Unix CLI, execution-contract
   binding, kernel locking, synchronized checkpoints, bounded retries and worker
   restoration. Interrupted runs reject a changed package/argument contract and
@@ -16,6 +20,20 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 - Start cold systemd stage units without resetting nonexistent failed state,
   retaining bounded retries for missing units and service-manager errors.
+
+- Retain CI qualification when branch protection requires only the review-policy
+  check; failed, pending, cancelled, skipped or missing CI still blocks merging.
+- Match App-bound required checks by both context and GitHub App identity, so
+  unrelated advisory checks and legacy statuses cannot block satisfied requirements.
+- Preserve comparison and policy history across review retries, and keep unknown
+  submissions fenced when their journal is missing.
+- Bind receipt publication to the original forge request so edited markers or
+  changed evidence cannot open another publication lifetime.
+
+### Changed
+
+- Validate native CI and forge protection independently of optional provider
+  review; `merge --require-review` retains the explicit provider acceptance gate.
 
 ## [0.2.0] - 2026-10-04
 
@@ -57,5 +75,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Registry Fleetix `0.2` integration, allowing downstream consumers to share
   one supported Fleetix series with the runtime loader.
 
-[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0
