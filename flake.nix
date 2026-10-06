@@ -183,6 +183,13 @@
           configPath = ./website/plinth-project.toml;
         };
       in {
+        # The Claude subscription output explicitly depends on this proprietary
+        # executable. Keep its permission pure and limited to that package.
+        _module.args.pkgs = import nixpkgs {
+          inherit system;
+          config.allowUnfreePredicate = package: nixpkgs.lib.getName package == "claude-code";
+        };
+
         checks =
           {
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs;};

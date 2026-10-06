@@ -45,6 +45,9 @@ dependency closure. It selects a Nix-packaged Claude executable explicitly with
 for V2's local-directory loader. The upstream plugin already implements V2's
 `setup(ctx)` API.
 
+Toolbelt's flake package set permits only `claude-code` through an explicit
+unfree-package predicate. Home Manager consumers supply their own package policy.
+
 Until upstream supports managed endpoints, the package carries a small,
 drift-checked patch adding `options.externalBaseURL`. External mode never
 starts or stops Meridian. It registers per-request directory hooks using the
