@@ -1,0 +1,24 @@
+{
+  "native": {
+    "nix": "/tools/nix",
+    "timeout": "/tools/coreutils/bin/timeout",
+    "timeout_seconds": 21600,
+    "query_timeout_seconds": 60,
+    "system": "x86_64-linux",
+    "gc_roots": "/nix/var/nix/gcroots/per-user/can/fleetix-train",
+    "substitutes": true
+  },
+  "coordinator": {
+    "socket": "/run/fleetix-train/coordinator.sock",
+    "state_dir": "/var/lib/fleetix-train",
+    "workers": 2,
+    "planning_workers": 1,
+    "queue_limit": 128,
+    "aging_seconds": 300,
+    "planning_timeout_seconds": 180,
+    "policy": "042d72fa94a66f2d66d1b1995c9a28c79a088346e613971cade1a765b444ecf1"
+  },
+  "builder": "atlas",
+  "admission_contract": "qualified-resource-policy",
+  "memory_max": "1G"
+}
