@@ -49,6 +49,11 @@ name = "roborev-worker-fixture"
 path = "src/bin/roborev-worker-fixture.rs"
 required-features = ["roborev-worker-tests"]
 
+[[bin]]
+name = "roborev-daemon-worker-fixture"
+path = "src/bin/roborev-daemon-worker-fixture.rs"
+required-features = ["roborev-worker-tests"]
+
 [[test]]
 name = "roborev_preparation"
 required-features = ["roborev-preparation-tests"]
