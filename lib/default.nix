@@ -1,4 +1,7 @@
-{lib}: let
+{
+  lib,
+  fleetixLib ? null,
+}: let
   site = import ./site.nix {inherit lib;};
 in
   {
@@ -11,10 +14,16 @@ in
     devAgentIsolation = import ./dev-agent-isolation.nix {inherit lib;};
     dns = import ./dns.nix;
     facterDisks = import ./facterDisks.nix;
-    gpu = import ./gpu.nix;
+    gpu = import ./gpu.nix {
+      fleetixGpu =
+        if fleetixLib != null
+        then fleetixLib.gpu
+        else throw "Toolbelt GPU helpers require fleetixLib";
+    };
     homeActivation = import ./homeActivation.nix {inherit lib;};
     hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
+    mpvGpu = import ./mpvGpu.nix;
     networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};
     opsShellPackages = import ./opsShellPackages.nix;

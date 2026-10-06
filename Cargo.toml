@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -11,14 +11,16 @@ documentation = "https://docs.rs/canix-toolbelt"
 readme = "RUST.md"
 keywords = ["nixos", "runtime", "pkl", "configuration"]
 categories = ["config", "command-line-utilities"]
-include = ["/src/**", "/tests/**", "/examples/**", "/RUST.md", "/CHANGELOG.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
+include = ["/src/**", "/tests/**", "/examples/**", "/runtime/ReviewPolicy.pkl", "/RUST.md", "/BUILD_TRAIN.md", "/CHANGELOG.md", "/LICENSE", "/Cargo.toml", "/Cargo.lock"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = []
-cli = ["dep:clap", "dep:serde_json"]
+cli = ["dep:clap", "dep:signal-hook", "review"]
+review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
+build-train = ["fleetix/build-train-runtime", "dep:nix-manager-core", "dep:sha2", "dep:signal-hook"]
 
 [[bin]]
 name = "canix-toolbelt"
@@ -26,11 +28,20 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-fleetix = { version = "0.2.0", default-features = false }
+fleetix = { version = "0.5.0", default-features = false, features = ["pkl"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde_json = "1"
+rustix = { version = "1", features = ["fs"] }
+signal-hook = { version = "0.4", optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
+sha2 = { version = "0.10", optional = true }
+fs2 = { version = "0.4", optional = true }
+url = { version = "2", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+zeroize = { version = "1", optional = true }
+nix-manager-core = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

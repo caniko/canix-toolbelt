@@ -1,4 +1,4 @@
-{
+{fleetixGpu}: {
   activation-contracts = ./activation-contracts.nix;
   activation-manifest = ./activation-manifest.nix;
 
@@ -32,6 +32,7 @@
   betterdesk-server = ./services/betterdesk-server.nix;
   attic-projects-registry = ./services/attic-projects-registry.nix;
   atticd-preset = ./services/atticd-preset.nix;
+  build-train = ./services/build-train.nix;
   caddy-base = ./services/caddy-base.nix;
   caddy-service-registry = ./services/caddy-service-registry.nix;
   dev-agent-isolation = ./services/dev-agent-isolation.nix;
@@ -72,7 +73,8 @@
   gpu-backend-vulkan = ./hardware/gpu/backend/vulkan.nix;
 
   # GPU — explicit VA-API media-decode route (shared with homeModules)
-  gpu-media = ../gpu-media.nix;
+  gpu-media = import ../gpu-media.nix {inherit fleetixGpu;};
+  gpu-render = import ../gpu-render.nix {inherit fleetixGpu;};
 
   # GPU — vendors
   gpu-amd = ./hardware/gpu/amd.nix;

@@ -12,9 +12,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run or inspect the builder-local shared construction service
+    #[cfg(feature = "build-train")]
+    #[command(subcommand)]
+    BuildTrain(canix_toolbelt::build_train::cli::TrainCommand),
+    /// Ensure revision-bound PR review, inspect gates and disposition findings
+    #[command(subcommand)]
+    Review(canix_toolbelt::review::cli::ReviewCommand),
+    /// Validate CI and native protection before an explicitly authorized PR merge
+    Merge(canix_toolbelt::review::cli::MergeArgs),
     /// Inspect deployment-provided runtime facts
     #[command(subcommand)]
     Runtime(RuntimeCommand),
+    /// Run or cancel a durable systemd stage controller
+    #[command(subcommand)]
+    Operator(OperatorCommand),
+}
+
+#[derive(Subcommand)]
+enum OperatorCommand {
+    /// Execute or resume the immutable deployment policy
+    Run {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        systemctl: PathBuf,
+        #[arg(long)]
+        systemd_notify: Option<PathBuf>,
+    },
+    /// Cancel after the controller service has stopped
+    Cancel {
+        #[arg(long)]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -27,21 +57,71 @@ enum RuntimeCommand {
     },
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
+        #[cfg(feature = "build-train")]
+        Command::BuildTrain(command) => {
+            return canix_toolbelt::build_train::cli::run(command).map_err(Into::into);
+        }
+        Command::Review(command) => {
+            return canix_toolbelt::review::cli::run(command)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
+        Command::Merge(args) => {
+            return canix_toolbelt::review::cli::merge(args)
+                .map(std::process::ExitCode::from)
+                .map_err(Into::into);
+        }
         Command::Runtime(RuntimeCommand::Show { path }) => {
             let manifest = RuntimeManifest::load_from(&path)?;
             let mut stdout = std::io::stdout().lock();
             serde_json::to_writer_pretty(&mut stdout, &manifest)?;
             writeln!(stdout)?;
         }
+        Command::Operator(command) => {
+            use canix_toolbelt::operator;
+            match command {
+                OperatorCommand::Cancel { config } => {
+                    let policy = serde_json::from_reader(std::fs::File::open(config)?)?;
+                    operator::cancel(&policy)?;
+                }
+                OperatorCommand::Run {
+                    config,
+                    systemctl,
+                    systemd_notify,
+                } => {
+                    let policy = serde_json::from_reader(std::fs::File::open(config)?)?;
+                    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+                        signal_hook::flag::register(signal, std::sync::Arc::clone(&cancelled))?;
+                    }
+                    if let Some(notify) = systemd_notify {
+                        if !std::process::Command::new(notify)
+                            .arg("--ready")
+                            .status()?
+                            .success()
+                        {
+                            return Err("systemd readiness notification failed".into());
+                        }
+                    }
+                    let outcome =
+                        operator::run(&policy, &mut operator::Systemd { systemctl }, &cancelled)?;
+                    return Ok(std::process::ExitCode::from(match outcome {
+                        operator::Outcome::Succeeded => 0,
+                        operator::Outcome::Failed => 20,
+                        operator::Outcome::Interrupted => 143,
+                    }));
+                }
+            }
+        }
     }
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
 fn main() -> std::process::ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
