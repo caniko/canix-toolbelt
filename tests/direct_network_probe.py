@@ -130,7 +130,7 @@ try:
                    '--', echo, 'desktop-only-user') == 'desktop-only-user\n'
         failed_launch = subprocess.run([binary, 'launch', '--socket', str(directory / 'missing.sock'),
                                        '--systemctl', true, '--unit', 'fixture.service', '--',
-                                       echo, 'must-not-launch'], check=False, capture_output=True, text=True, timeout=5)
+                                       echo, 'must-not-launch'], check=False, capture_output=True, text=True, timeout=20)
         assert failed_launch.returncode != 0 and 'must-not-launch' not in failed_launch.stdout
         old = [socket.create_connection((ip, 8080), timeout=3)
                for ip in ('203.0.113.20', '2001:db8:20::20')]

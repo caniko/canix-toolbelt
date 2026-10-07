@@ -58,6 +58,7 @@ in
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
   assert home.systemd.user.slices.app-amc.Slice.MemoryMax == "3G";
+  assert home.systemd.user.slices.app-amc-direct.Unit.Description != "";
   assert builtins.elem "direct-network-agent-tools.service" home.systemd.user.services.backend.Unit.Requires;
   assert builtins.elem "user.slice/user-1000.slice/user@1000.service/app.slice/app-amc.slice/app-amc-direct.slice" policy.cgroupPaths;
   assert builtins.elem "user.slice/user-1000.slice/user@1000.service/agent.slice/agent-tools.slice" policy.cgroupPaths;

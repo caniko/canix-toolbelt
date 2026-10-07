@@ -1,6 +1,30 @@
 #![cfg(all(target_os = "linux", feature = "direct-network"))]
 
-use canix_toolbelt::direct_network::{Policy, select_routes};
+use canix_toolbelt::direct_network::{Policy, ready, select_routes};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
+use std::thread;
+use std::time::Duration;
+
+#[test]
+fn readiness_waits_for_socket_creation_and_pending_initial_reconciliation() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ready.sock");
+    let server_socket = socket.clone();
+    let server = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(150));
+        let listener = UnixListener::bind(server_socket).unwrap();
+        for response in [b"not-ready\n".as_slice(), b"ready\n".as_slice()] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 6];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"ready\n");
+            stream.write_all(response).unwrap();
+        }
+    });
+    ready(&socket).unwrap();
+    server.join().unwrap();
+}
 
 fn policy() -> Policy {
     serde_json::from_value(serde_json::json!({

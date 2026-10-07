@@ -42,7 +42,11 @@
   };
   policy = pkgs.writeText "direct-network-policy.json" (builtins.toJSON policyData);
   mkUser = user: {
-    systemd.user.slices = lib.genAttrs (map (lib.removeSuffix ".slice") (userSlices user)) (_: {});
+    # An empty Home Manager unit is a masked unit to systemd. Every declared
+    # slice needs content even when it inherits all its resource policy.
+    systemd.user.slices = lib.genAttrs (map (lib.removeSuffix ".slice") (userSlices user)) (name: {
+      Unit.Description = lib.mkDefault "Direct-network resource slice ${name}";
+    });
     systemd.user.services = lib.mkMerge [
       (lib.genAttrs (map anchor (userSlices user)) (name: let
         slice = "${lib.removePrefix "direct-network-" name}.slice";
@@ -168,7 +172,9 @@ in {
       system.nssDatabases.hosts = lib.mkForce ["files" "mymachines" "myhostname" "dns"];
       environment.etc."direct-network-policy.json".text = builtins.toJSON policyData;
       environment.systemPackages = [cfg.package];
-      systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (_: {});
+      systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (name: {
+        description = lib.mkDefault "Direct-network resource slice ${name}";
+      });
       systemd.services = lib.mkMerge [
         {
           # nsncd 1.5.2's documented per-database switch keeps account lookups

@@ -62,7 +62,9 @@ builder boundaries without relocating them.
 Gate desktop VPN launch with `canix-toolbelt-direct-network launch --systemctl
 /absolute/systemctl --unit direct-network-<slice>.service -- /absolute/client`.
 The launcher starts the selected user anchors, requires readiness and execs the
-client. `canix-toolbelt-direct-network ready` is available for inspection. The root
+client. Readiness retries initial socket creation and route/DNS initialization
+for up to 15 seconds. `canix-toolbelt-direct-network ready` is available for
+inspection. The root
 daemon accepts only fixed readiness requests from configured UIDs; clients
 cannot enroll additional cgroups or supply commands. Root-only `ready
 --routes-only` bootstraps the independent DNS listener. Readiness synchronously

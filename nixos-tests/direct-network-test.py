@@ -14,7 +14,7 @@ machine.wait_for_unit('multi-user.target')
 machine.wait_for_unit('nscd.service')
 machine.succeed('getent passwd operator')
 machine.succeed('systemctl start network-fixture.service')
-machine.wait_for_file('/run/network-fixture-ready')
+machine.wait_for_file('/run/network-fixture-ready', timeout=60)
 machine.wait_for_unit('user@1000.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 user = 'runuser -u operator -- env XDG_RUNTIME_DIR=/run/user/1000 '

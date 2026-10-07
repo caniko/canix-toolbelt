@@ -15,7 +15,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Fallible direct-network operations with underlying I/O diagnostics.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -680,8 +680,21 @@ pub fn routes_ready(socket: &Path) -> Result<()> {
 }
 
 fn wait_ready(socket: &Path, routes_only: bool) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match request_ready(socket, routes_only, remaining.min(Duration::from_secs(2))) {
+            Ok(()) => return Ok(()),
+            Err(error) if Instant::now() >= deadline => return Err(error),
+            Err(_) => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+fn request_ready(socket: &Path, routes_only: bool, timeout: Duration) -> Result<()> {
     let mut stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     stream.write_all(if routes_only { b"routes\n" } else { b"ready\n" })?;
     let mut response = String::new();
     stream.take(32).read_to_string(&mut response)?;
