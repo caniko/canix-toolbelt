@@ -22,6 +22,66 @@ if WRAPPED_RAGE:
     del sys.argv[1]
 
 
+class RequestContextIntegration(unittest.TestCase):
+    """Exercise executable entrypoints with recording, non-secret backends."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix="pc-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode"))
+        cls.addClassCleanup(cls.temp.cleanup)
+        root = Path(cls.temp.name)
+        backend = root / "backend"
+        backend.write_text(f"#!{sys.executable}\nimport json, os\n"
+                           "print(json.dumps({key: os.environ.get(key) for key in "
+                           "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'GPG_TTY', 'PINENTRY_USER_DATA']}))\n")
+        backend.chmod(0o700)
+        manager = root / "manager"
+        manager.write_text(f"#!{sys.executable}\nprint('DISPLAY=:manager\\nWAYLAND_DISPLAY=manager\\nXAUTHORITY=manager\\nXDG_SESSION_TYPE=manager')\n")
+        manager.chmod(0o700)
+        binary = root / "router"
+        compile_env = dict(os.environ, CANIX_PINENTRY_GPG=str(backend), CANIX_PINENTRY_QT=str(backend),
+                           CANIX_PINENTRY_SYSTEMCTL=str(manager))
+        subprocess.run(["rustc", "--edition=2024", "-D", "warnings", str(Path(__file__).with_name("main.rs")), "-o", str(binary)],
+                       env=compile_env, capture_output=True, check=True, timeout=30)
+        cls.gpg = root / "gpg"
+        cls.gpg.symlink_to(binary)
+        cls.gpg2 = root / "gpg2"
+        cls.gpg2.symlink_to(binary)
+        cls.agent = root / "canix-toolbelt-pinentry-agent"
+        cls.agent.symlink_to(binary)
+        cls.env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("ZELLIJ", "GPG", "GNUPG", "SSH_", "PINENTRY"))}
+
+    def test_agent_preserves_all_request_display_values(self):
+        env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",
+                   WAYLAND_DISPLAY="request-wayland", XAUTHORITY="request-auth", XDG_SESSION_TYPE="request-type")
+        result = subprocess.run([self.agent], env=env, text=True, capture_output=True, check=True, timeout=5)
+        actual = json.loads(result.stdout)
+        for key in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE"]:
+            self.assertEqual(actual[key], env[key])
+
+    def test_gpg_accepts_the_open_controlling_terminal_outside_devpts(self):
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        result = subprocess.run([BASH, "--noprofile", "--norc", "-c", 'exec < /dev/tty; exec "$@"', "fixture", str(self.gpg)],
+                                env=self.env, stdin=slave, text=True, capture_output=True, check=True, timeout=5,
+                                start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+        self.assertEqual(json.loads(result.stdout)["GPG_TTY"], "/dev/tty")
+
+    def test_piped_gpg_preserves_an_explicit_terminal(self):
+        result = subprocess.run([self.gpg], env=dict(self.env, GPG_TTY="/dev/ttyS0"), input="", text=True,
+                                capture_output=True, check=True, timeout=5)
+        self.assertEqual(json.loads(result.stdout)["GPG_TTY"], "/dev/ttyS0")
+
+    def test_both_gpg_entrypoints_refresh_request_context(self):
+        env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", ZELLIJ_PANE_ID="17", ZELLIJ_SESSION_NAME="request-session")
+        for executable in [self.gpg, self.gpg2]:
+            with self.subTest(executable=executable.name):
+                result = subprocess.run([executable], env=env, input="", text=True, capture_output=True, check=True, timeout=5)
+                self.assertEqual(json.loads(result.stdout)["PINENTRY_USER_DATA"], "canix-pinentry-v1:zellij:17:request-session")
+
+
 class PinentryIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -112,8 +172,8 @@ class PinentryIntegration(unittest.TestCase):
         raise AssertionError("timed out waiting for fixture state")
 
     @classmethod
-    def query(cls, context, tty="/dev/pts/99999999"):
-        process = subprocess.Popen([CONNECT], env=cls.env, text=True, stdin=subprocess.PIPE,
+    def query(cls, context, tty="/dev/pts/99999999", env=None):
+        process = subprocess.Popen([CONNECT], env=env if env is not None else cls.env, text=True, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         cls.queries.append(process)
         context_option = f"OPTION pinentry-user-data={context}\n" if context is not None else ""
@@ -295,6 +355,12 @@ class PinentryIntegration(unittest.TestCase):
         self.assertEqual(result.stdout, "canix-pinentry-v1:tty\n")
 
     def test_direct_desktop_request_uses_real_qt_on_the_callers_display(self):
+        self.desktop_query(agent=False)
+
+    def test_agent_desktop_request_uses_the_clients_display_instead_of_startup(self):
+        self.desktop_query(agent=True)
+
+    def desktop_query(self, agent):
         read_fd, write_fd = os.pipe()
         server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
                                   pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -306,13 +372,16 @@ class PinentryIntegration(unittest.TestCase):
         with os.fdopen(read_fd) as display:
             env = dict(self.env, DISPLAY=":" + display.readline().strip())
         env.pop("WAYLAND_DISPLAY", None)
-        process = subprocess.Popen([DIRECT], env=env, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.queries.append(process)
-        process.stdin.write("SETTITLE Toolbelt fixture\nSETDESC Desktop_fixture\nSETPROMPT PIN\nGETPIN\nBYE\n")
-        process.stdin.flush()
+        if agent:
+            process = self.query("canix-pinentry-v1:desktop", env=env)
+        else:
+            process = subprocess.Popen([DIRECT], env=env, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.queries.append(process)
+            process.stdin.write("SETTITLE Toolbelt fixture\nSETDESC Desktop_fixture\nSETPROMPT PIN\nGETPIN\nBYE\n")
+            process.stdin.flush()
 
         def window():
-            result = subprocess.run([XDOTOOL, "search", "--onlyvisible", "--name", "Toolbelt fixture"],
+            result = subprocess.run([XDOTOOL, "search", "--onlyvisible", "--class", "pinentry"],
                                     env=env, text=True, capture_output=True, timeout=5, check=False)
             return result.stdout.strip().splitlines()[0] if result.returncode == 0 else None
 

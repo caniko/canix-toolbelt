@@ -3,7 +3,11 @@
   pkgs,
 }: let
   inherit (pkgs) lib;
-  evaluate = settings:
+  evaluate = {
+    settings ? {},
+    nushell ? false,
+    nushellIntegration ? true,
+  }:
     (inputs.home-manager.lib.homeManagerConfiguration {
       inherit pkgs;
       modules = [
@@ -15,17 +19,38 @@
             stateVersion = "25.05";
           };
           canix-toolbelt.pinentry = settings;
+          programs.nushell.enable = nushell;
+          services.gpg-agent.enableNushellIntegration = nushellIntegration;
         }
       ];
     }).config;
   disabled = evaluate {};
   direct = evaluate {
-    enable = true;
-    rageIntegration = true;
+    settings = {
+      enable = true;
+      rageIntegration = true;
+    };
   };
   gpg = evaluate {
-    enable = true;
-    gpgIntegration = true;
+    settings = {
+      enable = true;
+      gpgIntegration = true;
+    };
+  };
+  nushell = evaluate {
+    settings = {
+      enable = true;
+      gpgIntegration = true;
+    };
+    nushell = true;
+  };
+  nushellOptOut = evaluate {
+    settings = {
+      enable = true;
+      gpgIntegration = true;
+    };
+    nushell = true;
+    nushellIntegration = false;
   };
 in
   assert !disabled.programs.gpg.enable;
@@ -38,4 +63,6 @@ in
   # Home Manager may add its own GPG_TTY hook; disabled Nushell must not
   # receive the router's request-context hook.
   assert !lib.hasInfix "PINENTRY_USER_DATA" gpg.programs.nushell.extraConfig;
+  assert lib.hasInfix "PINENTRY_USER_DATA" nushell.programs.nushell.extraConfig;
+  assert nushellOptOut.programs.nushell.extraConfig == "";
     pkgs.writeText "pinentry-home-eval" "ok"

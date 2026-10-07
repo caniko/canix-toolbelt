@@ -3,7 +3,7 @@
 
 use std::env;
 use std::fs::{self, DirBuilder};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -23,10 +23,6 @@ const TTY: &str = match option_env!("CANIX_PINENTRY_TTY") {
 const QT: &str = match option_env!("CANIX_PINENTRY_QT") {
     Some(path) => path,
     None => "pinentry-qt",
-};
-const SYSTEMCTL: &str = match option_env!("CANIX_PINENTRY_SYSTEMCTL") {
-    Some(path) => path,
-    None => "systemctl",
 };
 const GPG: Option<&str> = option_env!("CANIX_PINENTRY_GPG");
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -119,9 +115,10 @@ fn exec_gpg() -> io::Error {
     command
         .args(env::args_os().skip(1))
         .env("PINENTRY_USER_DATA", current_route(true).user_data());
-    if let (Ok(tty), Ok(process)) = (fs::read_link("/proc/self/fd/0"), fs::metadata("/proc/self"))
-        && let Some(tty) = tty.to_str()
-        && valid_tty(tty, process.uid())
+    // stdin is already open in the requesting process: accept virtual consoles
+    // and serial terminals too. Popup metadata retains its stricter PTY check.
+    if io::stdin().is_terminal()
+        && let Ok(tty) = fs::read_link("/proc/self/fd/0")
     {
         command.env("GPG_TTY", tty);
     }
@@ -138,28 +135,10 @@ fn exec_tty() -> io::Error {
     backend(TTY).exec()
 }
 
-fn exec_desktop(agent: bool) -> io::Error {
-    let mut command = backend(QT);
-    // A direct client has its own display. Only the shared agent needs the
-    // user manager's current display environment after socket activation.
-    if agent
-        && let Ok(output) = Command::new(SYSTEMCTL)
-            .args(["--user", "show-environment"])
-            .output()
-        && output.status.success()
-    {
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if let Some((name, value)) = line.split_once('=')
-                && matches!(
-                    name,
-                    "DISPLAY" | "WAYLAND_DISPLAY" | "XAUTHORITY" | "XDG_SESSION_TYPE"
-                )
-            {
-                command.env(name, value);
-            }
-        }
-    }
-    command.exec()
+fn exec_desktop() -> io::Error {
+    // GnuPG supplies the requesting session's display per call. A manager-wide
+    // environment can belong to a different graphical login or a stale session.
+    backend(QT).exec()
 }
 
 struct RuntimeDirectory(PathBuf);
@@ -337,7 +316,7 @@ fn run_popup(popup: Popup) -> io::Result<ExitCode> {
 fn run() -> io::Result<ExitCode> {
     let args: Vec<_> = env::args_os().collect();
     let name = args.first().and_then(|arg| Path::new(arg).file_name());
-    if name.is_some_and(|name| name == "gpg") {
+    if name.is_some_and(|name| name == "gpg" || name == "gpg2") {
         return Err(exec_gpg());
     }
     if args.get(1).is_some_and(|arg| arg == "--context") && args.len() == 2 {
@@ -360,7 +339,7 @@ fn run() -> io::Result<ExitCode> {
         current_route(true)
     };
     match request {
-        Route::Desktop => Err(exec_desktop(agent)),
+        Route::Desktop => Err(exec_desktop()),
         Route::Tty => Err(exec_tty()),
         Route::Zellij { pane, session } => match popup(pane, &session) {
             Ok(popup) => run_popup(popup),

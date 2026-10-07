@@ -18,8 +18,10 @@
       meta = gnupg.meta // {outputsToInstall = ["out"];};
       paths = map (output: gnupg.${output}) (gnupg.meta.outputsToInstall or ["out"]);
       postBuild = ''
-        rm "$out/bin/gpg"
-        ln -s ${lib.getExe router} "$out/bin/gpg"
+        for program in gpg gpg2; do
+          rm -f "$out/bin/$program"
+          ln -s ${lib.getExe router} "$out/bin/$program"
+        done
       '';
     };
     requestRage = pkgs.symlinkJoin {
