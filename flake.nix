@@ -91,6 +91,7 @@
       imports = [
         ./flake-modules/dev-stack.nix
         ./flake-modules/rust.nix
+        ./flake-modules/pinentry.nix
         (import ./flake-modules/roborev.nix {
           inherit (inputs) nixpkgs;
           harborGo = inputs.harbor-go;

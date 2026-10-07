@@ -20,6 +20,7 @@
   roborev = ./roborev;
   browser-connection = ./browser-connection.nix;
   direnv = ./direnv.nix;
+  pinentry = ./pinentry.nix;
   opencode-environment = ./opencode-environment.nix;
   opencode-jev = ./opencode-jev.nix;
   opencode-claude = import ./opencode-claude.nix {inherit fleetixLib;};

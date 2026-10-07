@@ -5,6 +5,9 @@ runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
+  ".#canix-toolbelt-pinentry",
+  ".#rage-pinentry",
+  ".#checks.x86_64-linux.pinentry-home-eval",
   ".#canix-toolbelt",
   ".#canix-toolbelt-build-train",
   ".#canix-toolbelt-direct-network",
