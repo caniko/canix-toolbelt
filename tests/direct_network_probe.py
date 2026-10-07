@@ -17,7 +17,10 @@ binary = str(pathlib.Path(sys.argv[1]).resolve())
 
 
 def run(*args):
-    return subprocess.run(args, text=True, check=True, capture_output=True, timeout=10).stdout
+    result = subprocess.run(args, text=True, check=False, capture_output=True, timeout=10)
+    if result.returncode:
+        raise RuntimeError(f'{args!r}: {result.stderr.strip()}')
+    return result.stdout
 
 
 server = subprocess.Popen([
@@ -61,6 +64,22 @@ try:
     remote("-6", "route", "add", "default", "via", "2001:db8:1::1")
     run("ip", "route", "add", "default", "via", "198.18.0.2", "metric", "100")
     run("ip", "-6", "route", "add", "default", "via", "2001:db8:1::2", "metric", "100")
+    # Strict reverse-path filtering should consult the direct routing mark.
+    for option, value in (('rp_filter', '1'), ('src_valid_mark', '1')):
+        pathlib.Path(f'/proc/sys/net/ipv4/conf/all/{option}').write_text(value)
+
+    listener = socket.socket(socket.AF_INET6)
+    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    listener.bind(('::', 9090))
+    listener.listen()
+
+    def listener_replies():
+        while True:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(b'direct-listener')
+
+    threading.Thread(target=listener_replies, daemon=True).start()
 
     # Both direct DNS address families have their own listener, rather than
     # forwarding a service query through the desktop's resolved policy.
@@ -97,12 +116,22 @@ try:
             try:
                 run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only')
                 break
-            except subprocess.CalledProcessError:
+            except RuntimeError:
                 time.sleep(0.1)
         else:
             log.seek(0)
             raise AssertionError(log.read())
         run(binary, 'ready', '--socket', str(directory / 'ready.sock'))
+        true = run('which', 'true').strip()
+        echo = run('which', 'echo').strip()
+        assert run(binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
+                   '--unit', 'fixture.service', '--', echo, 'guarded-client') == 'guarded-client\n'
+        assert run(binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
+                   '--', echo, 'desktop-only-user') == 'desktop-only-user\n'
+        failed_launch = subprocess.run([binary, 'launch', '--socket', str(directory / 'missing.sock'),
+                                       '--systemctl', true, '--unit', 'fixture.service', '--',
+                                       echo, 'must-not-launch'], check=False, capture_output=True, text=True, timeout=5)
+        assert failed_launch.returncode != 0 and 'must-not-launch' not in failed_launch.stdout
         old = [socket.create_connection((ip, 8080), timeout=3)
                for ip in ('203.0.113.20', '2001:db8:20::20')]
 
@@ -119,6 +148,15 @@ try:
                     query.settimeout(3)
                     query.sendto(b'query', (ip, 53))
                     assert query.recv(1024) == b'direct-dns:query'
+            try:
+                for family, source, destination in (('AF_INET', '203.0.113.20', '198.18.0.1'),
+                                                    ('AF_INET6', '2001:db8:20::20', '2001:db8:1::1')):
+                    reply = run('nsenter', '--net=' + str(pathlib.Path('/proc') / str(server.pid) / 'ns/net'),
+                                'python3', '-c', f"import socket; c=socket.socket(socket.{family}); c.settimeout(3); c.bind(('{source}',0)); c.connect(('{destination}',9090)); print(c.recv(1024).decode())")
+                    assert reply.strip() == 'direct-listener'
+            except RuntimeError:
+                print(run('nft', 'list', 'table', 'inet', 'toolbelt_direct_network'))
+                raise
 
         verify('before')
         for transition in ('kill-switch', 'reconnect', 'server-change'):
@@ -159,7 +197,7 @@ try:
             try:
                 run(binary, 'ready', '--socket', str(directory / 'ready.sock'))
                 break
-            except subprocess.CalledProcessError:
+            except RuntimeError:
                 time.sleep(0.1)
         else:
             log.seek(0)

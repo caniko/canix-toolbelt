@@ -45,7 +45,7 @@ def tunnel(host, peer, namespace, host_ip, peer_ip, endpoint, allowed, mark):
     return peer_public
 
 
-def serve(label):
+def serve(label, port=8080):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             body = (label + '\n').encode()
@@ -60,10 +60,10 @@ def serve(label):
     class Server(http.server.ThreadingHTTPServer):
         address_family = socket.AF_INET6
 
-    listener = Server(('::', 8080), Handler)
+    listener = Server(('::', port), Handler)
     threading.Thread(target=listener.serve_forever, daemon=True).start()
     echo = socket.socket(socket.AF_INET6)
-    echo.bind(('::', 8081))
+    echo.bind(('::', port + 1))
     echo.listen()
 
     def connection(client):
@@ -147,7 +147,7 @@ def client(state):
 if sys.argv[1] == 'setup':
     setup(sys.argv[2])
 elif sys.argv[1] == 'server':
-    serve(sys.argv[2])
+    serve(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 8080)
 elif sys.argv[1] == 'client':
     client(sys.argv[2])
 elif sys.argv[1] == 'probe':

@@ -2,7 +2,8 @@
   pkgs,
   inputs,
 }: let
-  inherit ((import "${pkgs.path}/nixos/lib/eval-config.nix" {
+  inherit
+    ((import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
         inputs.home-manager.nixosModules.home-manager
@@ -41,9 +42,13 @@
           };
         }
       ];
-    })) config;
+    }))
+    config
+    ;
   home = config.home-manager.users.operator;
-  policy = builtins.fromJSON config.environment.etc."direct-network-policy.json".text;
+  # Decode a fixture projection, rather than using executable store-context
+  # strings as a dependency-free runtime input to builtins.fromJSON.
+  policy = builtins.fromJSON (builtins.unsafeDiscardStringContext config.environment.etc."direct-network-policy.json".text);
 in
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";

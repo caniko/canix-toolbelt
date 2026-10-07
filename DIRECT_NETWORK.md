@@ -54,7 +54,10 @@ builder boundaries without relocating them.
   Explicit D-Bus/Varlink clients of systemd-resolved are outside this contract;
   applications using encrypted DNS retain their own endpoints and direct egress.
 
-Gate desktop VPN launch with `canix-toolbelt-direct-network ready`. The root
+Gate desktop VPN launch with `canix-toolbelt-direct-network launch --systemctl
+/absolute/systemctl --unit direct-network-<slice>.service -- /absolute/client`.
+The launcher starts the selected user anchors, requires readiness and execs the
+client. `canix-toolbelt-direct-network ready` is available for inspection. The root
 daemon accepts only fixed readiness requests from configured UIDs; clients
 cannot enroll additional cgroups or supply commands. Root-only `ready
 --routes-only` bootstraps the independent DNS listener. Readiness synchronously
@@ -73,6 +76,8 @@ Native tests cover route selection, IPv6 gateways/source addresses and invalid
 policy data. `tests/direct_network_probe.py` exercises the production daemon in
 disposable rootless network namespaces, including existing/new IPv4/IPv6 TCP,
 UDP DNS redirection, kill-switch-shaped routes and retained kernel protection.
+The probe also checks external IPv4/IPv6 listener handshakes with strict
+reverse-path filtering, retained conntrack routing and guarded client launch.
 Run with the project's approved environment:
 
 ```sh

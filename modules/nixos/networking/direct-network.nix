@@ -49,9 +49,9 @@
       in {
         Unit.Description = "Keep ${slice} enrolled in direct network routing";
         Service = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = ready;
+          Type = "exec";
+          ExecStartPre = ready;
+          ExecStart = "${binary} anchor";
           Slice = slice;
           Restart = "on-failure";
           RestartSec = "2s";
@@ -150,6 +150,9 @@ in {
         }
       ];
       networking.nftables.enable = true;
+      # Kernel reverse-path validation must use the direct mark restored on
+      # replies and classified listener traffic, even with a full-tunnel default.
+      boot.kernel.sysctl."net.ipv4.conf.all.src_valid_mark" = 1;
       # NSS resolve delegates over AF_UNIX and loses the originating cgroup.
       # Both policies instead query the host stub over DNS: only enrolled DNS
       # packets are redirected, while desktop DNS retains resolved's VPN policy.
@@ -203,9 +206,9 @@ in {
           after = ["direct-network-dns.service"];
           wantedBy = ["multi-user.target"];
           serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = ready;
+            Type = "exec";
+            ExecStartPre = ready;
+            ExecStart = "${binary} anchor";
             Slice = "${lib.removePrefix "direct-network-" name}.slice";
             Restart = "on-failure";
             RestartSec = "2s";

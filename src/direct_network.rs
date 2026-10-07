@@ -265,6 +265,11 @@ fn nft_rules(
         text.push_str(&format!("delete table inet {NFT_TABLE}\n"));
     }
     text.push_str(&format!("table inet {NFT_TABLE} {{\n chain output {{\n type route hook output priority mangle; policy accept;\n"));
+    // Passive TCP handshakes may be emitted from request sockets without the
+    // listener's cgroup metadata. Restore the enrolled incoming flow's mark.
+    text.push_str(&format!(
+        "meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
+    ));
     for path in paths {
         let level = path.split('/').count();
         // Respect explicitly marked sockets used by other VPN/proxy engines.
@@ -272,7 +277,14 @@ fn nft_rules(
             "meta mark 0 socket cgroupv2 level {level} \"{path}\" meta mark set {MARK}\n"
         ));
     }
-    text.push_str("}\n chain dns {\n type nat hook output priority dstnat; policy accept;\n");
+    text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain incoming {{\n type filter hook prerouting priority mangle; policy accept;\n meta mark 0 ct mark {MARK} meta mark set {MARK}\n"));
+    for path in paths {
+        let level = path.split('/').count();
+        text.push_str(&format!(
+            "meta mark 0 socket cgroupv2 level {level} \"{path}\" counter meta mark set {MARK}\n"
+        ));
+    }
+    text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain dns {{\n type nat hook output priority dstnat; policy accept;\n"));
     if let Some(path) = policy
         .dns_cgroup
         .as_ref()
@@ -370,11 +382,15 @@ fn check_reservations(policy: &Policy) -> Result<()> {
             .into_iter()
             .flatten()
         {
-            if (rule["priority"] == LOCAL_PRIORITY || rule["priority"] == DIRECT_PRIORITY)
+            let reserved_table =
+                rule_table(rule).is_some_and(|table| TABLES.iter().any(|t| u64::from(*t) == table));
+            if (rule["priority"] == LOCAL_PRIORITY
+                || rule["priority"] == DIRECT_PRIORITY
+                || reserved_table)
                 && !own_rule(rule)
             {
                 return Err(invalid(
-                    "direct-network routing priorities 49/50 conflict with an existing owner",
+                    "direct-network routing priorities 49/50 or tables 51821/51822 conflict with an existing owner",
                 ));
             }
         }
