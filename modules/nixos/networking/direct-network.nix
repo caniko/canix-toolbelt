@@ -130,10 +130,12 @@ in {
 
   # glibc nscd has no per-database environment switch. Transform the final
   # operator-provided config so other database policies remain intact.
-  options.services.nscd.config.apply = content:
-    if cfg.enable
-    then content + "\nenable-cache hosts no\nshared hosts no\n"
-    else content;
+  options.services.nscd.config = lib.mkOption {
+    apply = content:
+      if cfg.enable
+      then content + "\nenable-cache hosts no\nshared hosts no\n"
+      else content;
+  };
 
   config = lib.mkIf cfg.enable ({
       assertions = [
