@@ -130,6 +130,8 @@ in {
       }
     ];
     environment.etc."fleetix-train/connection.json".text = builtins.toJSON connection;
+    # Preserve this immutable path before activation for guarded offline rollover.
+    environment.etc."fleetix-train/service.json".source = serviceConfig;
     systemd.tmpfiles.rules = [
       "d /nix/var/nix/gcroots/per-user/${cfg.user} 0700 ${cfg.user} - -"
       "d ${native.gc_roots} 0700 ${cfg.user} - -"
