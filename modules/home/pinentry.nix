@@ -24,14 +24,18 @@ in {
     packages = lib.mkOption {
       type = lib.types.attrsOf lib.types.package;
       readOnly = true;
-      default = {};
       description = "Router and request-aware GPG/rage packages for explicit consumer wiring.";
     };
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
-    {canix-toolbelt.pinentry.packages = packages;}
-    (lib.mkIf cfg.gpgIntegration {
+  config = lib.mkMerge [
+    {
+      canix-toolbelt.pinentry.packages =
+        if cfg.enable
+        then packages
+        else {};
+    }
+    (lib.mkIf (cfg.enable && cfg.gpgIntegration) {
       services.gpg-agent.enable = lib.mkDefault true;
       services.gpg-agent.pinentry = {
         package = packages.router;
@@ -59,8 +63,8 @@ in {
         ${packages.gpg}/bin/gpgconf --homedir ${lib.escapeShellArg config.programs.gpg.homedir} --reload gpg-agent
       '';
     })
-    (lib.mkIf cfg.rageIntegration {
+    (lib.mkIf (cfg.enable && cfg.rageIntegration) {
       home.packages = [packages.rage];
     })
-  ]);
+  ];
 }
