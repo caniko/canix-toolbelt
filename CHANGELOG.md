@@ -13,6 +13,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   Toolbelt library paths and frontend return type through compatibility adapters
   while sharing Fleetix's exact service, connection and command types. Native
   execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
+- Alias the existing NixOS option paths to Fleetix's service module, including
+  retained-deployment staging, operator-bound policy, configurable private paths
+  and preserved runtime-directory ownership through offline rollover.
 
 ### Fixed
 

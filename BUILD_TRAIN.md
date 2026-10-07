@@ -36,6 +36,12 @@ limits, queue capacity, aging, deadlines, socket/state locations, memory ceiling
 and admission identity. Nix/Rust parity is covered by the service fixture and is
 independent of `serde_json/preserve_order` feature unification.
 
+The Toolbelt module imports Fleetix's service and aliases its option leaves;
+there is one policy renderer, systemd unit and root lifecycle. New configurations
+bind operator identity inside the existing opaque version-2 admission string.
+Historical service files keep their original positional hashes and remain valid
+for staged retirement and rollover.
+
 The service retains its original policy during a host activation. A changed
 connection or persisted journal is rejected rather than altering queued work.
 Drain old requests under their original coordinator before replacing its policy.
@@ -44,16 +50,24 @@ Protocol/journal version 2 rejects version 1 state without rewriting it.
 ### Explicit policy rollover
 
 The module publishes `/etc/fleetix-train/service.json` as a symlink to the immutable
-service configuration. Retain that exact store path and the original connection
-before activation. After a changed-policy activation has retained its drained
-fence, inspect the old requests and explicitly cancel any remaining pending
-interests through that original connection. A caller-owned host activation lease
-must cover stopping the old coordinator, rollover and replacement startup.
+service configuration. Retain that exact store path, the original executable
+closure and the original connection before activation. Stage a changed policy
+with `canix-toolbelt.services.buildTrain.retainedDeployment` set to the original
+`{ package; user; serviceConfig; }`. The active connection and unit keep their
+original executable, policy, ownership and resource limits; candidate contracts
+appear at `/etc/fleetix-train/next-service.json` and `next-connection.json`, and
+both executable closures remain in the system closure. The runtime directory is
+preserved on service stop so the operator-owned socket lease remains available.
+
+Drain the original train and inspect its requests; explicitly cancel any
+remaining pending interests through the original connection. A caller-owned
+host activation lease must cover stopping the old coordinator, rollover and
+replacement startup.
 Run the rollover command as the configured service operator UID; root-owned
 rollover artifacts would violate the service's private-state ownership contract.
 
 ```sh
-canix-toolbelt build-train rollover --previous-config ORIGINAL_SERVICE_CONFIG --config /etc/fleetix-train/service.json --token TOKEN
+canix-toolbelt build-train rollover --previous-config ORIGINAL_SERVICE_CONFIG --config /etc/fleetix-train/next-service.json --token TOKEN
 ```
 
 This offline command requires both coordinator leases, unchanged state/socket and
@@ -62,6 +76,11 @@ retained fence and terminal requests. It snapshots the complete original journal
 archives and supersession evidence, archives each request before releasing its
 private roots, then initializes the new empty journal. Historical evidence is
 retained under `state_dir/rollovers/`; lease anchors stay present.
+
+After successful rollover, clear `retainedDeployment`, activate that configuration
+and start the replacement service. Never restart the original-policy executable
+against the replaced journal. Operator custody cannot change in place; retire the
+old service and use a separate private namespace for a different operator.
 
 An interruption marker blocks startup until the exact command succeeds. Repeating
 a finished handover does not erase replacement-policy work. The new coordinator
