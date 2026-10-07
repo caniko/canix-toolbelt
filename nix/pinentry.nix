@@ -5,7 +5,6 @@
   zellij,
   pinentry-tty,
   pinentry-qt,
-  systemd,
   python3,
   gnupg,
   rage,
@@ -26,7 +25,6 @@ assert lib.versionAtLeast zellij.version "0.45";
       CANIX_PINENTRY_ZELLIJ = lib.getExe zellij;
       CANIX_PINENTRY_TTY = lib.getExe pinentry-tty;
       CANIX_PINENTRY_QT = lib.getExe pinentry-qt;
-      CANIX_PINENTRY_SYSTEMCTL = lib.getExe' systemd "systemctl";
       CANIX_PINENTRY_GPG = "${gnupg}/bin/gpg";
     };
     buildPhase = ''

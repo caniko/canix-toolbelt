@@ -23,11 +23,14 @@ the requesting context. Enable each integration explicitly:
 | Headless | Terminal; fails when no interactive terminal is usable |
 
 Zellij 0.45+ and Linux are required. Live Zellij coordinates take precedence
-over inherited desktop markers. Shell hooks and the wrapped `gpg` classify
+over inherited desktop markers. Shell hooks and the wrapped `gpg`/`gpg2` classify
 requests in Rust; GPG forwards `PINENTRY_USER_DATA` to the shared agent. The
 agent entrypoint uses only that per-request metadata, never its startup SSH or
 Zellij environment. Direct clients preserve their own display environment;
-agent desktop requests refresh display variables from the systemd user manager.
+GnuPG supplies the requesting graphical session's display to each agent prompt.
+The router never replaces it with the systemd user manager's shared environment.
+The GPG wrapper captures any already-open terminal, including virtual consoles
+and serial TTYs. Shell hooks honor Home Manager's per-shell integration toggles.
 
 The existing `canix-pinentry-v1:zellij:<pane>:<session>`, `:desktop` and `:tty`
 markers remain compatible. Background clients can forward the originating

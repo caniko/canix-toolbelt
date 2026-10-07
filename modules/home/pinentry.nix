@@ -45,7 +45,7 @@ in {
         enable = true;
         package = packages.gpg;
       };
-      programs.nushell.extraConfig = lib.mkIf config.programs.nushell.enable (lib.mkAfter ''
+      programs.nushell.extraConfig = lib.mkIf (config.programs.nushell.enable && config.services.gpg-agent.enableNushellIntegration) (lib.mkAfter ''
         let pinentry_context = {||
           $env.PINENTRY_USER_DATA = (^${context} | str trim)
         }
