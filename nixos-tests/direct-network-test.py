@@ -45,8 +45,13 @@ def check_direct() -> None:
 check_direct()
 # Foreign selectors must fail closed even when priority/table/mark resemble a
 # retained guard rule. A second daemon must reject them before touching state.
+# Deliberately invalid rules must not interrupt the live continuity workload.
+machine.succeed('ip netns add rule-conflicts')
 for family, source in [('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')]:
-    original_rules = machine.succeed(f'ip {family} -j rule show')
+    ip = f'ip -n rule-conflicts {family}'
+    machine.succeed(f'{ip} rule add priority 49 to {source} lookup 51822')
+    machine.succeed(f'{ip} rule add priority 50 fwmark 3389063168 lookup 51822')
+    original_rules = machine.succeed(f'{ip} -j rule show')
     used_tables = {str(rule['table']) for rule in json.loads(original_rules)}
     # The kernel treats an omitted destination as a wildcard during duplicate
     # detection. Use the inactive table so the foreign rule can be installed.
@@ -58,13 +63,14 @@ for family, source in [('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')]:
         f'priority 50 iif lo fwmark 3389063168 lookup {table}',
         f'not priority 50 fwmark 3389063168 lookup {table}',
     ]:
-        machine.succeed(f'ip {family} rule add {conflict}')
-        with_conflict = machine.succeed(f'ip {family} -j rule show')
-        status, diagnostics = machine.execute('canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json 2>&1')
+        machine.succeed(f'{ip} rule add {conflict}')
+        with_conflict = machine.succeed(f'{ip} -j rule show')
+        status, diagnostics = machine.execute('ip netns exec rule-conflicts canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json 2>&1')
         assert status != 0 and 'conflict' in diagnostics, (conflict, diagnostics)
-        assert machine.succeed(f'ip {family} -j rule show') == with_conflict
-        machine.succeed(f'ip {family} rule del {conflict}')
-    assert machine.succeed(f'ip {family} -j rule show') == original_rules
+        assert machine.succeed(f'{ip} -j rule show') == with_conflict
+        machine.succeed(f'{ip} rule del {conflict}')
+    assert machine.succeed(f'{ip} -j rule show') == original_rules
+machine.succeed('ip netns del rule-conflicts')
 check_direct()
 
 for family in ['-4', '-6']:
