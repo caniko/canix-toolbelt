@@ -11,7 +11,13 @@
   manifest = lib.importJSON ./claude-code-manifest.json;
   claude =
     if lib.versionOlder claude-code.version manifest.version
-    then claude-code.override {inherit manifest;}
+    # nixpkgs' older package fetches /claude, not /claude.zst. Keep the raw
+    # release manifest from /<version>/manifest.json as its override input.
+    then
+      assert lib.assertMsg
+      (lib.all (entry: lib.elem entry.binary ["claude" "claude.exe"]) (builtins.attrValues manifest.platforms))
+      "canix-toolbelt: the Claude override requires an uncompressed release manifest";
+        claude-code.override {inherit manifest;}
     else claude-code;
 in
   assert lib.versionAtLeast nodejs.version "22.15";
