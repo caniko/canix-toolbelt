@@ -74,8 +74,9 @@ while True:
     except OSError:
         continue
     if path.startswith(request["objects"] + "/"):
-        with open(marker, "w") as stream:
+        with open(marker + ".pending", "w") as stream:
             json.dump({"phase": "source-object-copy", "pid": child}, stream)
+        os.replace(marker + ".pending", marker)
         # The real Rust helper is stopped immediately before source copying;
         # wait for the operation-wide controller deadline, preserving all state.
         time.sleep(60)
