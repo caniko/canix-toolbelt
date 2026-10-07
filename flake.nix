@@ -193,6 +193,8 @@
         checks =
           {
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs;};
+            direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
+            direct-network-transitions = import ./nixos-tests/direct-network-transitions.nix {inherit pkgs inputs;};
             build-train-policy = assert import ./nixos-tests/build-train-policy.nix != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
@@ -294,6 +296,10 @@
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.opencode-with-claude = pkgs.callPackage ./nix/opencode-with-claude {};
         packages.canix-toolbelt = import ./nix/package.nix {inherit pkgs;};
+        packages.canix-toolbelt-direct-network = import ./nix/package.nix {
+          inherit pkgs;
+          directNetwork = true;
+        };
         packages.canix-toolbelt-build-train = import ./nix/package.nix {
           inherit pkgs;
           buildTrain = true;

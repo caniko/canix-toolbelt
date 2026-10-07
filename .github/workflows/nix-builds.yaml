@@ -24,6 +24,9 @@ jobs:
         installable:
           - ".#canix-toolbelt"
           - ".#canix-toolbelt-build-train"
+          - ".#canix-toolbelt-direct-network"
+          - ".#checks.x86_64-linux.direct-network-eval"
+          - ".#checks.x86_64-linux.direct-network-transitions"
           - ".#checks.x86_64-linux.build-train-eval"
           - ".#checks.x86_64-linux.build-train-policy"
           - ".#canix-toolbelt-roborev-worker"

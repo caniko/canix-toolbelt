@@ -58,6 +58,7 @@
 
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   direct-link = ./networking/direct-link.nix;
+  direct-network = ./networking/direct-network.nix;
   edge-transport = ./networking/edge-transport.nix;
   networkmanager-defaults = ./networking/networkmanager-defaults.nix;
   stalwart-seed-accounts = ./services/stalwart-seed-accounts.nix;
