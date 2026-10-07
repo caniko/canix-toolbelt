@@ -128,6 +128,13 @@ in {
     };
   };
 
+  # glibc nscd has no per-database environment switch. Transform the final
+  # operator-provided config so other database policies remain intact.
+  options.services.nscd.config.apply = content:
+    if cfg.enable
+    then content + "\nenable-cache hosts no\nshared hosts no\n"
+    else content;
+
   config = lib.mkIf cfg.enable ({
       assertions = [
         {
@@ -162,6 +169,11 @@ in {
       systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (_: {});
       systemd.services = lib.mkMerge [
         {
+          # nsncd 1.5.2's documented per-database switch keeps account lookups
+          # proxied while glibc's files/DNS hostname lookups retain the caller.
+          nscd = lib.mkIf config.services.nscd.enable {
+            environment.NSNCD_IGNORE_HOSTS = "true";
+          };
           direct-network = {
             description = "Maintain direct routes and service DNS independently of host VPNs";
             wantedBy = ["multi-user.target"];

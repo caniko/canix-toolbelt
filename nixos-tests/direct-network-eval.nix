@@ -50,6 +50,8 @@
   # strings as a dependency-free runtime input to builtins.fromJSON.
   policy = builtins.fromJSON (builtins.unsafeDiscardStringContext config.environment.etc."direct-network-policy.json".text);
 in
+  assert config.systemd.services.nscd.environment.NSNCD_IGNORE_HOSTS == "true";
+  assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";
   assert config.systemd.slices.canix-background.sliceConfig.MemoryMax == "4G";

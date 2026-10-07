@@ -11,6 +11,8 @@ start_all = cast(Callable[[], None], globals()['start_all'])
 
 start_all()
 machine.wait_for_unit('multi-user.target')
+machine.wait_for_unit('nscd.service')
+machine.succeed('getent passwd operator')
 machine.succeed('systemctl start network-fixture.service')
 machine.wait_for_file('/run/network-fixture-ready')
 machine.wait_for_unit('user@1000.service')

@@ -53,6 +53,11 @@ builder boundaries without relocating them.
   identity. Desktop DNS still uses the normal host stub and VPN resolver policy.
   Explicit D-Bus/Varlink clients of systemd-resolved are outside this contract;
   applications using encrypted DNS retain their own endpoints and direct egress.
+  The NixOS nsncd/nscd proxy also leaves hostname lookups to the caller, while
+  account/group lookups retain their existing proxy policy. nsncd uses its
+  documented `NSNCD_IGNORE_HOSTS=true` switch; glibc nscd disables the hosts
+  database in its final configuration. This preserves the originating cgroup
+  for glibc's files/DNS lookup path.
 
 Gate desktop VPN launch with `canix-toolbelt-direct-network launch --systemctl
 /absolute/systemctl --unit direct-network-<slice>.service -- /absolute/client`.
