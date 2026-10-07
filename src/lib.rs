@@ -4,6 +4,8 @@
 
 #[cfg(all(unix, feature = "build-train"))]
 pub mod build_train;
+#[cfg(all(target_os = "linux", feature = "direct-network"))]
+pub mod direct_network;
 #[cfg(unix)]
 pub mod operator;
 #[cfg(feature = "review")]
