@@ -55,7 +55,8 @@
 in
   assert builtins.attrNames options.canix-toolbelt.services.buildTrain == builtins.attrNames options.fleetix.services.buildTrain;
   assert config.canix-toolbelt.services.buildTrain.workers == config.fleetix.services.buildTrain.workers;
-  assert builtins.all (entry: !(lib.hasPrefix "buildTrain" entry.message) || entry.assertion) config.assertions;
+  # Successful NixOS assertions may have failure-only diagnostic expressions.
+  assert builtins.all (entry: entry.assertion || !(lib.hasPrefix "buildTrain" entry.message)) config.assertions;
   assert service.serviceConfig.User == "operator";
   assert service.serviceConfig.RuntimeDirectoryPreserve == "yes";
   assert service.serviceConfig.RuntimeDirectoryMode == "0700";
@@ -79,7 +80,7 @@ in
   assert nextConnection.gc_roots == stagedConnection.gc_roots;
   assert nextConnection.socket == stagedConnection.socket;
   assert staged.fleetix.services.buildTrain.workers == 3;
-  assert builtins.all (entry: !(lib.hasPrefix "buildTrain" entry.message) || entry.assertion) staged.assertions;
+  assert builtins.all (entry: entry.assertion || !(lib.hasPrefix "buildTrain" entry.message)) staged.assertions;
   assert lib.elem pkgs.coreutils staged.system.extraDependencies;
   assert staged.environment.etc."fleetix-train/service.json".source == retainedConfig;
   assert builtins.any (entry: !entry.assertion && lib.hasInfix "two native queries" entry.message) invalid.assertions;
