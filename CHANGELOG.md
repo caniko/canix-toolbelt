@@ -5,6 +5,15 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-07
+
+### Changed
+
+- Consume registry Fleetix 0.6.0 for native shared construction. Preserve the
+  Toolbelt library paths and frontend return type through compatibility adapters
+  while sharing Fleetix's exact service, connection and command types. Native
+  execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
+
 ### Fixed
 
 - Match the Claude release manifest to nixpkgs' raw or Zstandard download
@@ -12,6 +21,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Expose held registration, admission, bounded completion waiting, drain and
+  activation-readiness commands through the existing `build-train` frontend.
 - Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
   with a pinned Meridian backend, per-user Fleetix loopback endpoints and
   runtime credentials. Preserve per-session project context and external

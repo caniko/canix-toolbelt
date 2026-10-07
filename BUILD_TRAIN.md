@@ -1,13 +1,15 @@
 # Shared construction
 
-The build-train adapter composes Fleetix's builder-local coordinator with the
-specialist `nix-manager-core` native frontier. Toolbelt `0.4.0` adds this optional
-interface while preserving the published `0.3.0` review APIs. Version `0.4.1`
-adds explicit policy-upgrade recovery over Fleetix's offline rollover.
+Toolbelt `0.5.0` preserves its public build-train paths as compatibility adapters
+over registry Fleetix `0.6.0`. Fleetix owns the builder-local coordinator, native
+backend and standalone commands over the specialist `nix-manager-core` frontier.
+Toolbelt's `Connection`, `Service` and command types are Fleetix's exact types,
+and its runner preserves the historical `Result<ExitCode, String>` contract.
+The adapter carries no second native backend or root-ownership implementation.
 
 The Cargo feature is `build-train`; the service executable additionally requires
-`cli`. Fleetix `0.5.2` is the rollover prerequisite; nix-manager-core `0.3.0`
-retains native realization ownership. Toolbelt `0.4.0` passed all-feature and library-only tests,
+`cli`. Fleetix `0.6.0` is the published prerequisite; nix-manager-core `0.3.0`
+retains native realization ownership. Toolbelt `0.4.0` previously passed all-feature and library-only tests,
 warnings-denied Clippy and rustdoc, and compilation of the packaged archive using
 those registry dependencies. Local path-patched lifecycle fixtures separately
 qualify their captured candidate sources.
