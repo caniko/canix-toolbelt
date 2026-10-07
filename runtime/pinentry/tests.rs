@@ -33,11 +33,20 @@ fn malformed_desktop_snapshots_fail_closed() {
         "canix-pinentry-v1:desktop:00::::", // NUL cannot enter exec's environment.
         "canix-pinentry-v1:desktop:6::::",  // Truncated hex.
         "canix-pinentry-v1:desktop:zz::::",
-        "canix-pinentry-v1:desktop::::",   // Missing field.
-        "canix-pinentry-v1:desktop::::::", // Extra field.
+        "canix-pinentry-v1:desktop::::",    // Missing field.
+        "canix-pinentry-v1:desktop:::::::", // Extra field.
     ] {
         assert_eq!(route(Some(data)), Route::Tty);
     }
+}
+
+#[test]
+fn older_desktop_snapshots_clear_the_agent_qt_override() {
+    let data = "canix-pinentry-v1:desktop:3a30:::783131:2f72756e2f757365722f31303030";
+    assert_eq!(route(Some(data)), Route::Desktop);
+    let context = desktop_context(data).unwrap();
+    assert_eq!(context[0], Some(OsString::from(":0")));
+    assert_eq!(context[5], None);
 }
 
 #[test]

@@ -91,7 +91,7 @@ class RequestContextIntegration(unittest.TestCase):
             backend = root / "pinentry"
             backend.write_text(f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
                                "Path(os.environ['PINENTRY_FIXTURE_RECORD']).write_text(json.dumps({key: os.environ.get(key) for key in "
-                               "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'XDG_RUNTIME_DIR']}))\n"
+                               "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'XDG_RUNTIME_DIR', 'QT_QPA_PLATFORM']}))\n"
                                "print('OK', flush=True)\n"
                                "for line in sys.stdin:\n"
                                " if line.startswith('GETPIN'): print('D display-fixture-pin', flush=True)\n"
@@ -109,7 +109,7 @@ class RequestContextIntegration(unittest.TestCase):
             (home / "gpg-agent.conf").write_text(f"pinentry-program {agent}\ndefault-cache-ttl 0\nno-allow-external-cache\n")
             startup = dict(self.env, GNUPGHOME=str(home), PINENTRY_FIXTURE_RECORD=str(record),
                            DISPLAY=":stale-agent", WAYLAND_DISPLAY="stale-wayland", XAUTHORITY="stale-auth",
-                           XDG_SESSION_TYPE="stale-type", XDG_RUNTIME_DIR=str(root))
+                           XDG_SESSION_TYPE="stale-type", XDG_RUNTIME_DIR=str(root), QT_QPA_PLATFORM="wayland")
             subprocess.run([GPGCONF, "--launch", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10)
             try:
                 subprocess.run([GPG, "--batch", "--pinentry-mode", "loopback", "--passphrase", "display-fixture-pin",
@@ -118,18 +118,18 @@ class RequestContextIntegration(unittest.TestCase):
                 challenge = root / "challenge"
                 challenge.write_text("Request-local graphical context\n")
                 for context in [
-                    {"WAYLAND_DISPLAY": "wayland-request:% name", "XDG_SESSION_TYPE": "wayland", "XDG_RUNTIME_DIR": str(root / "request runtime")},
+                    {"WAYLAND_DISPLAY": "wayland-request:% name", "XDG_SESSION_TYPE": "wayland", "XDG_RUNTIME_DIR": str(root / "request runtime"), "QT_QPA_PLATFORM": "wayland;xcb"},
                     {"DISPLAY": ":request", "XAUTHORITY": str(root / "request auth"), "XDG_SESSION_TYPE": "x11", "XDG_RUNTIME_DIR": str(root)},
                 ]:
                     with self.subTest(context=context):
                         client = dict(startup)
-                        for key in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR"]:
+                        for key in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR", "QT_QPA_PLATFORM"]:
                             client.pop(key, None)
                         client.update(context)
                         subprocess.run([gpg, "--batch", "--yes", "--output", str(root / "signature"), "--detach-sign", str(challenge)],
                                        env=client, input="", text=True, capture_output=True, check=True, timeout=15)
                         self.assertEqual(json.loads(record.read_text()), {key: context.get(key) for key in
-                                         ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR"]})
+                                         ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR", "QT_QPA_PLATFORM"]})
             finally:
                 subprocess.run([GPGCONF, "--kill", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10)
 
@@ -419,7 +419,10 @@ class PinentryIntegration(unittest.TestCase):
     def test_agent_desktop_request_uses_the_clients_display_instead_of_startup(self):
         self.desktop_query(agent=True)
 
-    def desktop_query(self, agent):
+    def test_agent_snapshot_clears_stale_qt_platform_selector(self):
+        self.desktop_query(agent=True, stale_qt=True)
+
+    def desktop_query(self, agent, stale_qt=False):
         read_fd, write_fd = os.pipe()
         server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
                                   pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -431,8 +434,18 @@ class PinentryIntegration(unittest.TestCase):
         with os.fdopen(read_fd) as display:
             env = dict(self.env, DISPLAY=":" + display.readline().strip())
         env.pop("WAYLAND_DISPLAY", None)
+        if stale_qt:
+            home = tempfile.TemporaryDirectory(prefix="pq-", dir=self.root)
+            self.addCleanup(home.cleanup)
+            (Path(home.name) / "gpg-agent.conf").write_text(f"pinentry-program {AGENT}\ndefault-cache-ttl 0\nno-allow-external-cache\n")
+            startup = dict(self.env, GNUPGHOME=home.name, QT_QPA_PLATFORM="wayland")
+            subprocess.run([GPGCONF, "--launch", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10)
+            self.addCleanup(lambda: subprocess.run([GPGCONF, "--kill", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10))
+            env.update(GNUPGHOME=home.name)
+            env.pop("QT_QPA_PLATFORM", None)
         if agent:
-            process = self.query("canix-pinentry-v1:desktop", env=env)
+            context = subprocess.run([DIRECT, "--context"], env=env, text=True, capture_output=True, check=True, timeout=5).stdout.strip() if stale_qt else "canix-pinentry-v1:desktop"
+            process = self.query(context, env=env)
         else:
             process = subprocess.Popen([DIRECT], env=env, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.queries.append(process)
