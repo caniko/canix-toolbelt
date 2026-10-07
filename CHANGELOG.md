@@ -7,8 +7,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
-- Use the uncompressed Claude release manifest when overriding older nixpkgs
-  packages, so their raw binary downloads match the declared checksums.
+- Match the Claude release manifest to nixpkgs' raw or Zstandard download
+  recipe, keeping both the declared checksum and installation format compatible.
 
 ### Added
 

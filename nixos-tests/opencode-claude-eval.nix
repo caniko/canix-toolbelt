@@ -3,6 +3,46 @@
   fleetixLib,
 }: let
   inherit (pkgs) lib;
+  # Exercise both nixpkgs download contracts, including the legacy recipe's
+  # hardcoded raw filename. Checksums are pinned independently of the selector.
+  platform = "${pkgs.stdenv.hostPlatform.node.platform}-${pkgs.stdenv.hostPlatform.node.arch}";
+  fixture = compressed:
+    lib.makeOverridable ({
+      manifest ? {
+        version = "2.0.0";
+        platforms.${platform} = {
+          binary =
+            if compressed
+            then "claude.zst"
+            else "claude";
+          checksum = lib.fakeHash;
+        };
+      },
+    }: {
+      inherit (manifest) version;
+      src = pkgs.fetchurl {
+        url = "https://downloads.claude.ai/claude-code-releases/${manifest.version}/${platform}/${
+          if compressed
+          then manifest.platforms.${platform}.binary
+          else "claude"
+        }";
+        sha256 = manifest.platforms.${platform}.checksum;
+      };
+    }) {};
+  selectClient = client: (pkgs.callPackage ../nix/opencode-with-claude {claude-code = client;}).claudePackage;
+  rawClient = selectClient (fixture false);
+  compressedClient = selectClient (fixture true);
+  currentClient = pkgs.claude-code.overrideAttrs {version = "999.0.0";};
+  expectedHashes = {
+    linux-x64 = {
+      raw = "5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f";
+      compressed = "5021d631dacbd516603a779b3cf2463085470417a838b6a0835f77fa44d23f0a";
+    };
+    linux-arm64 = {
+      raw = "3dd0f96d7ada463152d20300186f6cfc6ab94b57e218f49e3ac86db42ac695a6";
+      compressed = "6e31b86de3952594441b4ef91c1f5079c1385b0169a9df351dd2762bb2336d23";
+    };
+  };
   base = {
     options = {
       assertions = lib.mkOption {
@@ -92,6 +132,12 @@
     };
   };
 in
+  assert rawClient.version == "2.1.284" && compressedClient.version == "2.1.284";
+  assert rawClient.src.url == "https://downloads.claude.ai/claude-code-releases/2.1.284/${platform}/claude";
+  assert compressedClient.src.url == "https://downloads.claude.ai/claude-code-releases/2.1.284/${platform}/claude.zst";
+  assert rawClient.src.outputHash == expectedHashes.${platform}.raw;
+  assert compressedClient.src.outputHash == expectedHashes.${platform}.compressed;
+  assert (selectClient currentClient).drvPath == currentClient.drvPath;
   assert (evaluate {}).programs.opencode.settings == {};
   assert lib.all (a: a.assertion) enabled.assertions;
   assert !(lib.all (a: a.assertion) invalid.assertions);
