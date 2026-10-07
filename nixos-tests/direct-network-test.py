@@ -3,13 +3,13 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from test_driver.machine import Machine
+    from test_driver.machine import QemuMachine
 
 # The NixOS driver injects these names when executing this script.
-machine = cast('Machine', globals()['machine'])
-start_all = cast(Callable[[], None], globals()['start_all'])
+machine = cast('QemuMachine', globals()['machine'])
+start_guests = cast(Callable[[], None], globals()['start_all'])
 
-start_all()
+start_guests()
 machine.wait_for_unit('multi-user.target')
 machine.wait_for_unit('nscd.service')
 machine.succeed('getent passwd operator')
