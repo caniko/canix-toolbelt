@@ -64,7 +64,7 @@ in {
       '';
     })
     (lib.mkIf (cfg.enable && cfg.rageIntegration) {
-      home.packages = [packages.rage];
+      home.packages = [(lib.hiPrio packages.rage)];
     })
   ];
 }

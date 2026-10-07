@@ -27,14 +27,19 @@ over inherited desktop markers. Shell hooks and the wrapped `gpg`/`gpg2` classif
 requests in Rust; GPG forwards `PINENTRY_USER_DATA` to the shared agent. The
 agent entrypoint uses only that per-request metadata, never its startup SSH or
 Zellij environment. Direct clients preserve their own display environment;
-GnuPG supplies the requesting graphical session's display to each agent prompt.
+The desktop marker carries a hex-encoded snapshot of the caller's display,
+Wayland socket, Xauthority, session type and runtime directory through GnuPG.
+The agent restores that snapshot and clears absent values from older sessions.
 The router never replaces it with the systemd user manager's shared environment.
 The GPG wrapper captures any already-open terminal, including virtual consoles
-and serial TTYs. Shell hooks honor Home Manager's per-shell integration toggles.
+and serial TTYs, checking stderr/stdout when stdin is piped. Shell hooks honor
+Home Manager's per-shell integration toggles.
 
 The existing `canix-pinentry-v1:zellij:<pane>:<session>`, `:desktop` and `:tty`
 markers remain compatible. Background clients can forward the originating
 marker when they lack live Zellij coordinates. Session names may contain colons.
+Legacy desktop markers retain GnuPG's X11 forwarding. Wrapped rage takes profile
+precedence over an existing raw rage installation.
 
 ## Packaged callers
 
