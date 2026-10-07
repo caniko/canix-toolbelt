@@ -47,16 +47,20 @@ check_direct()
 # retained guard rule. A second daemon must reject them before touching state.
 for family, source in [('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')]:
     original_rules = machine.succeed(f'ip {family} -j rule show')
+    used_tables = {str(rule['table']) for rule in json.loads(original_rules)}
+    # The kernel treats an omitted destination as a wildcard during duplicate
+    # detection. Use the inactive table so the foreign rule can be installed.
+    table = next(table for table in ['51821', '51822'] if table not in used_tables)
     for conflict in [
-        'priority 49 lookup 51822',
-        'priority 50 fwmark 3389063168/0xffff0000 lookup 51822',
-        f'priority 50 from {source} fwmark 3389063168 lookup 51822',
-        'priority 50 iif lo fwmark 3389063168 lookup 51822',
-        'not priority 50 fwmark 3389063168 lookup 51822',
+        f'priority 49 lookup {table}',
+        f'priority 50 fwmark 3389063168/0xffff0000 lookup {table}',
+        f'priority 50 from {source} fwmark 3389063168 lookup {table}',
+        f'priority 50 iif lo fwmark 3389063168 lookup {table}',
+        f'not priority 50 fwmark 3389063168 lookup {table}',
     ]:
         machine.succeed(f'ip {family} rule add {conflict}')
         with_conflict = machine.succeed(f'ip {family} -j rule show')
-        status, diagnostics = machine.execute('canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json')
+        status, diagnostics = machine.execute('canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json 2>&1')
         assert status != 0 and 'conflict' in diagnostics, (conflict, diagnostics)
         assert machine.succeed(f'ip {family} -j rule show') == with_conflict
         machine.succeed(f'ip {family} rule del {conflict}')

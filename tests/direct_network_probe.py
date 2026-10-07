@@ -189,13 +189,15 @@ try:
         (directory / 'ready.sock').unlink()
         for family, source in (('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')):
             before_rules = run('ip', family, '-j', 'rule', 'show')
+            used_tables = {str(rule['table']) for rule in json.loads(before_rules)}
+            table = next(table for table in ['51821', '51822'] if table not in used_tables)
             conflicts = [
                 ['priority', '49', 'lookup', '123'],
-                ['priority', '49', 'lookup', '51822'],
-                ['priority', '50', 'fwmark', '3389063168/0xffff0000', 'lookup', '51822'],
-                ['priority', '50', 'from', source, 'fwmark', '3389063168', 'lookup', '51822'],
-                ['priority', '50', 'iif', 'lo', 'fwmark', '3389063168', 'lookup', '51822'],
-                ['not', 'priority', '50', 'fwmark', '3389063168', 'lookup', '51822'],
+                ['priority', '49', 'lookup', table],
+                ['priority', '50', 'fwmark', '3389063168/0xffff0000', 'lookup', table],
+                ['priority', '50', 'from', source, 'fwmark', '3389063168', 'lookup', table],
+                ['priority', '50', 'iif', 'lo', 'fwmark', '3389063168', 'lookup', table],
+                ['not', 'priority', '50', 'fwmark', '3389063168', 'lookup', table],
             ]
             for conflict in conflicts:
                 run('ip', family, 'rule', 'add', *conflict)
