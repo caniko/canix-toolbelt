@@ -34,8 +34,11 @@ builder boundaries without relocating them.
   opened before connection. Marks use the reserved `0xca010000` value; explicit
   socket marks from other networking engines are preserved.
 - Routing priorities 49/50 and tables 51821/51822 are reserved. Conflicting rules
-  fail readiness. The daemon copies live main-table physical and explicitly
-  enrolled fleet-interface routes, excluding dummy, tunnel and container links.
+  fail readiness without mutation. Only exact retained guard rules are adopted;
+  foreign source, interface, mark-mask and inverted selectors are rejected even
+  when their priority/table/mark match. The daemon copies live main-table physical
+  and explicitly enrolled fleet-interface routes, excluding dummy, tunnel and
+  container links.
   It fills an inactive table before switching rules, including across restarts
   and interrupted IPv4/IPv6 updates. Missing direct defaults terminate in an
   unreachable route rather than falling back into the desktop VPN.

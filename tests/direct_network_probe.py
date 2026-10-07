@@ -184,14 +184,28 @@ try:
         daemon.wait(timeout=5)
         daemon = None
         verify('daemon-stopped-kernel-protection-retained')
-        before_rules = run('ip', '-j', 'rule', 'show')
-        run('ip', 'rule', 'add', 'priority', '49', 'lookup', '123')
-        rejected = subprocess.run([binary, 'daemon', '--policy', str(policy)], capture_output=True, text=True, timeout=5, check=False)
-        assert rejected.returncode != 0 and 'conflict' in rejected.stderr
-        run('ip', 'rule', 'del', 'priority', '49', 'lookup', '123')
-        assert run('ip', '-j', 'rule', 'show') == before_rules
-        # Restart with the retained tables and sockets: no active-table flush.
+        # Priority/table/mark alone do not establish ownership. A foreign rule
+        # may additionally restrict the source, mask, interface or invert match.
         (directory / 'ready.sock').unlink()
+        for family, source in (('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')):
+            before_rules = run('ip', family, '-j', 'rule', 'show')
+            conflicts = [
+                ['priority', '49', 'lookup', '123'],
+                ['priority', '49', 'lookup', '51822'],
+                ['priority', '50', 'fwmark', '3389063168/0xffff0000', 'lookup', '51822'],
+                ['priority', '50', 'from', source, 'fwmark', '3389063168', 'lookup', '51822'],
+                ['priority', '50', 'iif', 'lo', 'fwmark', '3389063168', 'lookup', '51822'],
+                ['not', 'priority', '50', 'fwmark', '3389063168', 'lookup', '51822'],
+            ]
+            for conflict in conflicts:
+                run('ip', family, 'rule', 'add', *conflict)
+                with_conflict = run('ip', family, '-j', 'rule', 'show')
+                rejected = subprocess.run([binary, 'daemon', '--policy', str(policy)], capture_output=True, text=True, timeout=5, check=False)
+                assert rejected.returncode != 0 and 'conflict' in rejected.stderr, conflict
+                assert run('ip', family, '-j', 'rule', 'show') == with_conflict, conflict
+                run('ip', family, 'rule', 'del', *conflict)
+            assert run('ip', family, '-j', 'rule', 'show') == before_rules
+        # Restart with the retained tables and sockets: no active-table flush.
         daemon = subprocess.Popen([binary, 'daemon', '--policy', str(policy)], stdout=log, stderr=log)
         for _ in range(5):
             try:

@@ -339,10 +339,40 @@ fn family_rules(policy: &Policy, family: &str) -> Result<Value> {
 }
 
 fn own_rule(rule: &Value) -> bool {
-    let table = rule_table(rule);
-    TABLES.iter().any(|t| table == Some(u64::from(*t)))
-        && (rule["priority"] == LOCAL_PRIORITY
-            || (rule["priority"] == DIRECT_PRIORITY && rule["fwmark"] == format!("0x{MARK:x}")))
+    let Some(fields) = rule.as_object() else {
+        return false;
+    };
+    if !TABLES
+        .iter()
+        .any(|t| rule_table(rule) == Some(u64::from(*t)))
+        || rule["src"] != "all"
+    {
+        return false;
+    }
+    // Only adopt the exact rules this daemon installs. Extra selectors (a
+    // source, interface, mark mask, inversion, etc.) belong to another owner,
+    // even when the priority, table and mark happen to match ours.
+    let allowed = if rule["priority"] == LOCAL_PRIORITY {
+        let Some(destination) = rule["dst"]
+            .as_str()
+            .and_then(|dst| dst.parse::<IpAddr>().ok())
+        else {
+            return false;
+        };
+        if rule.get("dstlen").is_some_and(|prefix| {
+            !prefix.as_u64().is_some_and(|length| {
+                length > 0 && length <= if destination.is_ipv4() { 32 } else { 128 }
+            })
+        }) {
+            return false;
+        }
+        &["priority", "src", "dst", "dstlen", "table"][..]
+    } else if rule["priority"] == DIRECT_PRIORITY && rule["fwmark"] == format!("0x{MARK:x}") {
+        &["priority", "src", "fwmark", "table"][..]
+    } else {
+        return false;
+    };
+    fields.keys().all(|key| allowed.contains(&key.as_str()))
 }
 
 fn rule_table(rule: &Value) -> Option<u64> {

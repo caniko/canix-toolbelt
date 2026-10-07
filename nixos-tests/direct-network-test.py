@@ -43,6 +43,26 @@ def check_direct() -> None:
 
 
 check_direct()
+# Foreign selectors must fail closed even when priority/table/mark resemble a
+# retained guard rule. A second daemon must reject them before touching state.
+for family, source in [('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')]:
+    original_rules = machine.succeed(f'ip {family} -j rule show')
+    for conflict in [
+        'priority 49 lookup 51822',
+        'priority 50 fwmark 3389063168/0xffff0000 lookup 51822',
+        f'priority 50 from {source} fwmark 3389063168 lookup 51822',
+        'priority 50 iif lo fwmark 3389063168 lookup 51822',
+        'not priority 50 fwmark 3389063168 lookup 51822',
+    ]:
+        machine.succeed(f'ip {family} rule add {conflict}')
+        with_conflict = machine.succeed(f'ip {family} -j rule show')
+        status, diagnostics = machine.execute('canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json')
+        assert status != 0 and 'conflict' in diagnostics, (conflict, diagnostics)
+        assert machine.succeed(f'ip {family} -j rule show') == with_conflict
+        machine.succeed(f'ip {family} rule del {conflict}')
+    assert machine.succeed(f'ip {family} -j rule show') == original_rules
+check_direct()
+
 for family in ['-4', '-6']:
     machine.succeed(f'ip {family} route add default dev wg-proton table 51820')
     machine.succeed(f'ip {family} rule add priority 32764 lookup main suppress_prefixlength 0')
