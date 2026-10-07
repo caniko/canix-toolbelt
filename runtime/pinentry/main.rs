@@ -28,17 +28,18 @@ const QT: &str = match option_env!("CANIX_PINENTRY_QT") {
 };
 const GPG: Option<&str> = option_env!("CANIX_PINENTRY_GPG");
 const START_TIMEOUT: Duration = Duration::from_secs(10);
-const DISPLAY_VARIABLES: [&str; 5] = [
+const DISPLAY_VARIABLES: [&str; 6] = [
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XAUTHORITY",
     "XDG_SESSION_TYPE",
     "XDG_RUNTIME_DIR",
+    "QT_QPA_PLATFORM",
 ];
 
 // Hex keeps delimiters, whitespace and Assuan escapes out of request metadata.
 // Empty fields explicitly clear values inherited from the shared agent.
-fn desktop_context(data: &str) -> Option<[Option<OsString>; 5]> {
+fn desktop_context(data: &str) -> Option<[Option<OsString>; DISPLAY_VARIABLES.len()]> {
     let fields = data.strip_prefix("canix-pinentry-v1:desktop:")?;
     let values: Option<Vec<_>> = fields
         .split(':')
@@ -60,7 +61,13 @@ fn desktop_context(data: &str) -> Option<[Option<OsString>; 5]> {
             Some(Some(OsString::from_vec(bytes?)))
         })
         .collect();
-    values?.try_into().ok()
+    let mut values = values?;
+    // Older snapshots predate the Qt selector. Clear any stale agent override
+    // for them too, letting Qt select the caller's restored display.
+    if values.len() == DISPLAY_VARIABLES.len() - 1 {
+        values.push(None);
+    }
+    values.try_into().ok()
 }
 
 #[derive(Debug, PartialEq)]

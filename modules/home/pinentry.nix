@@ -43,7 +43,7 @@ in {
       };
       programs.gpg = {
         enable = true;
-        package = packages.gpg;
+        package = lib.hiPrio packages.gpg;
       };
       programs.nushell.extraConfig = lib.mkIf (config.programs.nushell.enable && config.services.gpg-agent.enableNushellIntegration) (lib.mkAfter ''
         let pinentry_context = {||
