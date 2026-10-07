@@ -1,12 +1,13 @@
 # Shared construction
 
 The build-train adapter composes Fleetix's builder-local coordinator with the
-specialist `nix-manager-core` native frontier. Toolbelt's `0.4.0` release candidate
-adds this optional interface while preserving the published `0.3.0` review APIs.
+specialist `nix-manager-core` native frontier. Toolbelt `0.4.0` adds this optional
+interface while preserving the published `0.3.0` review APIs. Version `0.4.1`
+adds explicit policy-upgrade recovery over Fleetix's offline rollover.
 
 The Cargo feature is `build-train`; the service executable additionally requires
-`cli`. Fleetix `0.5.1` and nix-manager-core `0.3.0` are published registry
-dependencies. Toolbelt's candidate has passed all-feature and library-only tests,
+`cli`. Fleetix `0.5.2` is the rollover prerequisite; nix-manager-core `0.3.0`
+retains native realization ownership. Toolbelt `0.4.0` passed all-feature and library-only tests,
 warnings-denied Clippy and rustdoc, and compilation of the packaged archive using
 those registry dependencies. Local path-patched lifecycle fixtures separately
 qualify their captured candidate sources.
@@ -37,6 +38,38 @@ The service retains its original policy during a host activation. A changed
 connection or persisted journal is rejected rather than altering queued work.
 Drain old requests under their original coordinator before replacing its policy.
 Protocol/journal version 2 rejects version 1 state without rewriting it.
+
+### Explicit policy rollover
+
+The module publishes `/etc/fleetix-train/service.json` as a symlink to the immutable
+service configuration. Retain that exact store path and the original connection
+before activation. After a changed-policy activation has retained its drained
+fence, inspect the old requests and explicitly cancel any remaining pending
+interests through that original connection. A caller-owned host activation lease
+must cover stopping the old coordinator, rollover and replacement startup.
+Run the rollover command as the configured service operator UID; root-owned
+rollover artifacts would violate the service's private-state ownership contract.
+
+```sh
+canix-toolbelt build-train rollover --previous-config ORIGINAL_SERVICE_CONFIG --config /etc/fleetix-train/service.json --token TOKEN
+```
+
+This offline command requires both coordinator leases, unchanged state/socket and
+request-root locations, the same builder, a different valid policy, the exact
+retained fence and terminal requests. It snapshots the complete original journal,
+archives and supersession evidence, archives each request before releasing its
+private roots, then initializes the new empty journal. Historical evidence is
+retained under `state_dir/rollovers/`; lease anchors stay present.
+
+An interruption marker blocks startup until the exact command succeeds. Repeating
+a finished handover does not erase replacement-policy work. The new coordinator
+answers old-policy status/retirement from completed archives; old request intake,
+admission, retry, cancellation, fence release and activation remain rejected.
+Callers keep their own preparation/candidate roots and deployment checkpoints.
+
+Rollover archives old requests instead of migrating them to new execution policy.
+Use new deployment attempts after an upgrade. To continue old pending work, restore
+and verify the original execution/admission contract before releasing its fence.
 
 ## Request lifecycle
 

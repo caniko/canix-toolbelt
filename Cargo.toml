@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -41,7 +41,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-fleetix = { version = "0.5.1", default-features = false, features = ["pkl"] }
+fleetix = { version = "0.5.2", default-features = false, features = ["pkl"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }

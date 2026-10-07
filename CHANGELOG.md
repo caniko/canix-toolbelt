@@ -12,6 +12,15 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   runtime credentials. Preserve per-session project context and external
   service ownership through the native plugin lifecycle.
 
+## [0.4.1] - 2026-10-07
+
+- Expose Fleetix's guarded offline policy rollover through the library and
+  `build-train rollover`, validating both immutable service contracts and keeping
+  builder and request-root ownership intact. Retain the old fence, request
+  archives and historical cleanup without admitting old-policy work.
+- Publish the immutable service configuration at `/etc/fleetix-train/service.json`
+  so operators can retain the exact pre-activation contract for policy recovery.
+
 ## [0.4.0] - 2026-10-06
 
 ### Added

@@ -33,6 +33,7 @@ in
   assert service.serviceConfig.MemoryMax == "1G";
   assert service.serviceConfig.KillMode == "control-group";
   assert !service.restartIfChanged && !service.stopIfChanged;
+  assert service.serviceConfig.ExecStart == "${lib.getExe pkgs.hello} build-train serve --config ${config.environment.etc."fleetix-train/service.json".source}";
   assert connection.builder == "builder";
   assert connection.socket == "/run/fleetix-train/coordinator.sock";
   assert connection.gc_roots == "/nix/var/nix/gcroots/per-user/operator/fleetix-train";

@@ -287,7 +287,16 @@ impl Backend for NixBackend {
 
 /// Start the shared engine using the immutable service/backend contract.
 pub fn serve(service: Service, stop: Arc<AtomicBool>) -> Result<(), String> {
-    if service.coordinator.policy != policy_identity(&service)? {
+    validate_service(&service)?;
+    runtime::serve(
+        service.coordinator,
+        Arc::new(NixBackend(service.native)),
+        stop,
+    )
+}
+
+fn validate_service(service: &Service) -> Result<(), String> {
+    if service.coordinator.policy != policy_identity(service)? {
         return Err("build train policy digest does not match its backend contract".into());
     }
     if service.native.query_timeout_seconds == 0
@@ -303,10 +312,22 @@ pub fn serve(service: Service, stop: Arc<AtomicBool>) -> Result<(), String> {
             "planning deadline must cover two bounded native queries and kill grace periods".into(),
         );
     }
-    runtime::serve(
-        service.coordinator,
-        Arc::new(NixBackend(service.native)),
-        stop,
+    Ok(())
+}
+
+/// Complete an explicit offline policy rollover without migrating old requests.
+/// The caller must hold the host activation lease and stop the old service first.
+pub fn rollover(previous: Service, next: Service, token: &str) -> Result<PathBuf, String> {
+    validate_service(&previous)?;
+    validate_service(&next)?;
+    if previous.builder != next.builder || previous.native.gc_roots != next.native.gc_roots {
+        return Err("policy rollover cannot move builder or request-root ownership".into());
+    }
+    runtime::rollover(
+        &previous.coordinator,
+        &next.coordinator,
+        &NixBackend(previous.native),
+        token,
     )
 }
 
@@ -327,6 +348,49 @@ mod tests {
             policy_identity(&service).unwrap(),
             service.coordinator.policy
         );
+    }
+
+    #[test]
+    fn rollover_rejects_changed_ownership_and_invalid_contracts_before_touching_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut previous = service();
+        previous.coordinator.state_dir = temp.path().join("state");
+        previous.coordinator.socket = temp.path().join("coordinator.sock");
+        previous.coordinator.policy = policy_identity(&previous).unwrap();
+        std::fs::create_dir(&previous.coordinator.state_dir).unwrap();
+        let journal = previous.coordinator.state_dir.join("train.json");
+        std::fs::write(&journal, "original recovery evidence").unwrap();
+        for field in ["builder", "roots", "policy", "deadline"] {
+            let mut next = previous.clone();
+            match field {
+                "builder" => next.builder = "replacement-builder".into(),
+                "roots" => next.native.gc_roots = temp.path().join("foreign-roots"),
+                "deadline" => next.coordinator.planning_timeout_seconds = 1,
+                _ => {}
+            }
+            next.coordinator.policy = policy_identity(&next).unwrap();
+            if field == "policy" {
+                next.coordinator.policy = "unverified-policy".into();
+            }
+            let error = rollover(previous.clone(), next, "token").unwrap_err();
+            assert!(
+                error.contains("ownership")
+                    || error.contains("backend contract")
+                    || error.contains("deadline"),
+                "{field}: {error}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&journal).unwrap(),
+                "original recovery evidence"
+            );
+            assert!(
+                !previous
+                    .coordinator
+                    .state_dir
+                    .join("rollover.json")
+                    .exists()
+            );
+        }
     }
 
     #[test]
@@ -583,6 +647,18 @@ pub mod cli {
             #[arg(long)]
             token: String,
         },
+        /// Archive a stopped, drained, fenced terminal train before a policy upgrade.
+        Rollover {
+            /// Immutable original service configuration retained before activation.
+            #[arg(long)]
+            previous_config: PathBuf,
+            /// Newly deployed immutable service configuration.
+            #[arg(long)]
+            config: PathBuf,
+            /// Exact retained activation fence token. Pending requests must be cancelled first.
+            #[arg(long)]
+            token: String,
+        },
     }
     /// Execute the independent frontend.
     pub fn run(command: TrainCommand) -> Result<ExitCode, String> {
@@ -627,6 +703,24 @@ pub mod cli {
             TrainCommand::ReleaseFence { connection, token } => Connection::load(&connection)?
                 .client()
                 .call(Command::ReleaseFence(token))?,
+            TrainCommand::Rollover {
+                previous_config,
+                config,
+                token,
+            } => {
+                let load = |path: &Path| -> Result<Service, String> {
+                    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())
+                };
+                let receipt = rollover(load(&previous_config)?, load(&config)?, &token)?;
+                writeln!(
+                    std::io::stdout().lock(),
+                    "{}",
+                    serde_json::json!({"rolloverReceipt": receipt})
+                )
+                .map_err(|e| e.to_string())?;
+                return Ok(ExitCode::SUCCESS);
+            }
         };
         let mut stdout = std::io::stdout().lock();
         serde_json::to_writer_pretty(&mut stdout, &reply).map_err(|e| e.to_string())?;
