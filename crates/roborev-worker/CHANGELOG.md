@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Pin the stalled-copy fixture's child before termination and require bounded
+  pidfd exit readiness, avoiding a race between tracer reaping and child exit
+  while retaining the overall deadline and incomplete-request no-replay checks.
+
 ## [0.1.0] - 2026-10-06
 
 - Extract Linux preparation, socket-associated peer-pidfd authentication,

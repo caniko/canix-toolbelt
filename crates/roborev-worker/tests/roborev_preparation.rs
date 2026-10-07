@@ -4,6 +4,7 @@ use canix_toolbelt_roborev_worker::{Binding, Limits, Tools, prepare_local};
 use nix::fcntl::{Flock, FlockArg};
 use std::{
     fs,
+    os::fd::AsFd,
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::Command,
@@ -411,37 +412,54 @@ fn stalled_real_object_copy_times_out_and_preserves_incomplete_request() {
             &limits,
         )
     };
-    let error = std::thread::scope(|scope| {
+    let (error, copier) = std::thread::scope(|scope| {
         let first = scope.spawn(prepare);
         while !marker.exists() && started.elapsed() < std::time::Duration::from_secs(2) {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(marker.exists(), "real helper did not reach source copying");
+        // The marker is published atomically while the copier is still stopped.
+        // Pin that process before the controller kills its group, rather than
+        // inspecting a recyclable numeric PID after the tracer has exited.
+        let observed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        assert_eq!(observed["phase"], "source-object-copy");
+        let pid = i32::try_from(observed["pid"].as_u64().unwrap()).unwrap();
+        let copier = rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(pid).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap();
         let contention = prepare().unwrap_err().to_string();
         assert!(
             contention.contains("another preparer owns this request"),
             "{contention}"
         );
-        first.join().unwrap().unwrap_err().to_string()
+        (first.join().unwrap().unwrap_err().to_string(), copier)
     });
     assert!(
         error.contains("whole preparation exceeded its time bound"),
         "{error}"
     );
+    // SIGKILL delivery to the traced child can finish after its tracer is reaped.
+    // Observe actual exit, with no extra signal and a strict cleanup deadline.
+    let mut events = [nix::poll::PollFd::new(
+        copier.as_fd(),
+        nix::poll::PollFlags::POLLIN,
+    )];
+    assert_eq!(
+        nix::poll::poll(&mut events, 1_000_u16).unwrap(),
+        1,
+        "stalled copier did not exit within the cleanup deadline"
+    );
+    assert!(
+        events[0]
+            .revents()
+            .unwrap()
+            .contains(nix::poll::PollFlags::POLLIN),
+        "stalled copier exit was not observed"
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(8));
-    let observed: serde_json::Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
-    assert_eq!(observed["phase"], "source-object-copy");
-    let pid = observed["pid"].as_u64().unwrap();
-    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
-        assert!(
-            stat.rsplit_once(')')
-                .unwrap()
-                .1
-                .trim_start()
-                .starts_with('Z'),
-            "stalled copier still running"
-        );
-    }
     let entry = fixture.state.join(fixture.binding.key());
     let journal = fs::read(entry.join("preparation.json")).unwrap();
     let state: serde_json::Value = serde_json::from_slice(&journal).unwrap();

@@ -5,6 +5,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Match the Claude release manifest to nixpkgs' raw or Zstandard download
+  recipe, keeping both the declared checksum and installation format compatible.
+
 ### Added
 
 - Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,

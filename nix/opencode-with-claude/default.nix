@@ -8,10 +8,27 @@
   stdenv,
   claude-code,
 }: let
-  manifest = lib.importJSON ./claude-code-manifest.json;
+  rawManifest = lib.importJSON ./claude-code-manifest.json;
   claude =
-    if lib.versionOlder claude-code.version manifest.version
-    then claude-code.override {inherit manifest;}
+    if lib.versionOlder claude-code.version rawManifest.version
+    then let
+      # Older nixpkgs fetches /claude; newer recipes fetch and unzstd /claude.zst.
+      # Match the existing recipe's transport, retaining its installation hooks.
+      compressed = lib.hasSuffix ".zst" claude-code.src.url;
+      manifest =
+        if compressed
+        then lib.importJSON ./claude-code-manifest.zst.json
+        else rawManifest;
+      binaries =
+        if compressed
+        then ["claude.zst" "claude.exe.zst"]
+        else ["claude" "claude.exe"];
+    in
+      assert manifest.version == rawManifest.version;
+      assert lib.assertMsg
+      (lib.all (entry: lib.elem entry.binary binaries) (builtins.attrValues manifest.platforms))
+      "canix-toolbelt: the Claude manifest must match the package's download format";
+        claude-code.override {inherit manifest;}
     else claude-code;
 in
   assert lib.versionAtLeast nodejs.version "22.15";
