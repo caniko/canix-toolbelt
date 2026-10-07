@@ -27,6 +27,7 @@ in
     networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};
     opsShellPackages = import ./opsShellPackages.nix;
+    pinentry = import ./pinentry.nix {inherit lib;};
     opencodeEnvironment.patchLegacy = import ../runtime/opencode-environment/package.nix;
     profiles = import ./profiles.nix {inherit lib;};
     peerRoute = import ./peerRoute.nix;
