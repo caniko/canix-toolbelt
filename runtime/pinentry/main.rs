@@ -2,8 +2,10 @@
 //! Assuan stdout; the private Zellij socket transports only terminal metadata.
 
 use std::env;
+use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -26,6 +28,40 @@ const QT: &str = match option_env!("CANIX_PINENTRY_QT") {
 };
 const GPG: Option<&str> = option_env!("CANIX_PINENTRY_GPG");
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+const DISPLAY_VARIABLES: [&str; 5] = [
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_SESSION_TYPE",
+    "XDG_RUNTIME_DIR",
+];
+
+// Hex keeps delimiters, whitespace and Assuan escapes out of request metadata.
+// Empty fields explicitly clear values inherited from the shared agent.
+fn desktop_context(data: &str) -> Option<[Option<OsString>; 5]> {
+    let fields = data.strip_prefix("canix-pinentry-v1:desktop:")?;
+    let values: Option<Vec<_>> = fields
+        .split(':')
+        .map(|field| {
+            if field.is_empty() {
+                return Some(None);
+            }
+            if field.len() % 2 != 0 || !field.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            let bytes: Option<Vec<_>> = field
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let value = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+                    (value != 0).then_some(value)
+                })
+                .collect();
+            Some(Some(OsString::from_vec(bytes?)))
+        })
+        .collect();
+    values?.try_into().ok()
+}
 
 #[derive(Debug, PartialEq)]
 enum Route {
@@ -38,7 +74,7 @@ fn route(data: Option<&str>) -> Route {
     let Some(data) = data.and_then(|data| data.strip_prefix("canix-pinentry-v1:")) else {
         return Route::Tty;
     };
-    if data == "desktop" {
+    if data == "desktop" || desktop_context(&format!("canix-pinentry-v1:{data}")).is_some() {
         return Route::Desktop;
     }
     if let Some((pane, session)) = data
@@ -82,7 +118,17 @@ fn client_route(
 impl Route {
     fn user_data(&self) -> String {
         match self {
-            Self::Desktop => "canix-pinentry-v1:desktop".into(),
+            Self::Desktop => {
+                let fields = DISPLAY_VARIABLES.map(|name| {
+                    env::var_os(name)
+                        .unwrap_or_default()
+                        .as_bytes()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                });
+                format!("canix-pinentry-v1:desktop:{}", fields.join(":"))
+            }
             Self::Tty => "canix-pinentry-v1:tty".into(),
             Self::Zellij { pane, session } => {
                 format!("canix-pinentry-v1:zellij:{pane}:{session}")
@@ -115,11 +161,21 @@ fn exec_gpg() -> io::Error {
     command
         .args(env::args_os().skip(1))
         .env("PINENTRY_USER_DATA", current_route(true).user_data());
-    // stdin is already open in the requesting process: accept virtual consoles
-    // and serial terminals too. Popup metadata retains its stricter PTY check.
-    if io::stdin().is_terminal()
-        && let Ok(tty) = fs::read_link("/proc/self/fd/0")
-    {
+    // Signing often consumes piped stdin and writes a file. Prefer stdin, then
+    // interactive stderr/stdout; accept virtual consoles and serial TTYs too.
+    // Popup metadata retains its stricter owned-PTY check.
+    let terminal = [
+        (0, io::stdin().is_terminal()),
+        (2, io::stderr().is_terminal()),
+        (1, io::stdout().is_terminal()),
+    ]
+    .into_iter()
+    .find_map(|(fd, terminal)| {
+        terminal
+            .then(|| fs::read_link(format!("/proc/self/fd/{fd}")).ok())
+            .flatten()
+    });
+    if let Some(tty) = terminal {
         command.env("GPG_TTY", tty);
     }
     command.exec()
@@ -135,10 +191,27 @@ fn exec_tty() -> io::Error {
     backend(TTY).exec()
 }
 
-fn exec_desktop() -> io::Error {
-    // GnuPG supplies the requesting session's display per call. A manager-wide
-    // environment can belong to a different graphical login or a stale session.
-    backend(QT).exec()
+fn exec_desktop(agent: bool) -> io::Error {
+    let mut command = backend(QT);
+    // GnuPG's session options do not carry the complete Wayland context. Restore the
+    // complete caller snapshot for agent requests, including absent variables.
+    // Legacy markers keep GnuPG's own DISPLAY/XAUTHORITY forwarding; direct age
+    // clients always retain their live environment rather than inherited data.
+    if agent
+        && let Some(context) = env::var("PINENTRY_USER_DATA")
+            .ok()
+            .as_deref()
+            .and_then(desktop_context)
+    {
+        for (name, value) in DISPLAY_VARIABLES.into_iter().zip(context) {
+            if let Some(value) = value {
+                command.env(name, value);
+            } else {
+                command.env_remove(name);
+            }
+        }
+    }
+    command.exec()
 }
 
 struct RuntimeDirectory(PathBuf);
@@ -339,7 +412,7 @@ fn run() -> io::Result<ExitCode> {
         current_route(true)
     };
     match request {
-        Route::Desktop => Err(exec_desktop()),
+        Route::Desktop => Err(exec_desktop(agent)),
         Route::Tty => Err(exec_tty()),
         Route::Zellij { pane, session } => match popup(pane, &session) {
             Ok(popup) => run_popup(popup),

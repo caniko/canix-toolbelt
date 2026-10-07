@@ -28,6 +28,19 @@ fn agents_require_explicit_desktop_requests() {
 }
 
 #[test]
+fn malformed_desktop_snapshots_fail_closed() {
+    for data in [
+        "canix-pinentry-v1:desktop:00::::", // NUL cannot enter exec's environment.
+        "canix-pinentry-v1:desktop:6::::",  // Truncated hex.
+        "canix-pinentry-v1:desktop:zz::::",
+        "canix-pinentry-v1:desktop::::",   // Missing field.
+        "canix-pinentry-v1:desktop::::::", // Extra field.
+    ] {
+        assert_eq!(route(Some(data)), Route::Tty);
+    }
+}
+
+#[test]
 fn live_zellij_beats_stale_desktop_context_even_over_ssh() {
     assert_eq!(
         client_route(

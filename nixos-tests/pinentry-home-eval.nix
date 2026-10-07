@@ -7,6 +7,7 @@
     settings ? {},
     nushell ? false,
     nushellIntegration ? true,
+    rawRage ? false,
   }:
     (inputs.home-manager.lib.homeManagerConfiguration {
       inherit pkgs;
@@ -19,6 +20,7 @@
             stateVersion = "25.05";
           };
           canix-toolbelt.pinentry = settings;
+          home.packages = lib.optional rawRage pkgs.rage;
           programs.nushell.enable = nushell;
           services.gpg-agent.enableNushellIntegration = nushellIntegration;
         }
@@ -30,6 +32,13 @@
       enable = true;
       rageIntegration = true;
     };
+  };
+  coexist = evaluate {
+    settings = {
+      enable = true;
+      rageIntegration = true;
+    };
+    rawRage = true;
   };
   gpg = evaluate {
     settings = {
@@ -56,7 +65,7 @@ in
   assert !disabled.programs.gpg.enable;
   assert disabled.canix-toolbelt.pinentry.packages == {};
   assert !direct.programs.gpg.enable;
-  assert lib.elem direct.canix-toolbelt.pinentry.packages.rage direct.home.packages;
+  assert lib.any (package: package.outPath == direct.canix-toolbelt.pinentry.packages.rage.outPath) direct.home.packages;
   assert gpg.programs.gpg.package == gpg.canix-toolbelt.pinentry.packages.gpg;
   assert gpg.services.gpg-agent.pinentry.program == "canix-toolbelt-pinentry-agent";
   assert !gpg.programs.nushell.enable;
@@ -65,4 +74,7 @@ in
   assert !lib.hasInfix "PINENTRY_USER_DATA" gpg.programs.nushell.extraConfig;
   assert lib.hasInfix "PINENTRY_USER_DATA" nushell.programs.nushell.extraConfig;
   assert nushellOptOut.programs.nushell.extraConfig == "";
-    pkgs.writeText "pinentry-home-eval" "ok"
+    pkgs.runCommand "pinentry-home-eval" {} ''
+      test "$(readlink -f ${coexist.home.path}/bin/rage)" = "${coexist.canix-toolbelt.pinentry.packages.rage}/bin/rage"
+      touch "$out"
+    ''

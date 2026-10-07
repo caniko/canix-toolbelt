@@ -33,7 +33,7 @@ class RequestContextIntegration(unittest.TestCase):
         backend = root / "backend"
         backend.write_text(f"#!{sys.executable}\nimport json, os\n"
                            "print(json.dumps({key: os.environ.get(key) for key in "
-                           "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'GPG_TTY', 'PINENTRY_USER_DATA']}))\n")
+                            "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'XDG_RUNTIME_DIR', 'GPG_TTY', 'PINENTRY_USER_DATA']}))\n")
         backend.chmod(0o700)
         manager = root / "manager"
         manager.write_text(f"#!{sys.executable}\nprint('DISPLAY=:manager\\nWAYLAND_DISPLAY=manager\\nXAUTHORITY=manager\\nXDG_SESSION_TYPE=manager')\n")
@@ -73,6 +73,65 @@ class RequestContextIntegration(unittest.TestCase):
         result = subprocess.run([self.gpg], env=dict(self.env, GPG_TTY="/dev/ttyS0"), input="", text=True,
                                 capture_output=True, check=True, timeout=5)
         self.assertEqual(json.loads(result.stdout)["GPG_TTY"], "/dev/ttyS0")
+
+    def test_piped_gpg_discovers_the_interactive_stderr_terminal(self):
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        result = subprocess.run([self.gpg], env=self.env, input="piped signing data", stderr=slave,
+                                stdout=subprocess.PIPE, text=True, check=True, timeout=5)
+        self.assertEqual(json.loads(result.stdout)["GPG_TTY"], os.ttyname(slave))
+
+    def test_real_gpg_forwards_wayland_and_clears_stale_agent_display(self):
+        with tempfile.TemporaryDirectory(prefix="pw-", dir=self.temp.name) as directory:
+            root = Path(directory)
+            home = root / "g"
+            home.mkdir(mode=0o700)
+            record = root / "context.json"
+            backend = root / "pinentry"
+            backend.write_text(f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+                               "Path(os.environ['PINENTRY_FIXTURE_RECORD']).write_text(json.dumps({key: os.environ.get(key) for key in "
+                               "['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'XDG_RUNTIME_DIR']}))\n"
+                               "print('OK', flush=True)\n"
+                               "for line in sys.stdin:\n"
+                               " if line.startswith('GETPIN'): print('D display-fixture-pin', flush=True)\n"
+                               " print('OK', flush=True)\n"
+                               " if line.startswith('BYE'): break\n")
+            backend.chmod(0o700)
+            binary = root / "router"
+            subprocess.run(["rustc", "--edition=2024", "-D", "warnings", str(Path(__file__).with_name("main.rs")), "-o", str(binary)],
+                           env=dict(self.env, CANIX_PINENTRY_GPG=GPG, CANIX_PINENTRY_QT=str(backend)),
+                           capture_output=True, check=True, timeout=30)
+            gpg = root / "gpg"
+            gpg.symlink_to(binary)
+            agent = root / "canix-toolbelt-pinentry-agent"
+            agent.symlink_to(binary)
+            (home / "gpg-agent.conf").write_text(f"pinentry-program {agent}\ndefault-cache-ttl 0\nno-allow-external-cache\n")
+            startup = dict(self.env, GNUPGHOME=str(home), PINENTRY_FIXTURE_RECORD=str(record),
+                           DISPLAY=":stale-agent", WAYLAND_DISPLAY="stale-wayland", XAUTHORITY="stale-auth",
+                           XDG_SESSION_TYPE="stale-type", XDG_RUNTIME_DIR=str(root))
+            subprocess.run([GPGCONF, "--launch", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10)
+            try:
+                subprocess.run([GPG, "--batch", "--pinentry-mode", "loopback", "--passphrase", "display-fixture-pin",
+                                "--quick-generate-key", "Display fixture <display@example.invalid>", "ed25519", "sign", "0"],
+                               env=startup, capture_output=True, check=True, timeout=15)
+                challenge = root / "challenge"
+                challenge.write_text("Request-local graphical context\n")
+                for context in [
+                    {"WAYLAND_DISPLAY": "wayland-request:% name", "XDG_SESSION_TYPE": "wayland", "XDG_RUNTIME_DIR": str(root / "request runtime")},
+                    {"DISPLAY": ":request", "XAUTHORITY": str(root / "request auth"), "XDG_SESSION_TYPE": "x11", "XDG_RUNTIME_DIR": str(root)},
+                ]:
+                    with self.subTest(context=context):
+                        client = dict(startup)
+                        for key in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR"]:
+                            client.pop(key, None)
+                        client.update(context)
+                        subprocess.run([gpg, "--batch", "--yes", "--output", str(root / "signature"), "--detach-sign", str(challenge)],
+                                       env=client, input="", text=True, capture_output=True, check=True, timeout=15)
+                        self.assertEqual(json.loads(record.read_text()), {key: context.get(key) for key in
+                                         ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR"]})
+            finally:
+                subprocess.run([GPGCONF, "--kill", "gpg-agent"], env=startup, capture_output=True, check=True, timeout=10)
 
     def test_both_gpg_entrypoints_refresh_request_context(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", ZELLIJ_PANE_ID="17", ZELLIJ_SESSION_NAME="request-session")
