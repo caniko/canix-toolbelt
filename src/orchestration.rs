@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+pub mod driver;
+
 /// An existing owner and its complete assignment set.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Packet {
