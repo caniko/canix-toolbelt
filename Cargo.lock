@@ -166,14 +166,13 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "canix-toolbelt"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "clap",
  "fleetix",
  "fs2",
  "miette",
- "nix-manager-core",
  "rustix",
  "serde",
  "serde_json",
@@ -539,13 +538,32 @@ dependencies = [
 
 [[package]]
 name = "fleetix"
-version = "0.5.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22aac66d6057a6af0f21eb898d87646e110ac9942905bf0c9968f6e4182c69e1"
+checksum = "2673218f8e50930be99abf049e2685f61134dea411b7664c46abb992959e05c2"
 dependencies = [
+ "clap",
+ "fleetix-sidecar",
  "fs2",
  "indexmap",
  "libc",
+ "miette",
+ "nix-manager-core",
+ "pklx",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signal-hook",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "fleetix-sidecar"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab65e20df3828ce0409b738401e3d26469bc70473e521e3ad4053943f5382b94"
+dependencies = [
  "miette",
  "pklx",
  "serde",

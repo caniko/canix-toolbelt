@@ -2,12 +2,14 @@
 
 ## Shared construction
 
-The optional Unix `build-train` feature composes Fleetix's coordinator with
-`nix-manager-core`'s native named-output frontier. The `cli` feature exposes
-`canix-toolbelt build-train serve --config <service.json>` and request inspection,
-cancellation, held retry, retirement and fence commands using a deployment-owned
-connection file. Library consumers use `build_train::Connection` and Fleetix's
-typed request protocol directly.
+The optional Unix `build-train` feature consumes registry Fleetix 0.6.0's native
+coordinator and frontend. Fleetix composes `nix-manager-core`'s named-output
+frontier; Toolbelt preserves `build_train::Connection`, `Service`, `serve`,
+`rollover` and `policy_identity` as re-exports of those exact public types and
+functions. The `cli` feature exposes `canix-toolbelt build-train` registration,
+admission, completion, inspection, cancellation, held retry, retirement, drain,
+activation-readiness and recovery commands over that same implementation.
+Consumers can mix the Toolbelt and Fleetix library APIs directly.
 
 The NixOS module `nixosModules.build-train` supplies a private builder-local service
 and immutable discovery contract. Its `package` must enable both `cli` and

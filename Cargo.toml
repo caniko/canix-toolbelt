@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -34,7 +34,7 @@ all-features = true
 default = []
 cli = ["dep:clap", "dep:signal-hook", "review"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
-build-train = ["fleetix/build-train-runtime", "dep:nix-manager-core", "dep:sha2", "dep:signal-hook"]
+build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process"]
 
 [[bin]]
@@ -48,7 +48,7 @@ path = "src/bin/direct-network.rs"
 required-features = ["cli", "direct-network"]
 
 [dependencies]
-fleetix = { version = "0.5.2", default-features = false, features = ["pkl"] }
+fleetix = { version = "0.6.0", default-features = false, features = ["pkl"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
@@ -61,7 +61,6 @@ fs2 = { version = "0.4", optional = true }
 url = { version = "2", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 zeroize = { version = "1", optional = true }
-nix-manager-core = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

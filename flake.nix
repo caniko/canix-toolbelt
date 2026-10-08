@@ -26,7 +26,7 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=2230d9ee804a66d94424a91919182e4fcca13ab2";
+      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=74f6eb09d2e010c6b75a8f8aab15b04e715bb10a";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
@@ -122,7 +122,10 @@
             };
           };
         nixosModules =
-          (import ./modules/nixos {fleetixGpu = inputs.fleetix.lib.gpu;})
+          (import ./modules/nixos {
+            fleetixGpu = inputs.fleetix.lib.gpu;
+            fleetixBuildTrain = inputs.fleetix.nixosModules.build-train;
+          })
           // {
             cloud-host = {
               imports = [
@@ -193,10 +196,10 @@
 
         checks =
           {
-            build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs;};
+            build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs inputs;};
             direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
             direct-network-transitions = import ./nixos-tests/direct-network-transitions.nix {inherit pkgs inputs;};
-            build-train-policy = assert import ./nixos-tests/build-train-policy.nix != {}; pkgs.writeText "build-train-policy-parity" "ok";
+            build-train-policy = assert (import ./nixos-tests/build-train-policy.nix {inherit inputs;}) != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
             direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
