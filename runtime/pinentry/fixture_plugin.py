@@ -61,7 +61,10 @@ else:
     trace("PIN requested")
     send("request-secret", body=b"Fixture_age_PIN")
     command, _, pin = receive()
-    trace("PIN accepted" if command == "ok" and pin == b"age-fixture-pin" else "PIN rejected")
+    if command != "ok":
+        trace("PIN unavailable")
+    else:
+        trace("PIN accepted" if pin == b"age-fixture-pin" else "PIN unexpected response")
     if command != "ok" or pin != b"age-fixture-pin":
         send("done")
         sys.exit(0)

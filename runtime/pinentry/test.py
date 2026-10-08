@@ -230,9 +230,18 @@ class PinentryIntegration(unittest.TestCase):
             time.sleep(0.05)
         traces = {path.name: path.read_text() for path in cls.root.glob("age-trace-*")}
         states = [process.poll() for process in cls.queries]
+        failures = {}
+        for index, process in enumerate(cls.queries):
+            if states[index] not in (None, 0):
+                try:
+                    _, stderr = process.communicate(timeout=1)
+                    # Only disposable fixture clients; never log protocol stdout.
+                    failures[index] = stderr
+                except subprocess.TimeoutExpired:
+                    failures[index] = "exited client still has open subprocess streams"
         panes = cls.panes()
         raise AssertionError(f"timed out waiting for fixture state; processes={states}; "
-                             f"age_states={traces}; panes={panes}")
+                             f"age_states={traces}; failed_client_errors={failures}; panes={panes}")
 
     @classmethod
     def query(cls, context, tty="/dev/pts/99999999", env=None):
