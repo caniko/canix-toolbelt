@@ -228,7 +228,11 @@ class PinentryIntegration(unittest.TestCase):
             if result:
                 return result
             time.sleep(0.05)
-        raise AssertionError("timed out waiting for fixture state")
+        traces = {path.name: path.read_text() for path in cls.root.glob("age-trace-*")}
+        states = [process.poll() for process in cls.queries]
+        panes = cls.panes()
+        raise AssertionError(f"timed out waiting for fixture state; processes={states}; "
+                             f"age_states={traces}; panes={panes}")
 
     @classmethod
     def query(cls, context, tty="/dev/pts/99999999", env=None):
@@ -345,7 +349,8 @@ class PinentryIntegration(unittest.TestCase):
 
     def age_query(self):
         env = dict(self.age_env, ZELLIJ_PANE_ID=str(self.origin["id"]), ZELLIJ_SESSION_NAME=self.session,
-                   PINENTRY_USER_DATA="canix-pinentry-v1:desktop", SSH_CONNECTION="fixture-ssh-connection")
+                   PINENTRY_USER_DATA="canix-pinentry-v1:desktop", SSH_CONNECTION="fixture-ssh-connection",
+                   PINENTRY_FIXTURE_TRACE=str(self.root / f"age-trace-{len(self.queries)}"))
         process = subprocess.Popen([RAGE, "--decrypt", "--identity", str(self.identity), str(self.encrypted)],
                                    env=env, text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.queries.append(process)
