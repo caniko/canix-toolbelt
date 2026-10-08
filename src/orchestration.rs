@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub mod driver;
+pub mod evidence;
+pub mod snapshots;
 
 /// An existing owner and its complete assignment set.
 #[derive(Clone, Debug, Deserialize, Serialize)]
