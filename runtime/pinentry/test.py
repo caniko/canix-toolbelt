@@ -407,6 +407,84 @@ class PinentryIntegration(unittest.TestCase):
             self.assertEqual(stdout, "decrypted fixture\n")
         self.assert_closed()
 
+    def startup_router(self, outcome):
+        root = self.root / f"startup-{outcome}"
+        root.mkdir(mode=0o700)
+        wrapper = root / "zellij"
+        attempts = root / "attempts"
+        dispatched = root / "dispatched"
+        wrapper.write_text(f"#!{sys.executable}\n"
+                           "import os, socket, subprocess, sys\nfrom pathlib import Path\n"
+                           f"attempts = Path({str(attempts)!r})\n"
+                           "count = int(attempts.read_text()) + 1 if attempts.exists() else 1\n"
+                           "attempts.write_text(str(count))\n"
+                           f"outcome = {outcome!r}\n"
+                           "if outcome == 'persistent' or (outcome == 'transient' and count == 1):\n"
+                           " print('There is no active session!', file=sys.stderr)\n sys.exit(1)\n"
+                           f"Path({str(dispatched)!r}).write_text(str(count))\n"
+                           "if outcome == 'post-dispatch':\n"
+                           f" subprocess.run([{ZELLIJ!r}, *sys.argv[1:]], check=True)\n"
+                           " connection = socket.socket(socket.AF_UNIX)\n connection.connect(sys.argv[-1])\n"
+                           " print('There is no active session!', file=sys.stderr)\n"
+                           " sys.exit(1)\n"
+                           f"os.execv({ZELLIJ!r}, [{ZELLIJ!r}, *sys.argv[1:]])\n")
+        wrapper.chmod(0o700)
+        binary = root / "router"
+        subprocess.run(["rustc", "--edition=2024", "-D", "warnings", str(Path(__file__).with_name("main.rs")), "-o", str(binary)],
+                       env=dict(os.environ, CANIX_PINENTRY_ZELLIJ=str(wrapper)), capture_output=True, check=True, timeout=30)
+        return binary, attempts, dispatched
+
+    def startup_query(self, binary):
+        env = dict(self.env, ZELLIJ_PANE_ID=str(self.origin["id"]), ZELLIJ_SESSION_NAME=self.session)
+        process = subprocess.Popen([binary], env=env, text=True, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.queries.append(process)
+        return process
+
+    def test_transient_zellij_discovery_failure_recovers_without_replaying_a_popup(self):
+        binary, attempts, dispatched = self.startup_router("transient")
+        process = self.startup_query(binary)
+        process.stdin.write("SETDESC Startup_fixture\nGETPIN\nBYE\n")
+        process.stdin.flush()
+        pane = self.prompt_pane("Startup_fixture")
+        self.assertEqual(sum(p["title"] == "Hardware key PIN" for p in self.panes()), 1)
+        self.assertEqual(attempts.read_text(), "2")
+        self.assertEqual(dispatched.read_text(), "2")
+        self.enter(pane, "startup-fixture-pin")
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertIn("D startup-fixture-pin", stdout)
+        self.assertNotIn("ERR ", stdout)
+        self.assertNotIn("There is no active session", stdout)
+        self.assertNotIn("using the requesting terminal", stderr)
+        self.assert_closed()
+
+    def test_persistent_zellij_discovery_failure_has_a_bounded_protocol_intact_fallback(self):
+        binary, attempts, dispatched = self.startup_router("persistent")
+        process = self.startup_query(binary)
+        started = time.monotonic()
+        stdout, stderr = process.communicate("BYE\n", timeout=15)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(attempts.read_text(), "3")
+        self.assertFalse(dispatched.exists())
+        self.assertTrue(stdout.startswith("OK"), stdout)
+        self.assertNotIn("There is no active session", stdout)
+        self.assertIn("using the requesting terminal", stderr)
+        self.assert_closed()
+
+    def test_ambiguous_post_dispatch_failure_never_replays_the_popup(self):
+        binary, attempts, dispatched = self.startup_router("post-dispatch")
+        process = self.startup_query(binary)
+        stdout, stderr = process.communicate("BYE\n", timeout=15)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(attempts.read_text(), "1")
+        self.assertEqual(dispatched.read_text(), "1")
+        self.assertTrue(stdout.startswith("OK"), stdout)
+        self.assertIn("There is no active session!", stderr)
+        self.assertIn("using the requesting terminal", stderr)
+        self.assert_closed()
+
     def test_active_prompt_timeout_ends_request_without_terminal_fallback(self):
         env = dict(self.env, ZELLIJ_PANE_ID=str(self.origin["id"]), ZELLIJ_SESSION_NAME=self.session)
         process = subprocess.Popen([DIRECT], env=env, text=True, stdin=subprocess.PIPE,
