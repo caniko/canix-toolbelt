@@ -354,7 +354,8 @@ class PinentryIntegration(unittest.TestCase):
     def test_rage_plugin_confirm_and_pin_use_direct_context_with_piped_stdio(self):
         process = self.age_query()
         pane = self.prompt_pane("Fixture_confirmation")
-        self.zellij("action", "write-chars", "--pane-id", pane, "y\n")
+        # pinentry-tty accepts one key in noncanonical mode, without Enter.
+        self.zellij("action", "write-chars", "--pane-id", pane, "y")
         # Confirmation and secret callbacks start independent pinentry processes.
         self.enter(self.prompt_pane("Fixture_age_PIN"), "age-fixture-pin")
         stdout, stderr = process.communicate(timeout=15)
@@ -381,7 +382,7 @@ class PinentryIntegration(unittest.TestCase):
 
         confirms = self.wait_for(lambda: (panes if len(panes := prompt_panes("Fixture_confirmation")) == 2 else None))
         for pane in confirms:
-            self.zellij("action", "write-chars", "--pane-id", pane, "y\n")
+            self.zellij("action", "write-chars", "--pane-id", pane, "y")
         pins = self.wait_for(lambda: (panes if len(panes := prompt_panes("Fixture_age_PIN")) == 2 else None))
         self.assertEqual(len(list((self.root / "r").glob("canix-pinentry-*"))), 2)
         for pane in pins:
