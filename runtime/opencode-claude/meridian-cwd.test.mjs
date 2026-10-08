@@ -26,8 +26,6 @@ test("canonical session cwd survives scrubbing, replays and actual Meridian extr
   const directories = {
     local,
     remote: `/unavailable-fixture-${root.split("/").at(-1)}`,
-    windows: "C:\\projects\\fixture",
-    unc: "\\\\server\\share\\fixture",
   };
   const hooks = new Map();
   const envBefore = [process.env.MERIDIAN_WORKDIR, process.env.CLAUDE_PROXY_WORKDIR];
@@ -37,13 +35,16 @@ test("canonical session cwd survives scrubbing, replays and actual Meridian extr
     session: {
       get: async ({ sessionID }) => ({ location: { directory: directories[sessionID] } }),
       hook: async (name, callback) => {
-        hooks.set(name, callback);
-        return { dispose: async () => {} };
+        const callbacks = hooks.get(name) ?? [];
+        hooks.set(name, callbacks);
+        callbacks.push(callback);
+        return { dispose: async () => callbacks.splice(callbacks.indexOf(callback), 1) };
       },
     },
   });
   try {
     for (const hook of ["context", "title", "compaction", "generate"]) {
+      assert.equal(hooks.get(hook).length, 2, `${hook} registers both directory and scrubbing callbacks`);
       await Promise.all(
         Object.entries(directories).map(async ([sessionID, directory]) => {
           const input = {
@@ -57,7 +58,7 @@ test("canonical session cwd survives scrubbing, replays and actual Meridian extr
             ],
           };
           for (let replay = 0; replay < 2; replay++) {
-            await hooks.get(hook)(input);
+            for (const callback of hooks.get(hook)) await callback(input);
             assert.equal(extractClientCwd(input), directory, `${hook}/${sessionID} extraction`);
             assert.equal(
               input.system
@@ -85,6 +86,22 @@ test("canonical session cwd survives scrubbing, replays and actual Meridian extr
     assert.deepEqual([process.env.MERIDIAN_WORKDIR, process.env.CLAUDE_PROXY_WORKDIR], envBefore);
   } finally {
     await cleanup();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Meridian extracts portable client paths independently of the Linux plugin hook", async () => {
+  const root = await mkdtemp(`${tmpdir()}/meridian-portable-cwd-`);
+  try {
+    for (const directory of ["C:\\projects\\fixture", "\\\\server\\share\\fixture"]) {
+      const input = { system: [{ type: "text", text: `<env>\nWorking directory: ${directory}\n</env>` }] };
+      assert.equal(extractClientCwd(input), directory);
+      const resolved = resolveSdkWorkingDirectory({ adapterCwd: extractClientCwd(input), fallback: root, exists: () => false });
+      assert.equal(resolved.workingDirectory, root);
+      assert.equal(resolved.claimedWorkingDirectory, resolve(directory));
+      assert.equal(resolved.fellBack, true);
+    }
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
