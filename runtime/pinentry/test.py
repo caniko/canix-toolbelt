@@ -240,7 +240,7 @@ class PinentryIntegration(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     failures[index] = "exited client still has open subprocess streams"
         panes = cls.panes()
-        raise AssertionError(f"timed out waiting for fixture state; processes={states}; "
+        raise AssertionError(f"timed out waiting for fixture state; deadline={deadline:.6f}; processes={states}; "
                              f"age_states={traces}; failed_client_errors={failures}; panes={panes}")
 
     @classmethod

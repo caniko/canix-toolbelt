@@ -3,6 +3,7 @@
 import base64
 import os
 import sys
+import time
 
 
 def trace(event):
@@ -10,7 +11,7 @@ def trace(event):
     if path:
         with open(path, "a", encoding="utf-8") as output:
             # State names only: never record the file key or secret response.
-            output.write(event + "\n")
+            output.write(f"{time.monotonic():.6f} {event}\n")
 
 
 def receive():
