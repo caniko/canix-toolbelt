@@ -26,6 +26,44 @@ fn exact_evidence_bytes_and_foreign_edits_are_preserved() {
 }
 
 #[test]
+fn acknowledged_receiver_deletion_remains_a_conflict() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::create_dir(source.path().join("evidence")).unwrap();
+    fs::write(source.path().join("evidence/receipt"), b"initial").unwrap();
+    let allowed = vec![PathBuf::from("evidence")];
+    let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    let acknowledged = apply(target.path(), &allowed, &batch).unwrap();
+    fs::remove_file(target.path().join("evidence/receipt")).unwrap();
+    fs::write(source.path().join("evidence/receipt"), b"source update").unwrap();
+    let update = collect(source.path(), &allowed, &acknowledged.accepted).unwrap();
+    assert_eq!(update.files.len(), 1);
+    assert!(update.files[0].expected.is_some());
+    let receipt = apply(target.path(), &allowed, &update).unwrap();
+    assert_eq!(receipt.conflicts, vec!["evidence/receipt"]);
+    assert!(receipt.accepted.is_empty());
+    assert!(!target.path().join("evidence/receipt").exists());
+}
+
+#[test]
+fn conflicting_file_and_descendant_paths_fail_before_any_write() {
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir(source.path().join("evidence")).unwrap();
+    fs::write(source.path().join("evidence/first"), b"parent bytes").unwrap();
+    fs::write(source.path().join("evidence/second"), b"child bytes").unwrap();
+    let allowed = vec![PathBuf::from("evidence")];
+    let mut batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    batch.files[0].path = "evidence/parent".into();
+    batch.files[1].path = "evidence/parent/child".into();
+    for _ in 0..2 {
+        let target = tempfile::tempdir().unwrap();
+        assert!(apply(target.path(), &allowed, &batch).is_err());
+        assert!(!target.path().join("evidence").exists());
+        batch.files.reverse();
+    }
+}
+
+#[test]
 fn tampered_payload_or_unowned_path_cannot_be_applied() {
     let source = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();

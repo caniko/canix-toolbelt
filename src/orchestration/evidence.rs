@@ -227,12 +227,23 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
                 .saturating_mul(4)
                 .saturating_add(item.path.len() + 1024),
         );
-        if !paths.insert(&item.path)
+        if !paths.insert(PathBuf::from(&item.path))
             || item.bytes.len() as u64 > FILE_LIMIT
             || size > PAYLOAD_LIMIT
             || hash(&item.bytes) != item.sha256
         {
             return Err(invalid("invalid or oversized evidence payload"));
+        }
+    }
+    for path in &paths {
+        if path
+            .ancestors()
+            .skip(1)
+            .any(|parent| paths.contains(parent))
+        {
+            return Err(invalid(
+                "evidence payload contains a file and its descendant",
+            ));
         }
     }
     let mut receipt = Receipt::default();
@@ -243,7 +254,7 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
         };
-        if current.as_ref() != Some(&item.sha256) && current.is_some() && current != item.expected {
+        if current.as_ref() != Some(&item.sha256) && current != item.expected {
             receipt.conflicts.push(item.path.clone());
             continue;
         }

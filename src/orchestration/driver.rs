@@ -186,7 +186,8 @@ pub fn observe(
         let physical = recent.iter().find(|m| {
             m["type"] == "assistant"
                 && (m["tokens"]["input"].as_u64().unwrap_or(0) > 0
-                    || m["tokens"]["cache"]["read"].as_u64().unwrap_or(0) > 0)
+                    || m["tokens"]["cache"]["read"].as_u64().unwrap_or(0) > 0
+                    || m["tokens"]["cache"]["write"].as_u64().unwrap_or(0) > 0)
         });
         let compacted = physical.is_some_and(|m| {
             recent.iter().any(|c| {
@@ -217,6 +218,18 @@ pub fn observe(
         inboxes.insert(packet.number, inbox);
         messages.insert(packet.number, recent);
         context_tokens.insert(packet.number, tokens);
+    }
+    // Inbox dequeue can start an owner after the initial activity sample.
+    // Reject a moving observation before capacity or completion can use it.
+    for (host, before) in &raw {
+        let after = adapter
+            .api(host, "GET", "/api/session/active", None)?
+            .checked()?;
+        if &after != before {
+            return Err(invalid(format!(
+                "activity changed during inbox collection on {host}"
+            )));
+        }
     }
     let mut occupied = active.clone();
     for packet in &manifest.packets {
@@ -251,8 +264,19 @@ fn verify_input(item: &Value, body: &Value, packet: &Packet) -> io::Result<()> {
             "pending input receipt body differs; retain both for inspection",
         ));
     }
+    let empty = json!([]);
     for key in ["files", "agents", "skills"] {
-        if !body[key].is_null() && payload[key] != body[key] {
+        let expected = if body[key].is_null() {
+            &empty
+        } else {
+            &body[key]
+        };
+        let actual = if payload[key].is_null() {
+            &empty
+        } else {
+            &payload[key]
+        };
+        if actual != expected {
             return Err(invalid("pending input attachment receipt differs"));
         }
     }

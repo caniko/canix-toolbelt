@@ -15,6 +15,7 @@ struct Fixture {
     changed_model: bool,
     recent: Vec<Value>,
     mirror_inbox: bool,
+    start_during_inbox: bool,
 }
 
 impl Adapter for Fixture {
@@ -43,6 +44,10 @@ impl Adapter for Fixture {
             });
         }
         let data = if path.ends_with("/inbox") {
+            if self.start_during_inbox {
+                self.hosts
+                    .insert("destination".into(), json!({"ses_original":{}}));
+            }
             json!(self.inbox.get(&id).cloned().unwrap_or_default())
         } else if let Some((_, message)) = path.split_once("/message/") {
             return Ok(Reply {
@@ -132,6 +137,7 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         changed_model: false,
         recent: vec![],
         mirror_inbox: false,
+        start_during_inbox: false,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -229,6 +235,91 @@ fn active_mirror_and_queued_input_block_admission() {
     )
     .unwrap();
     assert!(report.selected.is_empty());
+    assert!(fixture.submissions.is_empty());
+}
+
+#[test]
+fn activity_starting_during_inbox_collection_cannot_admit_a_second_input() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    let original = state.clone();
+    fixture.start_during_inbox = true;
+    assert!(
+        cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .is_err()
+    );
+    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.saved, original);
+}
+
+#[test]
+fn omitted_attachment_fields_cannot_acknowledge_added_capabilities() {
+    for key in ["files", "agents", "skills"] {
+        for in_inbox in [false, true] {
+            let (manifest, policy, expected, mut state, mut fixture) = setup();
+            let body = json!({"id":"msg_original_input","text":"exact historical input","resume":true,"metadata":{"source":"old"}});
+            state["packets"]["1"]["pending"] =
+                json!({"body":body,"version":"old","goalPolicy":"old-goal","preparedAt":"before"});
+            let mut payload = json!({"text":body["text"],"metadata":body["metadata"]});
+            payload[key] = json!(["unexpected capability"]);
+            let receipt =
+                json!({"id":body["id"],"sessionID":"ses_original","type":"user","payload":payload});
+            if in_inbox {
+                fixture.inbox.insert("ses_original".into(), vec![receipt]);
+            } else {
+                fixture
+                    .messages
+                    .insert("msg_original_input".into(), receipt);
+            }
+            assert!(
+                cycle(
+                    &manifest,
+                    &policy,
+                    &expected,
+                    &mut state,
+                    &mut fixture,
+                    "now",
+                    0,
+                    true,
+                )
+                .is_err(),
+                "unexpected {key} in receipt (inbox={in_inbox})"
+            );
+            assert_eq!(state["packets"]["1"]["pending"]["body"], body);
+            assert!(fixture.submissions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn explicit_empty_receipt_attachments_match_an_omitted_body() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    let body = json!({"id":"msg_original_input","text":"exact historical input","resume":true,"metadata":{"source":"old"}});
+    state["packets"]["1"]["version"] = json!("old");
+    state["packets"]["1"]["pending"] =
+        json!({"body":body,"version":"old","goalPolicy":"old-goal","preparedAt":"before"});
+    fixture.messages.insert("msg_original_input".into(), json!({"id":body["id"],"type":"user","text":body["text"],"metadata":body["metadata"],"files":[],"agents":[],"skills":[]}));
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(state["packets"]["1"]["pending"].is_null());
+    assert_eq!(state["packets"]["1"]["deliveredVersion"], "old");
     assert!(fixture.submissions.is_empty());
 }
 
@@ -340,6 +431,38 @@ fn changed_model_or_context_ceiling_cannot_admit_work() {
         .is_err()
     );
     assert!(fixture.submissions.is_empty());
+}
+
+#[test]
+fn cache_write_only_contexts_compact_or_refuse_at_the_hard_ceiling() {
+    for tokens in [180_000, 300_000] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.recent = vec![
+            json!({"id":"msg_cache_write_only","type":"assistant","tokens":{"input":0,"cache":{"read":0,"write":tokens}}}),
+        ];
+        let result = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        );
+        if tokens == 300_000 {
+            assert!(result.is_err());
+            assert!(fixture.submissions.is_empty());
+        } else {
+            result.unwrap();
+            assert_eq!(fixture.submissions.len(), 1);
+            assert!(fixture.submissions[0]["text"].is_null());
+            assert_eq!(
+                state["packets"]["1"]["pendingCompaction"]["physicalMessageID"],
+                "msg_cache_write_only"
+            );
+        }
+    }
 }
 
 #[test]
