@@ -5,6 +5,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Host-neutral native campaign journal, admission and bounded recovery primitives
+  behind the `orchestration` feature, including a read-only legacy shadow probe.
+
 ## [0.5.0] - 2026-10-07
 
 ### Changed
