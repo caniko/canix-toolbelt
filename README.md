@@ -29,6 +29,13 @@ Two output families:
 
 ## Usage
 
+### Hardware-key pinentry
+
+`homeModules.pinentry` selects an origin-relative Zellij popup, Qt, or the
+requesting terminal for GPG and rage/age-plugin PIN requests. Packaged callers
+use `lib.pinentry.mkPackages` or `lib.pinentry.mkRage`; see
+[hardware-key pinentry](docs/pinentry.md) for integration and routing details.
+
 ### OpenCode Claude subscriptions
 
 `homeModules.opencode-claude` wires the native V2 plugin through Jev to a
