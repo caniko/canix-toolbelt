@@ -29,6 +29,13 @@ Two output families:
 
 ## Usage
 
+### Live executor admission
+
+`nixosModules.executor-admission` binds independently enabled workers to live
+toolbelt profiles and registers their admission files as activation artifacts.
+Detaching a profile closes new admission without changing worker units or their
+restart triggers. See [executor admission](docs/executor-admission.md).
+
 ### Hardware-key pinentry
 
 `homeModules.pinentry` selects an origin-relative Zellij popup, Qt, or the

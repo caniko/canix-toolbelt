@@ -12,6 +12,7 @@ nix_builds = [
   ".#canix-toolbelt-build-train",
   ".#canix-toolbelt-direct-network",
   ".#checks.x86_64-linux.direct-network-eval",
+  ".#checks.x86_64-linux.executor-admission-eval",
   ".#checks.x86_64-linux.direct-network-transitions",
   ".#checks.x86_64-linux.build-train-eval",
   ".#checks.x86_64-linux.build-train-policy",
@@ -47,6 +48,13 @@ extra_env= { RUSTDOCFLAGS = "-D warnings" }
 extra_setup = ['''
 set -eu
 test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+test "${GITHUB_RUN_ATTEMPT:-}" = 1
+if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+  revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+  git fetch origin "$revision"
+  git checkout --detach "$revision"
+  test "$(git rev-parse HEAD)" = "$revision"
+fi
 test -c /dev/kvm
 sudo chmod a+rw /dev/kvm
 test -r /dev/kvm && test -w /dev/kvm
@@ -63,7 +71,7 @@ max_jobs = 1
 cores = 2
 timeout_minutes = 40
 capture_results = true
-artifact_retention_days = 14
+artifact_retention_days = 32
 # Preserve builder output even when a hosted timeout interrupts nix build.
 artifact_paths = ["/nix/var/log/nix/drvs"]
 
