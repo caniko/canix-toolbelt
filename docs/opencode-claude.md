@@ -1,9 +1,10 @@
 # Claude subscriptions in OpenCode V2
 
 `homeModules.opencode-claude` composes the native `opencode-with-claude`
-plugin, a per-user Meridian service and `homeModules.opencode-jev`.
-The request path is OpenCode → Jev → Meridian → Claude Agent SDK.
-Fleetix resolves both HTTP loopback endpoints on the selected host.
+plugin and a per-user Meridian service. The default request path is
+OpenCode → Meridian → Claude Agent SDK. Setting `jevEndpoint` adds optional
+`homeModules.opencode-jev` routing: OpenCode → Jev → Meridian → Claude Agent SDK.
+Fleetix resolves the selected HTTP loopback endpoints on the current host.
 
 Import the module and enable OpenCode and Jev:
 
@@ -25,6 +26,10 @@ Import the module and enable OpenCode and Jev:
   };
 }
 ```
+
+For the direct path, omit `jevEndpoint` and the `opencodeJev` block. No Jev
+endpoint or decision-provider credential is needed. An explicitly configured
+`jevEndpoint` requires `opencodeJev.enable = true`.
 
 Declare distinct ports for different users in Fleetix. Its endpoint resolver
 rejects another host's loopback endpoint. Jev validates unique gateway ports.
@@ -58,7 +63,8 @@ and per-session directory propagation.
 
 Package install checks exercise real upstream V2 hooks, beta-header removal,
 auxiliary requests, session affinity and independent cleanup. The module
-evaluation check verifies topology, plugin ordering, Jev routes and credentials;
+evaluation check verifies both direct and routed compositions, topology,
+plugin ordering, Jev routes and credentials;
 the Jev runtime check covers streaming bodies, query parameters and cancellation.
 Live subscription inference remains a separate acceptance step after login and
 activation.

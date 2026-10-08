@@ -38,7 +38,7 @@ use `lib.pinentry.mkPackages` or `lib.pinentry.mkRage`; see
 
 ### OpenCode Claude subscriptions
 
-`homeModules.opencode-claude` wires the native V2 plugin through Jev to a
+`homeModules.opencode-claude` wires the native V2 plugin, optionally through Jev, to a
 per-user Meridian service, using Fleetix-declared loopback endpoints. See
 [Claude subscription integration](docs/opencode-claude.md) for configuration,
 login and lifecycle details.

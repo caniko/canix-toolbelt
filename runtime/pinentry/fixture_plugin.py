@@ -1,7 +1,17 @@
 """Disposable age protocol fixture; never use its plaintext key stanzas outside tests."""
 
 import base64
+import os
 import sys
+import time
+
+
+def trace(event):
+    path = os.environ.get("PINENTRY_FIXTURE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as output:
+            # State names only: never record the file key or secret response.
+            output.write(f"{time.monotonic():.6f} {event}\n")
 
 
 def receive():
@@ -42,13 +52,20 @@ if sys.argv[1] == "--age-plugin=recipient-v1":
     send("recipient-stanza", ["0", "fixture"], key)
     assert receive()[0] == "ok"
 else:
+    trace("confirmation requested")
     send("confirm", ["eWVz", "bm8"], b"Fixture_confirmation")
     command, args, _ = receive()
+    trace("confirmation accepted" if command == "ok" and args == ["yes"] else "confirmation rejected")
     if command != "ok" or args != ["yes"]:
         send("done")
         sys.exit(0)
+    trace("PIN requested")
     send("request-secret", body=b"Fixture_age_PIN")
     command, _, pin = receive()
+    if command != "ok":
+        trace("PIN unavailable")
+    else:
+        trace("PIN accepted" if pin == b"age-fixture-pin" else "PIN unexpected response")
     if command != "ok" or pin != b"age-fixture-pin":
         send("done")
         sys.exit(0)
