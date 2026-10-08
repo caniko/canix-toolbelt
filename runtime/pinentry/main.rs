@@ -4,9 +4,9 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Seek, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -28,6 +28,8 @@ const QT: &str = match option_env!("CANIX_PINENTRY_QT") {
 };
 const GPG: Option<&str> = option_env!("CANIX_PINENTRY_GPG");
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+const DISCOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
+const LAUNCH_ATTEMPTS: usize = 3;
 const DISPLAY_VARIABLES: [&str; 6] = [
     "DISPLAY",
     "WAYLAND_DISPLAY",
@@ -241,6 +243,7 @@ impl RuntimeDirectory {
 impl Drop for RuntimeDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_file(self.0.join("pane.sock"));
+        let _ = fs::remove_file(self.0.join("launch.stderr"));
         let _ = fs::remove_dir(&self.0);
     }
 }
@@ -275,8 +278,16 @@ fn popup(pane: u32, session: &str) -> io::Result<Popup> {
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let deadline = Instant::now() + START_TIMEOUT;
+    // A private file avoids a full stderr pipe blocking the bounded launch wait.
+    let mut diagnostics = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(directory.0.join("launch.stderr"))?;
     // https://zellij.dev/documentation/cli-actions#new-pane
-    let mut child = Command::new(ZELLIJ)
+    let mut command = Command::new(ZELLIJ);
+    command
         .args([
             "--session",
             session,
@@ -301,24 +312,47 @@ fn popup(pane: u32, session: &str) -> io::Result<Popup> {
         .env("ZELLIJ_SESSION_NAME", session)
         .stdin(Stdio::null())
         // Zellij's created pane ID must not enter Assuan stdout.
-        .stdout(Stdio::null())
-        .spawn()?;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                return Err(io::Error::other("Zellij could not open the PIN pane"));
+        .stdout(Stdio::null());
+    for attempt in 1..=LAUNCH_ATTEMPTS {
+        diagnostics.set_len(0)?;
+        diagnostics.rewind()?;
+        let mut child = command.stderr(diagnostics.try_clone()?).spawn()?;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
             }
-            break;
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Zellij launch timed out",
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        diagnostics.rewind()?;
+        let mut message = Vec::new();
+        (&mut diagnostics).take(4096).read_to_end(&mut message)?;
+        if !status.success() {
+            // Zellij 0.45.1 src/commands.rs:send_action_to_session exits here
+            // before attaching/dispatching when its session IPC probe fails.
+            // Do not replay unknown failures, successful dispatches or helpers
+            // already connected, and retain one deadline for every attempt.
+            if status.code() == Some(1)
+                && message == b"There is no active session!\n"
+                && attempt < LAUNCH_ATTEMPTS
+                && Instant::now() + DISCOVERY_RETRY_DELAY < deadline
+                && matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+            {
+                thread::sleep(DISCOVERY_RETRY_DELAY);
+                continue;
+            }
+            io::stderr().write_all(&message)?;
+            return Err(io::Error::other("Zellij could not open the PIN pane"));
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Zellij launch timed out",
-            ));
-        }
-        thread::sleep(Duration::from_millis(20));
+        io::stderr().write_all(&message)?;
+        break;
     }
     let connection = loop {
         match listener.accept() {

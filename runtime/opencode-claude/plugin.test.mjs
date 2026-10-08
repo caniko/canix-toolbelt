@@ -50,12 +50,22 @@ test("packaged V2 plugin uses an occupied external service without binding or cl
       await first.invoke("http.request", event);
       assert.equal(event.request.headers.get("anthropic-beta"), null);
     }
-    const system = [{ type: "text", text: "User instructions from AGENTS.md: keep this context." }];
+    const system = [
+      { type: "text", text: "User instructions from AGENTS.md: keep this context.\n<env>\nWorking directory: /stale\nPlatform: linux\n</env>" },
+      { type: "text", text: "<ENV>working directory: /inline-stale</ENV>" },
+    ];
     for (const name of ["context", "title", "compaction", "generate"]) {
+      assert.equal(first.hooks.get(name).length, 2);
       const event = { sessionID: "session-a", system: structuredClone(system) };
-      await first.invoke(name, event);
-      assert.match(event.system.map(p => p.text).join("\n"), /keep this context/);
-      assert.match(event.system.map(p => p.text).join("\n"), /<env>\s*Working directory: \/projects\/session-a\s*<\/env>/);
+      for (let replay = 0; replay < 2; replay++) {
+        await first.invoke(name, event);
+        const text = event.system.map(p => p.text).join("\n");
+        assert.match(text, /keep this context/);
+        assert.match(text, /Platform: linux/);
+        assert.match(text, /<env>\s*Working directory: \/projects\/session-a\s*<\/env>/);
+        assert.equal(text.match(/Working directory:/gi).length, 1);
+        assert.doesNotMatch(text, /\/stale|\/inline-stale/);
+      }
     }
     await closeFirst();
     closeFirst = undefined;
