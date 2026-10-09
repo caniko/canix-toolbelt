@@ -1,0 +1,59 @@
+name: Retain exact-source producer evidence
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: producer-custody-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  retain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Observe the existing attempt-1 producers and preserve raw evidence
+        run: python3 scripts/retain-producer-evidence.py "$RUNNER_TEMP/producer-evidence"
+      - name: Upload producer custody packet
+        if: always()
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: producer-custody-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          retention-days: 32
+          if-no-files-found: error
+          path: ${{ runner.temp }}/producer-evidence/
+      - name: Verify provider retention and original producer conclusions
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, subprocess
+          from pathlib import Path
+          repo = os.environ['GITHUB_REPOSITORY']
+          artifact = json.loads(subprocess.check_output([
+              'gh', 'api', f"repos/{repo}/actions/artifacts/{os.environ['ARTIFACT_ID']}"]))
+          seconds = (datetime.datetime.fromisoformat(artifact['expires_at'].replace('Z', '+00:00'))
+                     - datetime.datetime.fromisoformat(artifact['created_at'].replace('Z', '+00:00'))).total_seconds()
+          digest = os.environ['ARTIFACT_DIGEST'].removeprefix('sha256:')
+          print(json.dumps({'artifact': artifact, 'retention_seconds': seconds}, indent=2))
+          assert seconds >= 2592000 and not artifact['expired']
+          assert artifact['digest'] == 'sha256:' + digest
+          receipt = json.loads((Path(os.environ['RUNNER_TEMP']) / 'producer-evidence/receipt.json').read_text())
+          assert receipt['head'] == os.environ['SOURCE_HEAD'] and receipt['capture_complete']
+          assert len(receipt['producers']) == 2
+          assert all(row['status'] == 'completed' and row['conclusion'] == 'success'
+                     and row['run_attempt'] == 1 for row in receipt['producers'])
+          PY
