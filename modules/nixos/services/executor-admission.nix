@@ -51,17 +51,18 @@ in {
   };
 
   config = {
-    assertions = lib.concatLists (lib.mapAttrsToList (name: entry: [
-        {
-          assertion = entry.profile == null || builtins.hasAttr entry.profile profiles;
-          message = "Executor admission ${name} references an undeclared toolbelt profile.";
-        }
-        {
-          assertion = config.canix-toolbelt.activation.contracts.${entry.contract}.enabled;
-          message = "Executor admission ${name} requires an enabled owning activation contract.";
-        }
-      ])
-      active)
+    assertions =
+      lib.concatLists (lib.mapAttrsToList (name: entry: [
+          {
+            assertion = entry.profile == null || builtins.hasAttr entry.profile profiles;
+            message = "Executor admission ${name} references an undeclared toolbelt profile.";
+          }
+          {
+            assertion = config.canix-toolbelt.activation.contracts.${entry.contract}.enabled;
+            message = "Executor admission ${name} requires an enabled owning activation contract.";
+          }
+        ])
+        active)
       ++ [
         {
           assertion = let

@@ -2,7 +2,7 @@
   pkgs,
   inputs,
 }: let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   fixture = adjacent: let
     evaluated = import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = pkgs.stdenv.hostPlatform.system;
@@ -46,11 +46,13 @@
   worker = cfg: cfg.systemd.services.executor;
   path = adjacent.canix-toolbelt.services.executorAdmission.secondary.file;
 in
-  assert (policy adjacent) == {
+  assert (policy adjacent)
+  == {
     version = 1;
     accepting = true;
   };
-  assert (policy detached) == {
+  assert (policy detached)
+  == {
     version = 1;
     accepting = false;
   };
@@ -62,6 +64,7 @@ in
   assert !(builtins.elem path (worker adjacent).restartTriggers);
   assert lib.any (artifact: artifact.path == path && !artifact.sensitive)
   adjacent.canix-toolbelt.activation.contracts.secondary.artifacts;
-  assert !(lib.any (entry: lib.hasPrefix "Executor admission" entry.message && !entry.assertion)
+  # Successful NixOS assertions may have messages that only exist on failure.
+  assert !(lib.any (entry: !entry.assertion && lib.hasPrefix "Executor admission" entry.message)
     (adjacent.assertions ++ detached.assertions));
     pkgs.writeText "executor-admission-eval" "Profile detachment changes only admission; executor service and ownership remain stable.\n"
