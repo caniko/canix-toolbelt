@@ -41,6 +41,13 @@ jobs:
         run: |
           set -eu
           test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test "${GITHUB_RUN_ATTEMPT:-}" = 1
+          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+            revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            git fetch origin "$revision"
+            git checkout --detach "$revision"
+            test "$(git rev-parse HEAD)" = "$revision"
+          fi
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm

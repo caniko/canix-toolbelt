@@ -29,6 +29,7 @@ jobs:
           - ".#canix-toolbelt-build-train"
           - ".#canix-toolbelt-direct-network"
           - ".#checks.x86_64-linux.direct-network-eval"
+          - ".#checks.x86_64-linux.executor-admission-eval"
           - ".#checks.x86_64-linux.direct-network-transitions"
           - ".#checks.x86_64-linux.build-train-eval"
           - ".#checks.x86_64-linux.build-train-policy"
@@ -80,6 +81,13 @@ jobs:
         run: |
           set -eu
           test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test "${GITHUB_RUN_ATTEMPT:-}" = 1
+          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+            revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            git fetch origin "$revision"
+            git checkout --detach "$revision"
+            test "$(git rev-parse HEAD)" = "$revision"
+          fi
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
@@ -107,7 +115,7 @@ jobs:
 
         with:
           name: nix-build-${{ strategy.job-index }}
-          retention-days: 14
+          retention-days: 32
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/simit-nix-build-${{ strategy.job-index }}
