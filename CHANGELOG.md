@@ -5,6 +5,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bind hosted required CI gates to the selected source revision before running
+  them, and retain generated README badges alongside the workflow preparation
+  patch for complete declared-generator imports.
+
 ## [0.5.0] - 2026-10-07
 
 ### Changed

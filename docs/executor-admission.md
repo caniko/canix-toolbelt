@@ -36,3 +36,14 @@ host names, endpoint inventory, credentials or application package dependencies.
 `checks.<system>.executor-admission-eval` exercises adjacent and detached NixOS
 graphs and verifies that worker configuration, restart triggers, dependencies
 and ownership remain stable while the admission document changes.
+
+Hosted qualification binds every required gate to the selected PR head (or
+the event revision for push and release jobs) before evaluating or realizing
+the source. Simit required gates own their setup inside `run`; they do not
+inherit `[ci].extra_setup`. Keep that binding in each declared gate command.
+
+When changing `simit.toml`, import the complete generated patch from the
+declared-generator preparation job, including README badges and workflows.
+The preparation artifact contains the exact source, generator and maintainer
+trust hashes, generated files and a member-hashed receipt. Preparation alone
+does not qualify the successor; its own attempt-1 required gates must pass.
