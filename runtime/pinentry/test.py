@@ -270,6 +270,36 @@ class PinentryIntegration(unittest.TestCase):
         self.assertNotIn(pin, self.zellij("action", "dump-screen", "--pane-id", pane))
         self.zellij("action", "send-keys", "--pane-id", pane, "Enter")
 
+    def tearDown(self):
+        result = self._outcome.result
+        if not any(test is self for test, _ in result.failures + result.errors):
+            return
+        # Disposable fixtures only. Keep failure state in the retained builder
+        # log before cleanup kills the child processes and closes their panes.
+        try:
+            panes = self.panes()
+            print("pinentry fixture panes:", json.dumps(panes), file=sys.stderr)
+            for candidate in panes:
+                if candidate["title"] == "Hardware key PIN":
+                    pane = f"terminal_{candidate['id']}"
+                    print("pinentry fixture screen:", pane,
+                          self.zellij("action", "dump-screen", "--pane-id", pane), file=sys.stderr)
+            print("pinentry fixture runtime entries:",
+                  sorted(str(path.relative_to(self.root)) for path in (self.root / "r").rglob("*")),
+                  file=sys.stderr)
+            for process in self.queries:
+                print("pinentry fixture child:", process.pid, "status:", process.poll(), file=sys.stderr)
+                if process.stderr is not None and not process.stderr.closed:
+                    os.set_blocking(process.stderr.fileno(), False)
+                    try:
+                        data = os.read(process.stderr.fileno(), 65536)
+                        print("pinentry fixture stderr:", data.decode(errors="replace"), file=sys.stderr)
+                    except BlockingIOError:
+                        pass
+        except Exception as error:
+            # Diagnostics cannot replace the original assertion or its result.
+            print("pinentry fixture diagnostics unavailable:", repr(error), file=sys.stderr)
+
     def test_floating_prompt_routes_to_origin_and_does_not_echo_pin(self):
         process, pane = self.popup_query()
         self.enter(pane, "fixture-pin")
