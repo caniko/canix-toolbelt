@@ -105,3 +105,156 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
         .files;
     assert!(apply(target.path(), &allowed, &batch).is_err());
 }
+
+#[test]
+fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
+    for delete in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("handoff"), b"exact").unwrap();
+        let allowed = vec![PathBuf::from("handoff")];
+        let first = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let known = apply(target.path(), &allowed, &first).unwrap().accepted;
+        let verified = collect(source.path(), &allowed, &known).unwrap();
+        assert!(verified.files.is_empty());
+        assert_eq!(verified.verify.len(), 1);
+        assert_eq!(
+            apply(target.path(), &allowed, &verified).unwrap().accepted,
+            known
+        );
+        if delete {
+            fs::remove_file(target.path().join("handoff")).unwrap();
+        } else {
+            fs::write(target.path().join("handoff"), b"independent").unwrap();
+        }
+        let receipt = apply(target.path(), &allowed, &verified).unwrap();
+        assert_eq!(receipt.conflicts, vec!["handoff"]);
+        assert!(receipt.accepted.is_empty());
+        if delete {
+            assert!(!target.path().join("handoff").exists());
+        } else {
+            assert_eq!(
+                fs::read(target.path().join("handoff")).unwrap(),
+                b"independent"
+            );
+        }
+    }
+}
+
+#[test]
+fn authoritative_deletions_remove_only_acknowledged_receiver_bytes() {
+    for foreign in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        fs::write(source.path().join("evidence/receipt"), b"exact").unwrap();
+        let allowed = vec![PathBuf::from("evidence")];
+        let first = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let known = apply(target.path(), &allowed, &first).unwrap().accepted;
+        fs::remove_dir_all(source.path().join("evidence")).unwrap();
+        let deletion = collect(source.path(), &allowed, &known).unwrap();
+        assert_eq!(deletion.delete.len(), 1);
+        if foreign {
+            fs::write(target.path().join("evidence/receipt"), b"independent").unwrap();
+        }
+        let receipt = apply(target.path(), &allowed, &deletion).unwrap();
+        if foreign {
+            assert_eq!(receipt.conflicts, vec!["evidence/receipt"]);
+            assert!(receipt.removed.is_empty());
+            assert_eq!(
+                fs::read(target.path().join("evidence/receipt")).unwrap(),
+                b"independent"
+            );
+        } else {
+            assert_eq!(receipt.removed, known);
+            assert!(!target.path().join("evidence/receipt").exists());
+            assert_eq!(
+                apply(target.path(), &allowed, &deletion).unwrap().removed,
+                known
+            );
+        }
+    }
+}
+
+#[test]
+fn forged_file_counts_are_rejected_before_any_receiver_write() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("seed"), b"").unwrap();
+    let seed = collect(source.path(), &[PathBuf::from("seed")], &BTreeMap::new())
+        .unwrap()
+        .files
+        .remove(0);
+    let batch = Batch {
+        files: (0..10_001)
+            .map(|index| Artifact {
+                path: format!("evidence/{index}"),
+                ..seed.clone()
+            })
+            .collect(),
+        ..Batch::default()
+    };
+    assert!(apply(target.path(), &[PathBuf::from("evidence")], &batch).is_err());
+    assert!(!target.path().join("evidence").exists());
+}
+
+#[test]
+fn overlapping_roots_have_the_same_unique_budget_as_one_root() {
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir_all(source.path().join("evidence/reports")).unwrap();
+    for index in 0..6 {
+        fs::write(
+            source.path().join(format!("evidence/reports/{index}")),
+            vec![index as u8; 2 * 1024 * 1024],
+        )
+        .unwrap();
+    }
+    fs::write(source.path().join("evidence/z-last"), b"last").unwrap();
+    let one = collect(
+        source.path(),
+        &[PathBuf::from("evidence")],
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let overlap = collect(
+        source.path(),
+        &[
+            PathBuf::from("evidence/reports"),
+            PathBuf::from("evidence"),
+            PathBuf::from("evidence/reports"),
+        ],
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        one.files
+            .iter()
+            .map(|item| (
+                &item.path,
+                &item.sha256,
+                &item.expected,
+                item.bytes.as_slice()
+            ))
+            .collect::<Vec<_>>(),
+        overlap
+            .files
+            .iter()
+            .map(|item| (
+                &item.path,
+                &item.sha256,
+                &item.expected,
+                item.bytes.as_slice()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(one.omitted, overlap.omitted);
+    assert_eq!(one.deferred, overlap.deferred);
+    assert_eq!(one.files.len(), 6);
+    assert_eq!(one.deferred.len(), 1);
+    assert!(
+        !overlap
+            .deferred
+            .iter()
+            .any(|path| overlap.files.iter().any(|file| &file.path == path))
+    );
+}

@@ -93,6 +93,10 @@ the adapter also verifies the effective policy of the selected agent. Prompt
 receipts are checked against exact payloads in both inboxes and transcripts.
 Journal publication precedes submission. Lost responses retain the same pending
 ID and body. Read-only cycles neither publish nor submit.
+Owner and mirror inboxes are revalidated before using a capacity observation;
+duplicate receipt IDs reject observation. Reconciliation validates every pending
+receipt before committing its candidate journal. Session selectors are checked
+again immediately before prompt or compaction submission.
 
 Context compaction begins at 180k observed input/cache tokens, with a hard 300k
 ceiling. Compaction IDs retain the legacy physical-message fingerprint and are
@@ -114,6 +118,8 @@ outdated/resolved review threads, nested inline comments and check contexts.
 All GitHub connections require stable declared counts; the single checked commit
 must match the PR head. Forgejo inline counts and nonempty unique history IDs are
 validated too. Both forges re-fetch the complete check rollup after collection.
+Forgejo requires a valid retained update timestamp, and inline-comment identities
+must remain unique across the combined review history.
 Malformed/truncated pagination, repeated cursors, and comparison movement fail
 collection. Consumers retain the last valid snapshot and record the error. These
 observations provide scheduling evidence, never merge or closure authority.
@@ -124,3 +130,12 @@ omitted/deferred artifacts separately. Scope and digests are validated before
 application. Unexpected receiver edits remain conflicts; only acknowledged
 digests advance the exchange journal. Replication targets are private mirrors of
 the authoritative owner's paths, serialized by the shared exchange lease.
+Overlapping roots are normalized before traversal. Unchanged acknowledged paths
+remain in `Batch.verify`, so receiver edits or deletions cannot evade comparison.
+Source deletions enter `Batch.delete` and remove only the acknowledged receiver
+bytes; replays are idempotent. Persist `Receipt.removed` and remove those exact
+path/digest bindings from the sender's `known` map. Application independently
+enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/deferred
+entries and the
+48 MiB encoded-payload estimate. Receiver reads, directory creation, staging,
+rename and deletion use pinned no-follow directory handles.

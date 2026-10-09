@@ -1,16 +1,20 @@
 //! Bounded, byte-exact evidence replication. This module never resumes agents.
+use rustix::fs::{AtFlags, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 const FILE_LIMIT: u64 = 8 * 1024 * 1024;
 const PAYLOAD_LIMIT: usize = 48 * 1024 * 1024;
+const FILE_COUNT_LIMIT: usize = 10_000;
+const INVENTORY_LIMIT: usize = 20_000;
 
 /// One source-bound artifact with the receiver's previously acknowledged identity.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -26,12 +30,28 @@ pub struct Artifact {
     pub bytes: Vec<u8>,
 }
 
+/// An acknowledged path whose raw-byte identity is verified or deleted.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Identity {
+    /// Campaign-relative path within explicitly allowed owner roots.
+    pub path: String,
+    /// Previously acknowledged digest required at the receiver.
+    pub sha256: String,
+}
+
 /// A bounded transfer and host-local/deferred inventory.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
     /// Changed artifacts eligible for replication.
     pub files: Vec<Artifact>,
+    /// Unchanged source identities, checked without retransmitting raw bytes.
+    #[serde(default)]
+    pub verify: Vec<Identity>,
+    /// Authoritative deletions, conditional on acknowledged receiver bytes.
+    #[serde(default)]
+    pub delete: Vec<Identity>,
     /// Symlinks, project checkouts and oversized artifacts left on their owner host.
     pub omitted: Vec<String>,
     /// Eligible changes left for the next bounded exchange.
@@ -43,6 +63,10 @@ pub struct Batch {
 pub struct Receipt {
     /// Accepted paths and exact digests, including idempotent replays.
     pub accepted: BTreeMap<String, String>,
+    /// Removed paths and prior digests. Remove these exact bindings from `known`
+    /// only after retaining this receipt; deletion replays are idempotent.
+    #[serde(default)]
+    pub removed: BTreeMap<String, String>,
     /// Paths whose receiver bytes changed independently; both copies remain intact.
     pub conflicts: Vec<String>,
 }
@@ -52,6 +76,13 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn relative(path: &Path, allowed: &[PathBuf]) -> io::Result<()> {
@@ -150,13 +181,27 @@ pub fn collect(
             let bytes = read(&full)?;
             let sha = hash(&bytes);
             if known.get(&name) == Some(&sha) {
+                let encoded = name.len().saturating_add(1024);
+                if batch.verify.len() >= INVENTORY_LIMIT
+                    || size.saturating_add(encoded) > PAYLOAD_LIMIT
+                {
+                    return Err(invalid(
+                        "acknowledged evidence verification exceeds its bound",
+                    ));
+                }
+                *size += encoded;
+                batch.verify.push(Identity {
+                    path: name,
+                    sha256: sha,
+                });
                 return Ok(());
             }
             let encoded = bytes
                 .len()
                 .saturating_mul(4)
                 .saturating_add(name.len() + 1024);
-            if size.saturating_add(encoded) > PAYLOAD_LIMIT || batch.files.len() >= 10_000 {
+            if size.saturating_add(encoded) > PAYLOAD_LIMIT || batch.files.len() >= FILE_COUNT_LIMIT
+            {
                 batch.deferred.push(name);
             } else {
                 *size += encoded;
@@ -168,47 +213,173 @@ pub fn collect(
                 });
             }
         }
-        if batch.omitted.len() + batch.deferred.len() > 20_000 {
+        if batch.omitted.len() + batch.deferred.len() > INVENTORY_LIMIT {
             return Err(invalid("evidence inventory exceeds its bound"));
         }
         Ok(())
     }
     let mut batch = Batch::default();
     let mut size = 0;
-    for path in allowed {
+    let mut roots = allowed.to_vec();
+    roots.sort();
+    let mut unique = Vec::<PathBuf>::new();
+    for path in roots {
+        relative(&path, allowed)?;
+        if !unique.iter().any(|root| path.starts_with(root)) {
+            unique.push(path);
+        }
+    }
+    for path in &unique {
         relative(path, allowed)?;
         if let Some(parent) = path.parent() {
             ancestors(root, parent)?;
         }
         walk(root, path, known, &mut batch, &mut size)?;
     }
+    for (name, sha) in known {
+        let path = Path::new(name);
+        if !unique.iter().any(|root| path.starts_with(root)) {
+            continue;
+        }
+        relative(path, &unique)?;
+        // Check every ancestor so a missing leaf behind a replaced symlink or
+        // checkout cannot be mistaken for an authoritative deletion.
+        ancestors(root, path)?;
+        let deleted = match fs::symlink_metadata(root.join(path)) {
+            Ok(_) => false,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+            Err(error) => return Err(error),
+        };
+        if deleted {
+            if !valid_digest(sha) {
+                return Err(invalid("malformed acknowledged evidence identity"));
+            }
+            let encoded = name.len().saturating_add(1024);
+            if batch.files.len() + batch.delete.len() >= FILE_COUNT_LIMIT
+                || size.saturating_add(encoded) > PAYLOAD_LIMIT
+            {
+                batch.deferred.push(name.clone());
+                if batch.omitted.len() + batch.deferred.len() > INVENTORY_LIMIT {
+                    return Err(invalid("evidence inventory exceeds its bound"));
+                }
+            } else {
+                size += encoded;
+                batch.delete.push(Identity {
+                    path: name.clone(),
+                    sha256: sha.clone(),
+                });
+            }
+        }
+    }
     batch.files.sort_by(|a, b| a.path.cmp(&b.path));
     batch.files.dedup_by(|a, b| a.path == b.path);
+    for name in batch.omitted.iter().chain(&batch.deferred) {
+        size = size.saturating_add(name.len().saturating_add(1024));
+    }
+    if size > PAYLOAD_LIMIT {
+        return Err(invalid("evidence inventory exceeds its payload bound"));
+    }
     Ok(batch)
 }
 
-fn write(path: &Path, bytes: &[u8], sha: &str) -> io::Result<()> {
-    let parent = path
+// Every receiver operation resolves relative to pinned, no-follow directory
+// handles. A concurrent ancestor symlink replacement cannot redirect it.
+fn receiver_parent(root: &File, path: &Path, create: bool) -> io::Result<Option<File>> {
+    let mut parent = root.try_clone()?;
+    for component in path
         .parent()
-        .ok_or_else(|| invalid("artifact has no parent"))?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-    let temp = parent.join(format!(".native-evidence-{}-{sha}", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp)?;
+        .ok_or_else(|| invalid("artifact has no parent"))?
+        .components()
+    {
+        let Component::Normal(name) = component else {
+            return Err(invalid("invalid receiver ancestor"));
+        };
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = match rustix::fs::openat(&parent, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) if create => {
+                match rustix::fs::mkdirat(&parent, name, Mode::from_bits_truncate(0o700)) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                rustix::fs::openat(&parent, name, flags, Mode::empty())?
+            }
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        parent = File::from(fd);
+        match rustix::fs::statat(&parent, ".git", AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => return Err(invalid("evidence path traverses a project checkout")),
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(Some(parent))
+}
+
+fn receiver_hash(root: &File, path: &Path) -> io::Result<Option<String>> {
+    let Some(parent) = receiver_parent(root, path, false)? else {
+        return Ok(None);
+    };
+    let name = path
+        .file_name()
+        .ok_or_else(|| invalid("artifact has no filename"))?;
+    receiver_hash_at(&parent, name)
+}
+
+fn receiver_hash_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Option<String>> {
+    let fd = match rustix::fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let file = File::from(fd);
+    if !file.metadata()?.is_file() || file.metadata()?.len() > FILE_LIMIT {
+        return Err(invalid("artifact is not a bounded regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > FILE_LIMIT {
+        return Err(invalid("artifact grew beyond its bound"));
+    }
+    Ok(Some(hash(&bytes)))
+}
+
+fn write(parent: &File, name: &std::ffi::OsStr, bytes: &[u8], sha: &str) -> io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut staging = None;
+    for _ in 0..32 {
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let temp = format!(".native-evidence-{}-{serial}-{sha}", std::process::id());
+        match rustix::fs::openat(
+            parent,
+            &temp,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o600),
+        ) {
+            Ok(fd) => {
+                staging = Some((temp, File::from(fd)));
+                break;
+            }
+            Err(rustix::io::Errno::EXIST) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let (temp, mut file) =
+        staging.ok_or_else(|| invalid("evidence staging collisions exceed their bound"))?;
     let result = (|| {
         file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&temp, path)?;
-        File::open(parent)?.sync_all()
+        rustix::fs::renameat(parent, &temp, parent, name)?;
+        parent.sync_all()
     })();
     if result.is_err() {
-        let _ = fs::remove_file(temp);
+        let _ = rustix::fs::unlinkat(parent, &temp, AtFlags::empty());
     }
     result
 }
@@ -216,11 +387,31 @@ fn write(path: &Path, bytes: &[u8], sha: &str) -> io::Result<()> {
 /// Verify scope/digests before writing and retain independently edited receiver files.
 /// Call under the shared exchange lease, against a private replication directory.
 pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
-    let mut size = 0usize;
+    if batch.files.len().saturating_add(batch.delete.len()) > FILE_COUNT_LIMIT
+        || batch.verify.len() > INVENTORY_LIMIT
+        || batch.omitted.len().saturating_add(batch.deferred.len()) > INVENTORY_LIMIT
+    {
+        return Err(invalid("evidence file count exceeds its bound"));
+    }
+    let root = File::from(rustix::fs::open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    let mut size = batch
+        .omitted
+        .iter()
+        .chain(&batch.deferred)
+        .fold(0usize, |size, name| {
+            size.saturating_add(name.len().saturating_add(1024))
+        });
+    if size > PAYLOAD_LIMIT {
+        return Err(invalid("evidence inventory exceeds its payload bound"));
+    }
     let mut paths = std::collections::BTreeSet::new();
     for item in &batch.files {
         relative(Path::new(&item.path), allowed)?;
-        ancestors(root, Path::new(&item.path))?;
+        receiver_hash(&root, Path::new(&item.path))?;
         size = size.saturating_add(
             item.bytes
                 .len()
@@ -231,8 +422,20 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
             || item.bytes.len() as u64 > FILE_LIMIT
             || size > PAYLOAD_LIMIT
             || hash(&item.bytes) != item.sha256
+            || item.expected.as_ref().is_some_and(|sha| !valid_digest(sha))
         {
             return Err(invalid("invalid or oversized evidence payload"));
+        }
+    }
+    for item in batch.verify.iter().chain(&batch.delete) {
+        relative(Path::new(&item.path), allowed)?;
+        receiver_hash(&root, Path::new(&item.path))?;
+        size = size.saturating_add(item.path.len().saturating_add(1024));
+        if !paths.insert(PathBuf::from(&item.path))
+            || !valid_digest(&item.sha256)
+            || size > PAYLOAD_LIMIT
+        {
+            return Err(invalid("invalid or oversized evidence identity inventory"));
         }
     }
     for path in &paths {
@@ -247,23 +450,104 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
         }
     }
     let mut receipt = Receipt::default();
+    for item in &batch.verify {
+        if receiver_hash(&root, Path::new(&item.path))?.as_ref() == Some(&item.sha256) {
+            receipt
+                .accepted
+                .insert(item.path.clone(), item.sha256.clone());
+        } else {
+            receipt.conflicts.push(item.path.clone());
+        }
+    }
     for item in &batch.files {
-        let path = root.join(&item.path);
-        let current = match read(&path) {
-            Ok(bytes) => Some(hash(&bytes)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
+        let path = Path::new(&item.path);
+        let current = receiver_hash(&root, path)?;
         if current.as_ref() != Some(&item.sha256) && current != item.expected {
             receipt.conflicts.push(item.path.clone());
             continue;
         }
         if current.as_ref() != Some(&item.sha256) {
-            write(&path, &item.bytes, &item.sha256)?;
+            let parent = receiver_parent(&root, path, true)?.expect("created parent");
+            let name = path.file_name().expect("validated name");
+            let pinned = receiver_hash_at(&parent, name)?;
+            if pinned.as_ref() != Some(&item.sha256) && pinned != item.expected {
+                receipt.conflicts.push(item.path.clone());
+                continue;
+            }
+            if pinned.as_ref() != Some(&item.sha256) {
+                write(&parent, name, &item.bytes, &item.sha256)?;
+            }
         }
         receipt
             .accepted
             .insert(item.path.clone(), item.sha256.clone());
     }
+    for item in &batch.delete {
+        let path = Path::new(&item.path);
+        let current = receiver_hash(&root, path)?;
+        if current.is_some() && current.as_ref() != Some(&item.sha256) {
+            receipt.conflicts.push(item.path.clone());
+            continue;
+        }
+        if current.is_some() {
+            let parent = receiver_parent(&root, path, false)?
+                .ok_or_else(|| invalid("receiver deletion parent moved"))?;
+            let name = path.file_name().expect("validated name");
+            let pinned = receiver_hash_at(&parent, name)?;
+            if pinned.is_some() && pinned.as_ref() != Some(&item.sha256) {
+                receipt.conflicts.push(item.path.clone());
+                continue;
+            }
+            if pinned.is_some() {
+                rustix::fs::unlinkat(&parent, name, AtFlags::empty())?;
+            }
+            parent.sync_all()?;
+        }
+        receipt
+            .removed
+            .insert(item.path.clone(), item.sha256.clone());
+    }
     Ok(receipt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn pinned_receiver_parent_cannot_follow_a_concurrent_ancestor_symlink() {
+        let target = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(target.path().join("evidence")).unwrap();
+        let root = File::from(
+            rustix::fs::open(
+                target.path(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap(),
+        );
+        let parent = receiver_parent(&root, Path::new("evidence/receipt"), false)
+            .unwrap()
+            .unwrap();
+        fs::rename(
+            target.path().join("evidence"),
+            target.path().join("retained"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), target.path().join("evidence")).unwrap();
+        let bytes = b"exact scoped evidence";
+        write(
+            &parent,
+            std::ffi::OsStr::new("receipt"),
+            bytes,
+            &hash(bytes),
+        )
+        .unwrap();
+        assert!(!outside.path().join("receipt").exists());
+        assert_eq!(
+            fs::read(target.path().join("retained/receipt")).unwrap(),
+            bytes
+        );
+        assert!(receiver_parent(&root, Path::new("evidence/receipt"), true).is_err());
+    }
 }
