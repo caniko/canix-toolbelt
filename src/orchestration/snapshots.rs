@@ -35,6 +35,7 @@ fn coordinate(url: &str, github: bool) -> io::Result<(&str, &str, &str, u64)> {
         || (!github && parts[0] == "github.com")
         || parts[..3].iter().any(|part| {
             part.is_empty()
+                || matches!(*part, "." | "..")
                 || !part
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
@@ -63,7 +64,9 @@ fn connection(
     if nodes.len() > 100 {
         return Err(invalid("initial connection page exceeds requested bound"));
     }
-    let total = value["totalCount"].as_u64();
+    let total = value["totalCount"]
+        .as_u64()
+        .ok_or_else(|| invalid("missing or malformed connection total"))?;
     let mut seen = BTreeSet::new();
     loop {
         let more = value["pageInfo"]["hasNextPage"]
@@ -82,10 +85,7 @@ fn connection(
             ));
         }
         let page = next(transport, cursor)?;
-        if page["totalCount"]
-            .as_u64()
-            .is_some_and(|count| Some(count) != total)
-        {
+        if page["totalCount"].as_u64() != Some(total) {
             return Err(invalid("connection total changed during collection"));
         }
         let items = page["nodes"]
@@ -97,7 +97,7 @@ fn connection(
         nodes.extend(items.iter().cloned());
         value["pageInfo"] = page["pageInfo"].clone();
     }
-    if total.is_some_and(|count| count != nodes.len() as u64) {
+    if total != nodes.len() as u64 {
         return Err(invalid(
             "connection count does not establish complete history",
         ));
@@ -124,6 +124,31 @@ fn codex(value: &Value) -> bool {
         )
 }
 
+fn github_checks(transport: &mut impl GraphQl, pull: &Value) -> io::Result<Value> {
+    let commits = pull["commits"]["nodes"]
+        .as_array()
+        .ok_or_else(|| invalid("missing candidate commit collection"))?;
+    if commits.len() != 1 {
+        return Err(invalid("expected exactly one checked candidate commit"));
+    }
+    let commit = &commits[0]["commit"];
+    if !commit["oid"].is_string() || commit["oid"] != pull["headRefOid"] {
+        return Err(invalid("checked commit does not match the candidate head"));
+    }
+    let id = commit["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| invalid("missing checked commit identity"))?;
+    let mut rollup = commit["statusCheckRollup"].clone();
+    if !rollup.is_null() {
+        connection(transport, &mut rollup["contexts"], |transport, cursor| {
+            let data = transport.query(&format!("query{{node(id:{}){{... on Commit{{statusCheckRollup{{contexts(first:100,after:{}){{{CHECKS}}}}}}}}}}}",quote(id),quote(cursor)))?;
+            Ok(data["node"]["statusCheckRollup"]["contexts"].clone())
+        })?;
+    }
+    Ok(rollup)
+}
+
 /// Collect full history, nested review comments and all check contexts. Revalidate
 /// the candidate/target/update identity before publishing an observation.
 pub fn github(
@@ -139,7 +164,7 @@ pub fn github(
     let basic = BASIC.replace("CHECKS", CHECKS);
     let comment = format!("totalCount pageInfo{{hasNextPage endCursor}}nodes{{{COMMENT}}}");
     let reviews = "totalCount pageInfo{hasNextPage endCursor}nodes{id url author{login __typename}state body commit{oid}submittedAt}";
-    let thread_comments = format!("pageInfo{{hasNextPage endCursor}}nodes{{{INLINE}}}");
+    let thread_comments = format!("totalCount pageInfo{{hasNextPage endCursor}}nodes{{{INLINE}}}");
     let threads = format!(
         "totalCount pageInfo{{hasNextPage endCursor}}nodes{{id isResolved isOutdated path comments(first:100){{{thread_comments}}}}}"
     );
@@ -181,26 +206,7 @@ pub fn github(
             Ok(data["node"]["comments"].clone())
         })?;
     }
-    let commits = p["commits"]["nodes"]
-        .as_array()
-        .ok_or_else(|| invalid("missing candidate commit collection"))?;
-    if commits.len() > 1 {
-        return Err(invalid("unexpected candidate commit count"));
-    }
-    let commit = commits
-        .first()
-        .map(|v| v["commit"].clone())
-        .unwrap_or(Value::Null);
-    let mut rollup = commit["statusCheckRollup"].clone();
-    if !rollup.is_null() {
-        let id = commit["id"]
-            .as_str()
-            .ok_or_else(|| invalid("missing checked commit identity"))?;
-        connection(transport, &mut rollup["contexts"], |transport, cursor| {
-            let data = transport.query(&format!("query{{node(id:{}){{... on Commit{{statusCheckRollup{{contexts(first:100,after:{}){{{CHECKS}}}}}}}}}}}",quote(id),quote(cursor)))?;
-            Ok(data["node"]["statusCheckRollup"]["contexts"].clone())
-        })?;
-    }
+    let rollup = github_checks(transport, &p)?;
     let fresh = transport.query(&format!("query{{{repository}{{{pull}{{{basic}}}}}}}"))?;
     for key in [
         "headRefOid",
@@ -209,12 +215,16 @@ pub fn github(
         "updatedAt",
         "state",
         "mergeCommit",
+        "commits",
     ] {
         if fresh["repository"]["pullRequest"][key] != p[key] {
             return Err(invalid(
                 "candidate, target or feedback moved during collection",
             ));
         }
+    }
+    if github_checks(transport, &fresh["repository"]["pullRequest"])? != rollup {
+        return Err(invalid("GitHub check rollup moved during collection"));
     }
     let mut value = previous
         .as_object()
@@ -280,6 +290,7 @@ pub fn github(
 
 fn forge_pages(transport: &mut impl ForgeRest, host: &str, path: &str) -> io::Result<Vec<Value>> {
     let mut result = Vec::new();
+    let mut ids = BTreeSet::new();
     for page in 1..=20 {
         let value = transport.get(host, &format!("{path}?limit=100&page={page}"))?;
         let rows = value
@@ -287,6 +298,13 @@ fn forge_pages(transport: &mut impl ForgeRest, host: &str, path: &str) -> io::Re
             .ok_or_else(|| invalid("missing forge page"))?;
         if rows.len() > 100 {
             return Err(invalid("forge page exceeds bound"));
+        }
+        if rows.iter().any(|row| {
+            !row["id"]
+                .as_u64()
+                .is_some_and(|id| id > 0 && ids.insert(id))
+        }) {
+            return Err(invalid("missing or repeated forge history identity"));
         }
         result.extend(rows.iter().cloned());
         if rows.len() < 100 {
@@ -358,15 +376,21 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
     let comments = forge_pages(transport, host, &format!("{stem}/issues/{number}/comments"))?;
     let mut inline = Vec::new();
     for review in &reviews {
-        if review["comments_count"].as_u64().unwrap_or(0) > 0 {
+        let count = review["comments_count"]
+            .as_u64()
+            .filter(|count| *count <= 2000)
+            .ok_or_else(|| invalid("missing, malformed or oversized review comment count"))?;
+        if count > 0 {
             let id = review["id"]
                 .as_u64()
                 .ok_or_else(|| invalid("missing review identity"))?;
-            inline.extend(forge_pages(
-                transport,
-                host,
-                &format!("{path}/reviews/{id}/comments"),
-            )?);
+            let comments = forge_pages(transport, host, &format!("{path}/reviews/{id}/comments"))?;
+            if comments.len() as u64 != count {
+                return Err(invalid(
+                    "forge review comment count does not establish complete history",
+                ));
+            }
+            inline.extend(comments);
         }
     }
     let checks = forge_checks(transport, host, &stem, head)?;
@@ -377,6 +401,9 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
                 "forge candidate or feedback moved during collection",
             ));
         }
+    }
+    if forge_checks(transport, host, &stem, head)? != checks {
+        return Err(invalid("forge check rollup moved after history collection"));
     }
     let state = if p["merged"] == true {
         "MERGED".to_owned()
