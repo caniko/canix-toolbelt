@@ -6,6 +6,7 @@ the requesting context. Enable each integration explicitly:
 ```nix
 {
   imports = [inputs.canix-toolbelt.homeModules.pinentry];
+  programs.zellij.package = inputs.canix-toolbelt.lib.pinentry.mkZellij {inherit pkgs;};
   canix-toolbelt.pinentry = {
     enable = true;
     gpgIntegration = true;
@@ -35,6 +36,28 @@ The router never replaces it with the systemd user manager's shared environment.
 The GPG wrapper captures any already-open terminal, including virtual consoles
 and serial TTYs, checking stderr/stdout when stdin is piped. Shell hooks honor
 Home Manager's per-shell integration toggles.
+
+### Zellij client and server package
+
+`lib.pinentry.mkZellij {inherit pkgs;}` and
+`packages.<system>.canix-toolbelt-zellij` provide the same Zellij cleanup patch.
+The standalone pinentry packages and the Home Manager pinentry default use it.
+An explicit `canix-toolbelt.pinentry.zellij` override remains authoritative.
+Wire that option to `config.programs.zellij.package` as above so the client
+commands and the session server use the same corrected package. Existing
+sessions retain their running server binary until the owner restarts them.
+
+The patch applies to reviewed Zellij `0.45.0` and `0.45.1` sources. Their
+connection-status handler and normal CLI-exit handler both remove a client
+before the route-loop epilogue removes it again. Zellij reuses the lowest free
+client ID, so a delayed second removal can close a newer connection. The patch
+leaves both removals to the common epilogue. The helper rejects an unreviewed
+version; review its cleanup paths before extending the version list, or pass
+an explicitly verified replacement package.
+
+Upstream source:
+[connection status](https://github.com/zellij-org/zellij/blob/efd8fd5a89a20c07a111d248ad7fce53848d2c18/zellij-server/src/lib.rs#L1616),
+[CLI exit and route epilogue](https://github.com/zellij-org/zellij/blob/efd8fd5a89a20c07a111d248ad7fce53848d2c18/zellij-server/src/route.rs#L2676).
 
 The existing `canix-pinentry-v1:zellij:<pane>:<session>`, `:desktop` and `:tty`
 markers remain compatible. Background clients can forward the originating

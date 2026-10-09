@@ -4,6 +4,7 @@
   in {
     packages.canix-toolbelt-pinentry = packages.router;
     packages.rage-pinentry = packages.rage;
+    packages.canix-toolbelt-zellij = packages.zellij;
     checks.pinentry-home-eval = import ../nixos-tests/pinentry-home-eval.nix {inherit inputs pkgs;};
   };
 }

@@ -5,7 +5,8 @@
   ...
 }: let
   cfg = config.canix-toolbelt.pinentry;
-  packages = (import ../../lib/pinentry.nix {inherit lib;}).mkPackages {
+  pinentry = import ../../lib/pinentry.nix {inherit lib;};
+  packages = pinentry.mkPackages {
     inherit pkgs;
     inherit (cfg) zellij gnupg rage tty qt;
   };
@@ -16,7 +17,12 @@ in {
     enable = lib.mkEnableOption "request-local Zellij/Qt/TTY pinentry";
     gpgIntegration = lib.mkEnableOption "GPG request-context forwarding";
     rageIntegration = lib.mkEnableOption "age plugin PIN and confirmation routing through rage";
-    zellij = lib.mkPackageOption pkgs "zellij" {};
+    zellij = lib.mkOption {
+      type = lib.types.package;
+      default = pinentry.mkZellij {inherit pkgs;};
+      defaultText = lib.literalExpression "lib.pinentry.mkZellij { inherit pkgs; }";
+      description = "Zellij used by pinentry clients; select the same package for session servers.";
+    };
     gnupg = lib.mkPackageOption pkgs "gnupg" {};
     rage = lib.mkPackageOption pkgs "rage" {};
     tty = lib.mkPackageOption pkgs "pinentry-tty" {};
