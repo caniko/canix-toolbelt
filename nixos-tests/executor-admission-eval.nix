@@ -52,13 +52,14 @@ in
     lib.all (accepting: let
       cfg = fixture enabled accepting;
     in
-      (policy cfg).accepting == (enabled && accepting != false)
+      (policy cfg).accepting
+      == (enabled && accepting != false)
       && (worker cfg).serviceConfig == (worker adjacent).serviceConfig
       && (worker cfg).restartTriggers == (worker adjacent).restartTriggers
       && (worker cfg).requires == (worker adjacent).requires
       && (worker cfg).wantedBy == (worker adjacent).wantedBy)
-      [null true false])
-    [true false];
+    [null true false])
+  [true false];
   assert (policy adjacent)
   == {
     version = 1;
