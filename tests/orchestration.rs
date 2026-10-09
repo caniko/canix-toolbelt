@@ -763,3 +763,55 @@ fn journal_publication_recovers_from_a_legacy_orphan_without_clobbering_it() {
     );
     assert_eq!(std::fs::read(orphan).unwrap(), b"unrelated abandoned bytes");
 }
+
+#[test]
+fn retained_producer_dependencies_cannot_be_dropped_or_reassigned() {
+    let mut original = manifest();
+    original.packets[0].dependencies = vec![2];
+    let mut dropped = original.clone();
+    dropped.packets[0].dependencies.clear();
+    assert!(dropped.validate(Some(&original)).is_err());
+    let mut third = original.packets[1].clone();
+    third.number = 3;
+    third.session_id = "ses_third".into();
+    third.prs = vec!["three".into()];
+    original.packets.push(third);
+    original.assignment_count += 1;
+    original.baseline_count = Some(3);
+    let mut replaced = original.clone();
+    replaced.packets[0].dependencies = vec![3];
+    assert!(replaced.validate(Some(&original)).is_err());
+    let mut additive = original.clone();
+    additive.packets[0].dependencies.push(3);
+    additive.validate(Some(&original)).unwrap();
+}
+
+#[test]
+fn bare_relative_state_paths_publish_successfully() {
+    if std::env::var_os("TOOLBELT_RELATIVE_JOURNAL_CHILD").is_some() {
+        let value = json!({"pending":"retained"});
+        atomic_json(std::path::Path::new("state.json"), &value).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read("state.json").unwrap()).unwrap(),
+            value
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "bare_relative_state_paths_publish_successfully",
+            "--nocapture",
+        ])
+        .env("TOOLBELT_RELATIVE_JOURNAL_CHILD", "1")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.path().join("state.json").is_file());
+}

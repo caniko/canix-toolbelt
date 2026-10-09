@@ -147,6 +147,10 @@ impl Manifest {
                 if current.session_id != old.session_id
                     || current.owner_host != old.owner_host
                     || current.title != old.title
+                    || old
+                        .dependencies
+                        .iter()
+                        .any(|id| !current.dependencies.contains(id))
                     || old.prs.iter().any(|url| !current.prs.contains(url))
                     || old.prs.iter().any(|url| {
                         old.linked_repairs.contains(url) != current.linked_repairs.contains(url)
@@ -1013,7 +1017,8 @@ impl Drop for Lease {
 pub fn atomic_json(path: &Path, value: &Value) -> io::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing state parent"))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -1026,7 +1031,7 @@ pub fn atomic_json(path: &Path, value: &Value) -> io::Result<()> {
     (|| {
         serde_json::to_writer_pretty(&mut file, value)?;
         file.write_all(b"\n")?;
-        file.sync_all()?;
+        file.as_file().sync_all()?;
         file.as_file()
             .set_permissions(fs::Permissions::from_mode(0o600))?;
         file.persist(path).map_err(|error| error.error)?;
