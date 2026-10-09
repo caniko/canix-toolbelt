@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - simit.toml
+      - README.md
       - .github/workflows/prepare-ci-source.yaml
 
 permissions:
@@ -47,7 +48,10 @@ jobs:
           "$generator" init ci --platform github --ci-provider actions --runtime nix 2>&1 | tee "$EVIDENCE/generation.log"
           "$generator" init ci --platform github --ci-provider actions --runtime nix --check --diff 2>&1 | tee "$EVIDENCE/parity.log"
           git diff --exit-code -- keys/maintainers.gpg
-          git diff --binary -- .github/workflows > "$EVIDENCE/generated-ci.patch"
+          # init ci owns the README badges as well as the workflow files. Retain
+          # both outputs so a clean consumer imports the complete generated patch.
+          git diff --binary -- .github/workflows README.md > "$EVIDENCE/generated-ci.patch"
+          cp README.md "$EVIDENCE/README.md"
           cp .github/workflows/ci.yaml .github/workflows/nix-builds.yaml .github/workflows/pages.yaml .github/workflows/publish-crate.yaml "$EVIDENCE/workflows/"
       - name: Seal source preparation evidence
         if: always()
