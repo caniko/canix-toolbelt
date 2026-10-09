@@ -21,13 +21,13 @@ in {
         profile = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
           default = null;
-          description = "Optional toolbelt profile whose live enable value admits new runs.";
+          description = "Optional toolbelt profile whose live enable value is required to admit new runs.";
         };
         accepting = lib.mkOption {
           type = lib.types.bool;
           default = config.profile == null || (profiles.${config.profile}.enable or false);
           defaultText = lib.literalExpression "profile == null || profiles.<profile>.enable";
-          description = "Whether new work may be admitted. This does not revoke existing run or Stop ownership.";
+          description = "Manual new-work switch, composed with profile eligibility. True cannot reopen a disabled profile; false drains an eligible worker. Existing run and Stop ownership remain intact.";
         };
         fileName = lib.mkOption {
           type = lib.types.strMatching "[A-Za-z0-9][A-Za-z0-9._-]*\\.json";
@@ -76,7 +76,7 @@ in {
       lib.nameValuePair entry.fileName {
         text = builtins.toJSON {
           version = 1;
-          inherit (entry) accepting;
+          accepting = entry.accepting && (entry.profile == null || (profiles.${entry.profile}.enable or false));
         };
         mode = "0444";
       })

@@ -3,7 +3,7 @@
   inputs,
 }: let
   inherit (pkgs) lib;
-  fixture = adjacent: let
+  fixture = adjacent: accepting: let
     evaluated = import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
@@ -16,10 +16,12 @@
             enable = lib.mkForce adjacent;
             specialisations.away.enable = false;
           };
-          canix-toolbelt.services.executorAdmission.secondary = {
-            enable = true;
-            profile = "near-builder";
-          };
+          canix-toolbelt.services.executorAdmission.secondary =
+            {
+              enable = true;
+              profile = "near-builder";
+            }
+            // lib.optionalAttrs (accepting != null) {inherit accepting;};
           canix-toolbelt.activation.contracts.secondary = {
             enabled = true;
             owner = "fixture";
@@ -40,12 +42,23 @@
     };
   in
     evaluated.config;
-  adjacent = fixture true;
-  detached = fixture false;
+  adjacent = fixture true null;
+  detached = fixture false null;
   policy = cfg: builtins.fromJSON cfg.environment.etc."executor-secondary-admission.json".text;
   worker = cfg: cfg.systemd.services.executor;
   path = adjacent.canix-toolbelt.services.executorAdmission.secondary.file;
 in
+  assert lib.all (enabled:
+    lib.all (accepting: let
+      cfg = fixture enabled accepting;
+    in
+      (policy cfg).accepting == (enabled && accepting != false)
+      && (worker cfg).serviceConfig == (worker adjacent).serviceConfig
+      && (worker cfg).restartTriggers == (worker adjacent).restartTriggers
+      && (worker cfg).requires == (worker adjacent).requires
+      && (worker cfg).wantedBy == (worker adjacent).wantedBy)
+      [null true false])
+    [true false];
   assert (policy adjacent)
   == {
     version = 1;

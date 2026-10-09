@@ -296,7 +296,7 @@ class PinentryIntegration(unittest.TestCase):
                         print("pinentry fixture stderr:", data.decode(errors="replace"), file=sys.stderr)
                     except BlockingIOError:
                         pass
-        except Exception as error:
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
             # Diagnostics cannot replace the original assertion or its result.
             print("pinentry fixture diagnostics unavailable:", repr(error), file=sys.stderr)
 

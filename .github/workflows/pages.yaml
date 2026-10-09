@@ -55,6 +55,18 @@ jobs:
             printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
             printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
           } >> "$GITHUB_ENV"
+          if [ -n "${SIMIT_NIX_BUILD_RESULTS:-}" ]; then
+            # Preserve the runner's initial merge-checkout observation separately.
+            cp "$SIMIT_NIX_BUILD_RESULTS/revision" "$SIMIT_NIX_BUILD_RESULTS/checkout-revision"
+            expected="${GITHUB_SHA:?}"
+            if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+              expected="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            fi
+            test "$(git rev-parse HEAD)" = "$expected"
+            git diff --exit-code HEAD --
+            git rev-parse HEAD > "$SIMIT_NIX_BUILD_RESULTS/revision"
+            git rev-parse 'HEAD^{tree}' > "$SIMIT_NIX_BUILD_RESULTS/tree"
+          fi
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
