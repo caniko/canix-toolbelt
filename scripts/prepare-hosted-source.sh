@@ -8,7 +8,7 @@ if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
 else
   revision="${GITHUB_SHA:?missing hosted source revision}"
 fi
-[[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+[[ $revision =~ ^[0-9a-f]{40}$ ]]
 git fetch --no-tags origin "$revision"
 git checkout --detach "$revision"
 test "$(git rev-parse HEAD)" = "$revision"
