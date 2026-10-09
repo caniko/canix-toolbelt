@@ -815,3 +815,105 @@ fn bare_relative_state_paths_publish_successfully() {
     );
     assert!(dir.path().join("state.json").is_file());
 }
+
+#[test]
+fn duplicate_worker_report_urls_cannot_certify_audit_or_progress() {
+    for terminal in [false, true] {
+        for cross_collection in [false, true] {
+            let manifest = manifest();
+            let (mut state, version) = delivered_state(
+                json!({"url":"one","state":if terminal {"MERGED"}else{"OPEN"},"head":"h","base":"b","comments":[]}),
+                &manifest,
+            );
+            let valid = json!({"url":"one","head":"h","base":"b","stage":"ready_for_merge","auditComplete":true,"evidence":"receipt"});
+            let conflicting = json!({"url":"one","head":"h","base":"b","stage":"waiting_for_producer","reason":"unsettled defect","auditComplete":false});
+            let mut report = json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":version,"prs":[valid]});
+            if cross_collection {
+                report["linkedReleasePRs"] = json!([conflicting]);
+            } else {
+                report["prs"].as_array_mut().unwrap().push(conflicting);
+            }
+            let original = state.clone();
+            let error = refresh(
+                &manifest,
+                &mut state,
+                &policy(),
+                &BTreeMap::from([(1, report)]),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .unwrap_err();
+            assert!(error.contains("duplicate worker report URL"));
+            assert_eq!(state, original);
+        }
+    }
+}
+
+#[test]
+fn terminal_audits_expire_when_producer_evidence_changes() {
+    let mut manifest = manifest();
+    manifest.packets[0].dependencies = vec![2];
+    let mut state = json!({"packets":{},"prs":{"one":{"url":"one","state":"MERGED","head":"h","comments":[]},"two":{"url":"two","state":"OPEN","head":"producer","base":"main"}}});
+    let mut dependencies = BTreeMap::from([(2, "producer evidence A".to_owned())]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &dependencies,
+    )
+    .unwrap();
+    let version = state["packets"]["1"]["version"].clone();
+    state["packets"]["1"]["deliveredVersion"] = version.clone();
+    state["packets"]["1"]["deliveredObservationVersion"] =
+        state["packets"]["1"]["observationVersion"].clone();
+    let mut reports = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":version,"prs":[{"url":"one","head":"h","auditComplete":true,"evidence":"audited source"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &BTreeMap::new(),
+        &dependencies,
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+    dependencies.insert(2, "producer evidence B".to_owned());
+    let historical = BTreeMap::from([(
+        1,
+        json!({"packet":1,"prs":[{"url":"one","feedbackVersion":feedback_version(&state["prs"]["one"]),"evidence":"old historical receipt"}]}),
+    )]);
+    for _ in 0..2 {
+        refresh(
+            &manifest,
+            &mut state,
+            &policy(),
+            &reports,
+            &historical,
+            &dependencies,
+        )
+        .unwrap();
+        assert_eq!(state["packets"]["1"]["terminal"], false);
+        assert_eq!(state["prs"]["one"]["progress"]["auditComplete"], false);
+        assert!(needs_wake(&state["packets"]["1"]));
+    }
+    let current = state["packets"]["1"]["version"].clone();
+    state["packets"]["1"]["deliveredVersion"] = current.clone();
+    state["packets"]["1"]["deliveredObservationVersion"] =
+        state["packets"]["1"]["observationVersion"].clone();
+    reports.get_mut(&1).unwrap()["eventVersion"] = current;
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &historical,
+        &dependencies,
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+}

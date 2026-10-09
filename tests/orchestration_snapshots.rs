@@ -509,6 +509,44 @@ fn forgejo_requires_a_valid_update_identity_before_collecting_history() {
 }
 
 #[test]
+fn github_inline_identities_must_be_unique_across_distinct_threads() {
+    let mut p = pull();
+    p["reviewThreads"] = json!({"totalCount":2,"nodes":[{"id":"thread-one","comments":{"totalCount":1,"nodes":[{"id":"same-comment","body":"first finding"}],"pageInfo":{"hasNextPage":false}}},{"id":"thread-two","comments":{"totalCount":1,"nodes":[{"id":"same-comment","body":"replayed finding"}],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}});
+    let mut transport = Graph(vec![
+        json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
+    ]);
+    let error = github(
+        &mut transport,
+        "https://github.com/owner/repo/pull/1",
+        &json!({}),
+        "now",
+        0,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("inline comment identity"));
+    assert!(transport.0.is_empty());
+}
+
+#[test]
+fn forgejo_requires_base_revision_and_branch_identity_before_collecting_history() {
+    for field in ["sha", "ref"] {
+        for value in [Value::Null, json!(1), json!({}), json!("")] {
+            let mut p = forge_pull();
+            p["base"][field] = value;
+            let mut transport = ForgeScript(vec![("repos/owner/repo/pulls/1".into(), p)]);
+            let error = forgejo(
+                &mut transport,
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("base identity"));
+            assert!(transport.0.is_empty());
+        }
+    }
+}
+
+#[test]
 fn forgejo_rechecks_single_page_ci_after_the_final_pull_observation() {
     let mut transport = forge_review(json!({"id":1,"comments_count":1}), json!([{"id":10}]));
     let mut moved = forge_status();

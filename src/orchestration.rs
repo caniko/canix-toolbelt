@@ -467,7 +467,11 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
     if !entry.is_object() {
         return Err(format!("invalid journal packet {number}"));
     }
-    for key in ["auditedFeedback", "auditedCheckpoints"] {
+    for key in [
+        "auditedFeedback",
+        "auditedCheckpoints",
+        "auditedDependencies",
+    ] {
         if !entry[key].is_null() && !entry[key].is_object() {
             return Err(format!("invalid {key} journal field for {number}"));
         }
@@ -485,6 +489,25 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
         return Err(format!("invalid pending request for {number}"));
     }
     Ok(entry)
+}
+
+fn validate_report_urls(report: &Value, number: u32) -> Result<(), String> {
+    let mut urls = BTreeSet::new();
+    for key in ["prs", "linkedReleasePRs"] {
+        if !report[key].is_null() && !report[key].is_array() {
+            return Err(format!("invalid worker report PR collection for {number}"));
+        }
+        for item in report[key].as_array().into_iter().flatten() {
+            let url = item["url"]
+                .as_str()
+                .filter(|url| !url.is_empty())
+                .ok_or_else(|| format!("missing worker report URL for {number}"))?;
+            if !urls.insert(url) {
+                return Err(format!("duplicate worker report URL for {number}: {url}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Refresh observations and audits while retaining every historical journal field.
@@ -579,6 +602,7 @@ fn refresh_in_place(
             .iter()
             .filter_map(|id| dependencies.get(id).map(|hash| (id.to_string(), hash)))
             .collect();
+        let dependency_version = digest(&json!({"producers":packet.dependencies,"evidence":deps}));
         let inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
         let observation = json!(digest(&inputs));
         // Bind an imported delivery only to its retained, unchanged observation.
@@ -599,6 +623,7 @@ fn refresh_in_place(
                     packet.number
                 ));
             }
+            validate_report_urls(report, packet.number)?;
             ps["workerStatus"] = report.clone();
             if report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
@@ -628,6 +653,10 @@ fn refresh_in_place(
                         {
                             ps["auditedFeedback"][url] = json!(feedback_version(pr));
                             ps["auditedCheckpoints"][url] = json!(checkpoint);
+                            if !ps["auditedDependencies"].is_object() {
+                                ps["auditedDependencies"] = json!({});
+                            }
+                            ps["auditedDependencies"][url] = json!(dependency_version);
                         }
                     }
                 }
@@ -648,7 +677,11 @@ fn refresh_in_place(
                 return Err("historical audit identity mismatch".into());
             }
             for item in audit["prs"].as_array().into_iter().flatten() {
-                if present(&item["evidence"]) && present(&item["feedbackVersion"]) {
+                if present(&item["evidence"])
+                    && present(&item["feedbackVersion"])
+                    && (packet.dependencies.is_empty()
+                        || item["dependencyVersion"].as_str() == Some(&dependency_version))
+                {
                     let url = item["url"].as_str().ok_or("audit is missing URL")?;
                     if prs.iter().any(|pr| {
                         pr["url"] == url
@@ -656,6 +689,10 @@ fn refresh_in_place(
                                 == Some(feedback_version(pr).as_str())
                     }) {
                         ps["auditedFeedback"][url] = item["feedbackVersion"].clone();
+                        if !ps["auditedDependencies"].is_object() {
+                            ps["auditedDependencies"] = json!({});
+                        }
+                        ps["auditedDependencies"][url] = json!(dependency_version);
                     }
                 }
             }
@@ -664,8 +701,12 @@ fn refresh_in_place(
             .iter()
             .filter(|pr| {
                 matches!(pr["state"].as_str(), Some("MERGED" | "CLOSED"))
-                    && ps["auditedFeedback"][pr["url"].as_str().unwrap_or("")].as_str()
+                    && (ps["auditedFeedback"][pr["url"].as_str().unwrap_or("")].as_str()
                         != Some(feedback_version(pr).as_str())
+                        || (!packet.dependencies.is_empty()
+                            && ps["auditedDependencies"][pr["url"].as_str().unwrap_or("")]
+                                .as_str()
+                                != Some(&dependency_version)))
             })
             .count();
         ps["terminal"] = json!(
@@ -679,6 +720,7 @@ fn refresh_in_place(
             && ps["workerStatus"]["eventVersion"] == ps["deliveredVersion"]
             && ps["deliveredObservationVersion"] == ps["observationVersion"];
         let reported: Vec<_> = if current_report {
+            validate_report_urls(&ps["workerStatus"], packet.number)?;
             ["prs", "linkedReleasePRs"]
                 .into_iter()
                 .flat_map(|key| {
@@ -693,6 +735,7 @@ fn refresh_in_place(
             Vec::new()
         };
         let feedback = ps["auditedFeedback"].clone();
+        let audited_dependencies = ps["auditedDependencies"].clone();
         for url in &packet.prs {
             let pr = &mut state["prs"][url];
             let item = reported
@@ -701,8 +744,11 @@ fn refresh_in_place(
                 .unwrap_or(&Value::Null);
             pr["progress"] = progress(pr, item);
             pr["classification"] = pr["progress"]["stage"].clone();
-            pr["progress"]["auditComplete"] =
-                json!(feedback[url].as_str() == Some(feedback_version(pr).as_str()));
+            pr["progress"]["auditComplete"] = json!(
+                feedback[url].as_str() == Some(feedback_version(pr).as_str())
+                    && (packet.dependencies.is_empty()
+                        || audited_dependencies[url].as_str() == Some(&dependency_version))
+            );
         }
     }
     state["retainedManifest"] =

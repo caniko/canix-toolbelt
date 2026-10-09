@@ -139,3 +139,14 @@ enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/defe
 entries and the
 48 MiB encoded-payload estimate. Receiver reads, directory creation, staging,
 rename and deletion use pinned no-follow directory handles.
+
+Worker report URLs must be unique across `prs` and `linkedReleasePRs`; duplicate
+entries reject the entire refresh without adopting partial progress or audits.
+Terminal historical coverage retains its producer dependency fingerprint in
+`auditedDependencies`. Changed dependencies invalidate completion and require a
+fresh delivered report. Imported historical audits for packets with producers
+must carry `dependencyVersion`, the canonical digest of
+`{"producers": packet.dependencies, "evidence": current_dependency_map}`; old
+feedback alone cannot absorb a new dependency event. Both forge collectors also
+require globally unique inline-comment IDs; Forgejo requires nonempty base SHA
+and branch identities before fetching history.

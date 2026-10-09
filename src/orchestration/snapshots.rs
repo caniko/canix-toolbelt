@@ -193,6 +193,7 @@ pub fn github(
             Ok(data["repository"]["pullRequest"][name].clone())
         })?;
     }
+    let mut inline_ids = BTreeSet::new();
     for thread in p["reviewThreads"]["nodes"]
         .as_array_mut()
         .expect("validated connection")
@@ -205,6 +206,23 @@ pub fn github(
             let data = transport.query(&format!("query{{node(id:{}){{... on PullRequestReviewThread{{comments(first:100,after:{}){{{thread_comments}}}}}}}}}",quote(&id),quote(cursor)))?;
             Ok(data["node"]["comments"].clone())
         })?;
+        if thread["comments"]["nodes"]
+            .as_array()
+            .expect("validated comment connection")
+            .iter()
+            .any(|comment| {
+                !inline_ids.insert(
+                    comment["id"]
+                        .as_str()
+                        .expect("validated comment identity")
+                        .to_owned(),
+                )
+            })
+        {
+            return Err(invalid(
+                "repeated GitHub inline comment identity across threads",
+            ));
+        }
     }
     let rollup = github_checks(transport, &p)?;
     let fresh = transport.query(&format!("query{{{repository}{{{pull}{{{basic}}}}}}}"))?;
@@ -372,6 +390,14 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         .as_str()
         .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
         .ok_or_else(|| invalid("missing or malformed forge update identity"))?;
+    let base = p["base"]["sha"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid("missing forge base identity"))?;
+    let branch = p["base"]["ref"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid("missing forge base identity"))?;
     let head = p["head"]["sha"]
         .as_str()
         .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()) && !s.is_empty())
@@ -429,6 +455,6 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
             .to_ascii_uppercase()
     };
     Ok(
-        json!({"url":url,"state":state,"head":head,"base":p["base"]["sha"],"baseBranch":p["base"]["ref"],"mergeable":p["mergeable"],"draft":p["draft"],"comments":comments,"reviews":reviews,"inlineComments":inline,"checks":checks,"capturedAt":at}),
+        json!({"url":url,"state":state,"head":head,"base":base,"baseBranch":branch,"mergeable":p["mergeable"],"draft":p["draft"],"comments":comments,"reviews":reviews,"inlineComments":inline,"checks":checks,"capturedAt":at}),
     )
 }
