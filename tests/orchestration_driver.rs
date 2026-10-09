@@ -16,6 +16,8 @@ struct Fixture {
     recent: Vec<Value>,
     mirror_inbox: bool,
     start_during_inbox: bool,
+    context_pages: BTreeMap<String, Value>,
+    requests: Vec<String>,
 }
 
 impl Adapter for Fixture {
@@ -26,6 +28,7 @@ impl Adapter for Fixture {
         path: &str,
         body: Option<&Value>,
     ) -> io::Result<Reply> {
+        self.requests.push(path.to_owned());
         if path == "/api/session/active" {
             return Ok(Reply {
                 status: 200,
@@ -58,8 +61,17 @@ impl Adapter for Fixture {
                 },
                 data: self.messages.get(message).cloned().unwrap_or(Value::Null),
             });
+        } else if let Some(page) = self.context_pages.get(path) {
+            page.clone()
+        } else if path.contains("/message?") && path.contains("type=") {
+            let kind = if path.contains("type=assistant") {
+                "assistant"
+            } else {
+                "compaction"
+            };
+            json!({"data":self.recent.iter().filter(|message| message["type"] == kind).take(64).collect::<Vec<_>>(),"cursor":{"next":null,"previous":null}})
         } else if path.contains("/message?") {
-            json!(self.recent)
+            json!(self.recent.iter().take(12).collect::<Vec<_>>())
         } else if method == "POST" && path.ends_with("/compact") {
             let body = body.unwrap();
             assert_eq!(
@@ -135,9 +147,11 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         ambiguous: false,
         fail_save: false,
         changed_model: false,
-        recent: vec![],
+        recent: vec![assistant("msg_known_context", 1000, 100)],
         mirror_inbox: false,
         start_during_inbox: false,
+        context_pages: BTreeMap::new(),
+        requests: vec![],
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -415,7 +429,7 @@ fn changed_model_or_context_ceiling_cannot_admit_work() {
     );
     fixture.changed_model = false;
     fixture.recent = vec![
-        json!({"id":"msg_physical","type":"assistant","tokens":{"input":299999,"cache":{"read":1,"write":0}}}),
+        json!({"id":"msg_physical","type":"assistant","time":{"created":1000},"tokens":{"input":299999,"cache":{"read":1,"write":0}}}),
     ];
     assert!(
         cycle(
@@ -438,7 +452,7 @@ fn cache_write_only_contexts_compact_or_refuse_at_the_hard_ceiling() {
     for tokens in [180_000, 300_000] {
         let (manifest, policy, expected, mut state, mut fixture) = setup();
         fixture.recent = vec![
-            json!({"id":"msg_cache_write_only","type":"assistant","tokens":{"input":0,"cache":{"read":0,"write":tokens}}}),
+            json!({"id":"msg_cache_write_only","type":"assistant","time":{"created":1000},"tokens":{"input":0,"cache":{"read":0,"write":tokens}}}),
         ];
         let result = cycle(
             &manifest,
@@ -516,4 +530,211 @@ fn context_compaction_uses_one_durable_id_before_continuation() {
     assert!(state["packets"]["1"]["pendingCompaction"].is_null());
     assert_eq!(fixture.submissions.len(), 2);
     assert_eq!(fixture.submissions[1]["text"], "continue original owner");
+}
+
+fn assistant(id: &str, created: u64, tokens: u64) -> Value {
+    json!({"id":id,"type":"assistant","time":{"created":created},"tokens":{"input":tokens,"cache":{"read":0,"write":0}}})
+}
+
+#[test]
+fn hidden_physical_context_still_compacts_or_rejects_the_ceiling() {
+    for tokens in [180_000, 300_000] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.recent = (0..30).map(|index| json!({"id":format!("msg_status_{index}"),"type":"system","time":{"created":2000-index}})).collect();
+        fixture
+            .recent
+            .push(assistant("msg_empty_assistant", 1500, 0));
+        fixture
+            .recent
+            .push(assistant("msg_hidden_physical", 1000, tokens));
+        let result = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        );
+        if tokens == 300_000 {
+            assert!(result.unwrap_err().to_string().contains("context ceiling"));
+            assert!(fixture.submissions.is_empty());
+        } else {
+            result.unwrap();
+            assert_eq!(fixture.submissions.len(), 1);
+            assert_eq!(
+                state["packets"]["1"]["pendingCompaction"]["physicalMessageID"],
+                "msg_hidden_physical"
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_or_malformed_usage_cannot_admit_or_publish_state() {
+    for tokens in [
+        Value::Null,
+        json!({}),
+        json!({"input":100}),
+        json!({"input":"100","cache":{"read":0,"write":0}}),
+        json!({"input":100,"cache":{"read":null,"write":0}}),
+        json!({"input":-1,"cache":{"read":0,"write":0}}),
+        json!({"input":100,"cache":{"read":0,"write":0.5}}),
+        json!({"input":u64::MAX,"cache":{"read":1,"write":0}}),
+    ] {
+        for dispatch in [false, true] {
+            let (manifest, policy, expected, mut state, mut fixture) = setup();
+            let original = state.clone();
+            fixture.recent[0]["tokens"] = tokens.clone();
+            assert!(
+                cycle(
+                    &manifest,
+                    &policy,
+                    &expected,
+                    &mut state,
+                    &mut fixture,
+                    "now",
+                    0,
+                    dispatch
+                )
+                .is_err()
+            );
+            assert_eq!(state, original);
+            assert_eq!(fixture.saved, original);
+            assert!(fixture.submissions.is_empty());
+        }
+    }
+    for recent in [vec![], vec![assistant("msg_no_usage", 1000, 0)]] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.recent = recent;
+        let original = state.clone();
+        let error = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("physical context is unknown"));
+        assert_eq!(state, original);
+        assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
+fn filtered_context_pagination_retains_the_actual_physical_identity() {
+    let (manifest, policy, expected, _, mut fixture) = setup();
+    let first: Vec<_> = (0..64)
+        .map(|index| assistant(&format!("msg_empty_{index}"), 2000 - index, 0))
+        .collect();
+    fixture.context_pages.insert(
+        "/api/session/ses_original/message?limit=64&order=desc&type=assistant".into(),
+        json!({"data":first,"cursor":{"next":"older/page?"}}),
+    );
+    fixture.context_pages.insert("/api/session/ses_original/message?limit=64&type=assistant&cursor=%6F%6C%64%65%72%2F%70%61%67%65%3F".into(), json!({"data":[assistant("msg_physical_page2", 1000, 180_000)],"cursor":{"next":null}}));
+    let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
+    assert_eq!(observation.context_tokens[&1], 180_000);
+    assert_eq!(observation.physical_message_ids[&1], "msg_physical_page2");
+    assert_eq!(
+        fixture
+            .requests
+            .iter()
+            .filter(|path| path.contains("type=assistant"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn only_valid_completed_compaction_releases_observed_context() {
+    for status in ["completed", "failed", "running"] {
+        let (manifest, policy, expected, _, mut fixture) = setup();
+        fixture.recent = vec![
+            json!({"id":"msg_compacted","type":"compaction","status":status,"time":{"created":2000}}),
+            assistant("msg_retained", 1000, 180_000),
+        ];
+        let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
+        assert_eq!(
+            observation.context_tokens[&1],
+            if status == "completed" { 0 } else { 180_000 }
+        );
+        assert_eq!(observation.physical_message_ids[&1], "msg_retained");
+    }
+    for invalid in [
+        json!({"id":"msg_compacted","type":"compaction","status":"completed"}),
+        json!({"id":"msg_compacted","type":"compaction","status":"unknown","time":{"created":2000}}),
+    ] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.recent.insert(0, invalid);
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
+fn physical_context_search_exhaustion_is_bounded_and_never_zero() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    for page in 0..4 {
+        let path = if page == 0 {
+            "/api/session/ses_original/message?limit=64&order=desc&type=assistant".to_owned()
+        } else {
+            format!(
+                "/api/session/ses_original/message?limit=64&type=assistant&cursor=%3{}",
+                page - 1
+            )
+        };
+        let messages: Vec<_> = (0..64)
+            .map(|index| {
+                assistant(
+                    &format!("msg_empty_{page}_{index}"),
+                    2000 - page * 64 - index,
+                    0,
+                )
+            })
+            .collect();
+        fixture.context_pages.insert(
+            path,
+            json!({"data":messages,"cursor":{"next":page.to_string()}}),
+        );
+    }
+    let original = state.clone();
+    let error = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("bounded history"));
+    assert_eq!(
+        fixture
+            .requests
+            .iter()
+            .filter(|path| path.contains("type=assistant"))
+            .count(),
+        4
+    );
+    assert_eq!(state, original);
+    assert!(fixture.submissions.is_empty());
 }

@@ -15,7 +15,8 @@ use std::{
 pub struct Reply {
     /// Native HTTP status.
     pub status: u16,
-    /// The response's `data` value, not the envelope.
+    /// The response's `data` value. Paginated message listings retain their
+    /// complete `{data, cursor}` envelope so bounded context lookup can continue.
     pub data: Value,
 }
 
@@ -67,10 +68,12 @@ pub struct Observation {
     pub occupied: Activity,
     /// Exact owner inbox contents.
     pub inboxes: BTreeMap<u32, Vec<Value>>,
-    /// Recent messages used for recovery and context accounting.
+    /// Recent messages used for idle recovery; physical usage is queried separately.
     pub messages: BTreeMap<u32, Vec<Value>>,
     /// Last observed input/cache tokens per owner.
     pub context_tokens: BTreeMap<u32, u64>,
+    /// Exact assistant supplying physical usage, retained across compaction.
+    pub physical_message_ids: BTreeMap<u32, String>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -85,6 +88,110 @@ fn request(adapter: &mut impl Adapter, packet: &Packet, suffix: &str) -> io::Res
             None,
         )?
         .checked()
+}
+
+enum ContextSearch {
+    Continue,
+    Found,
+    Finished,
+}
+
+// V2 filters message types before pagination. Tool/status traffic therefore
+// cannot hide physical usage. Exhausting this bounded lookup remains unknown,
+// never an implicit zero-token context.
+fn context_message(
+    adapter: &mut impl Adapter,
+    packet: &Packet,
+    kind: &str,
+    mut select: impl FnMut(&Value) -> io::Result<ContextSearch>,
+) -> io::Result<Option<Value>> {
+    let mut cursor = None::<String>;
+    let mut cursors = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    let mut previous_time = u64::MAX;
+    for _ in 0..4 {
+        let suffix = match &cursor {
+            None => format!("/message?limit=64&order=desc&type={kind}"),
+            Some(cursor) => {
+                let encoded: String = cursor
+                    .bytes()
+                    .flat_map(|byte| {
+                        let hex = b"0123456789ABCDEF";
+                        [
+                            '%',
+                            hex[(byte >> 4) as usize] as char,
+                            hex[(byte & 15) as usize] as char,
+                        ]
+                    })
+                    .collect();
+                format!("/message?limit=64&type={kind}&cursor={encoded}")
+            }
+        };
+        let page = request(adapter, packet, &suffix)?;
+        let messages = page
+            .as_array()
+            .or_else(|| page["data"].as_array())
+            .filter(|items| items.len() <= 64)
+            .ok_or_else(|| invalid("malformed filtered context page"))?;
+        for message in messages {
+            let id = message["id"]
+                .as_str()
+                .filter(|id| id.starts_with("msg_"))
+                .ok_or_else(|| invalid("missing context message identity"))?;
+            let time = message["time"]["created"]
+                .as_u64()
+                .ok_or_else(|| invalid("missing or malformed context message time"))?;
+            if message["type"] != kind || time > previous_time || !ids.insert(id.to_owned()) {
+                return Err(invalid("incoherent filtered context history"));
+            }
+            previous_time = time;
+            match select(message)? {
+                ContextSearch::Found => return Ok(Some(message.clone())),
+                ContextSearch::Finished => return Ok(None),
+                ContextSearch::Continue => {}
+            }
+        }
+        if page.is_array() {
+            if messages.len() == 64 {
+                return Err(invalid("context page omitted its continuation cursor"));
+            }
+            return Ok(None);
+        }
+        let next = page["cursor"]
+            .get("next")
+            .ok_or_else(|| invalid("context page omitted its continuation cursor"))?;
+        if next.is_null() {
+            return Ok(None);
+        }
+        let next = next
+            .as_str()
+            .filter(|value| !value.is_empty() && value.len() <= 4096)
+            .ok_or_else(|| invalid("malformed context continuation cursor"))?;
+        if messages.is_empty() || !cursors.insert(next.to_owned()) {
+            return Err(invalid("context pagination made no progress"));
+        }
+        cursor = Some(next.to_owned());
+    }
+    Err(invalid(
+        "physical context lookup exceeded its bounded history",
+    ))
+}
+
+fn physical_tokens(message: &Value) -> io::Result<u64> {
+    [
+        &message["tokens"]["input"],
+        &message["tokens"]["cache"]["read"],
+        &message["tokens"]["cache"]["write"],
+    ]
+    .into_iter()
+    .try_fold(0u64, |total, value| {
+        let tokens = value
+            .as_u64()
+            .ok_or_else(|| invalid("missing or malformed physical context usage"))?;
+        total
+            .checked_add(tokens)
+            .ok_or_else(|| invalid("physical context usage overflow"))
+    })
 }
 
 /// Validate every host and owner before any new admission. Mirrors cannot execute.
@@ -124,6 +231,7 @@ pub fn observe(
     let mut inboxes = BTreeMap::new();
     let mut messages = BTreeMap::new();
     let mut context_tokens = BTreeMap::new();
+    let mut physical_message_ids = BTreeMap::new();
     for packet in &manifest.packets {
         for (host, data) in &raw {
             if data.get(&packet.session_id).is_some() {
@@ -179,36 +287,51 @@ pub fn observe(
             .as_array()
             .cloned()
             .ok_or_else(|| invalid("incomplete inbox observation"))?;
-        let recent = request(adapter, packet, "/message?limit=12&order=desc")?
+        let recent_page = request(adapter, packet, "/message?limit=12&order=desc")?;
+        let recent = recent_page
             .as_array()
+            .or_else(|| recent_page["data"].as_array())
             .cloned()
             .ok_or_else(|| invalid("incomplete context observation"))?;
-        let physical = recent.iter().find(|m| {
-            m["type"] == "assistant"
-                && (m["tokens"]["input"].as_u64().unwrap_or(0) > 0
-                    || m["tokens"]["cache"]["read"].as_u64().unwrap_or(0) > 0
-                    || m["tokens"]["cache"]["write"].as_u64().unwrap_or(0) > 0)
-        });
-        let compacted = physical.is_some_and(|m| {
-            recent.iter().any(|c| {
-                c["type"] == "compaction"
-                    && c["status"] == "completed"
-                    && c["time"]["created"].as_u64().unwrap_or(0)
-                        > m["time"]["created"].as_u64().unwrap_or(u64::MAX)
+        let physical = context_message(adapter, packet, "assistant", |message| {
+            Ok(if physical_tokens(message)? > 0 {
+                ContextSearch::Found
+            } else {
+                ContextSearch::Continue
             })
-        });
-        let tokens = physical
-            .filter(|_| !compacted)
-            .map(|m| {
-                [
-                    m["tokens"]["input"].as_u64().unwrap_or(0),
-                    m["tokens"]["cache"]["read"].as_u64().unwrap_or(0),
-                    m["tokens"]["cache"]["write"].as_u64().unwrap_or(0),
-                ]
-                .into_iter()
-                .fold(0u64, u64::saturating_add)
-            })
-            .unwrap_or(0);
+        })?
+        .ok_or_else(|| {
+            invalid(format!(
+                "owner {} physical context is unknown",
+                packet.number
+            ))
+        })?;
+        let physical_time = physical["time"]["created"]
+            .as_u64()
+            .expect("validated time");
+        let compacted = context_message(adapter, packet, "compaction", |message| {
+            if !matches!(
+                message["status"].as_str(),
+                Some("completed" | "failed" | "running")
+            ) {
+                return Err(invalid("malformed context compaction status"));
+            }
+            Ok(
+                if message["time"]["created"].as_u64().expect("validated time") <= physical_time {
+                    ContextSearch::Finished
+                } else if message["status"] == "completed" {
+                    ContextSearch::Found
+                } else {
+                    ContextSearch::Continue
+                },
+            )
+        })?
+        .is_some();
+        let tokens = if compacted {
+            0
+        } else {
+            physical_tokens(&physical)?
+        };
         if tokens >= 300_000 {
             return Err(invalid(format!(
                 "owner {} context ceiling reached: {tokens}",
@@ -218,6 +341,10 @@ pub fn observe(
         inboxes.insert(packet.number, inbox);
         messages.insert(packet.number, recent);
         context_tokens.insert(packet.number, tokens);
+        physical_message_ids.insert(
+            packet.number,
+            physical["id"].as_str().expect("validated ID").to_owned(),
+        );
     }
     // Inbox dequeue can start an owner after the initial activity sample.
     // Reject a moving observation before capacity or completion can use it.
@@ -248,6 +375,7 @@ pub fn observe(
         inboxes,
         messages,
         context_tokens,
+        physical_message_ids,
     })
 }
 
@@ -334,25 +462,17 @@ fn compact(
         {
             return Ok(true);
         }
-        let physical = observation.messages[&packet.number]
-            .iter()
-            .find(|m| m["type"] == "assistant" && m["id"].is_string())
-            .ok_or_else(|| invalid("missing physical context identity"))?;
+        let physical = &observation.physical_message_ids[&packet.number];
         let id = format!(
             "msg_{}",
             &format!(
                 "{:x}",
                 Sha256::digest(
-                    format!(
-                        "{}{}context-checkpoint",
-                        packet.session_id,
-                        physical["id"].as_str().expect("validated ID")
-                    )
-                    .as_bytes()
+                    format!("{}{}context-checkpoint", packet.session_id, physical).as_bytes()
                 )
             )[..32]
         );
-        state["packets"][&key]["pendingCompaction"] = json!({"body":{"id":id,"delivery":"steer"},"physicalMessageID":physical["id"],"preparedAt":at});
+        state["packets"][&key]["pendingCompaction"] = json!({"body":{"id":id,"delivery":"steer"},"physicalMessageID":physical,"preparedAt":at});
         adapter.persist(state)?;
     }
     let body = state["packets"][&key]["pendingCompaction"]["body"].clone();

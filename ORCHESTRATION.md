@@ -84,6 +84,13 @@ Context compaction begins at 180k observed input/cache tokens, with a hard 300k
 ceiling. Compaction IDs retain the legacy physical-message fingerprint and are
 persisted before submission. Queued, running, completed and failed compactions
 remain distinct; only a verified completed compaction releases continuation.
+Physical usage is retrieved through V2's pre-pagination assistant/compaction
+filters, bounded to four 64-message pages per type. Preserve message-list
+`{data, cursor}` envelopes in `Reply.data` when pagination is possible. Missing,
+malformed, overflowing or exhausted physical usage fails observation; it never
+defaults to zero. Input, cache reads and cache writes all count. The actual
+usage-bearing assistant ID is retained even when newer empty assistants or
+completed compactions are present.
 Use the cycle's `occupied` observation, including all queued inputs, in the final
 `finished` check. Refresh again after mutations before claiming completion.
 
