@@ -90,6 +90,65 @@ fn request(adapter: &mut impl Adapter, packet: &Packet, suffix: &str) -> io::Res
         .checked()
 }
 
+fn verify_identity(info: &Value, packet: &Packet, identity: &Identity) -> io::Result<()> {
+    if info["id"] != packet.session_id
+        || info["title"] != packet.title
+        || info["model"] != identity.model
+        || info["agent"].as_str() != Some(&identity.agent)
+        || info["permissions"] != identity.permissions
+    {
+        return Err(invalid(format!(
+            "owner {} identity/model/permission selectors changed",
+            packet.number
+        )));
+    }
+    Ok(())
+}
+
+fn verify_inbox(inbox: &[Value]) -> io::Result<()> {
+    let mut ids = BTreeSet::new();
+    if inbox.iter().any(|item| {
+        !item["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty() && ids.insert(id))
+    }) {
+        return Err(invalid("missing or duplicate inbox receipt identity"));
+    }
+    Ok(())
+}
+
+fn verify_mirror_inboxes(
+    adapter: &mut impl Adapter,
+    packet: &Packet,
+    hosts: impl Iterator<Item = impl AsRef<str>>,
+) -> io::Result<()> {
+    for host in hosts {
+        let host = host.as_ref();
+        if host == packet.owner_host {
+            continue;
+        }
+        let reply = adapter.api(
+            host,
+            "GET",
+            &format!("/api/session/{}/inbox", packet.session_id),
+            None,
+        )?;
+        if reply.status != 404 {
+            let data = reply.checked()?;
+            let inbox = data
+                .as_array()
+                .ok_or_else(|| invalid("incomplete mirror inbox observation"))?;
+            if !inbox.is_empty() {
+                return Err(invalid(format!(
+                    "owner {} has pending input on mirror {host}; reconcile the exact input before admission",
+                    packet.number
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 enum ContextSearch {
     Continue,
     Found,
@@ -250,43 +309,14 @@ pub fn observe(
         if !raw.contains_key(&packet.owner_host) {
             return Err(invalid("missing owner host observation"));
         }
-        for host in raw.keys().filter(|host| **host != packet.owner_host) {
-            let reply = adapter.api(
-                host,
-                "GET",
-                &format!("/api/session/{}/inbox", packet.session_id),
-                None,
-            )?;
-            if reply.status != 404 {
-                let data = reply.checked()?;
-                let inbox = data
-                    .as_array()
-                    .ok_or_else(|| invalid("incomplete mirror inbox observation"))?;
-                if !inbox.is_empty() {
-                    return Err(invalid(format!(
-                        "owner {} has pending input on mirror {host}; reconcile the exact input before admission",
-                        packet.number
-                    )));
-                }
-            }
-        }
+        verify_mirror_inboxes(adapter, packet, raw.keys())?;
         let info = request(adapter, packet, "")?;
-        let identity = &expected[&packet.number];
-        if info["id"] != packet.session_id
-            || info["title"] != packet.title
-            || info["model"] != identity.model
-            || info["agent"].as_str() != Some(&identity.agent)
-            || info["permissions"] != identity.permissions
-        {
-            return Err(invalid(format!(
-                "owner {} identity/model/permission selectors changed",
-                packet.number
-            )));
-        }
+        verify_identity(&info, packet, &expected[&packet.number])?;
         let inbox = request(adapter, packet, "/inbox")?
             .as_array()
             .cloned()
             .ok_or_else(|| invalid("incomplete inbox observation"))?;
+        verify_inbox(&inbox)?;
         let recent_page = request(adapter, packet, "/message?limit=12&order=desc")?;
         let recent = recent_page
             .as_array()
@@ -346,8 +376,22 @@ pub fn observe(
             physical["id"].as_str().expect("validated ID").to_owned(),
         );
     }
-    // Inbox dequeue can start an owner after the initial activity sample.
-    // Reject a moving observation before capacity or completion can use it.
+    // A queue can change without foreground activity changing. Revalidate both
+    // owner and mirror inboxes, then bracket the complete pass with activity.
+    for packet in &manifest.packets {
+        verify_mirror_inboxes(adapter, packet, raw.keys())?;
+        let fresh = request(adapter, packet, "/inbox")?;
+        let fresh = fresh
+            .as_array()
+            .ok_or_else(|| invalid("incomplete final inbox observation"))?;
+        verify_inbox(fresh)?;
+        if fresh != &inboxes[&packet.number] {
+            return Err(invalid(format!(
+                "owner {} inbox changed during observation",
+                packet.number
+            )));
+        }
+    }
     for (host, before) in &raw {
         let after = adapter
             .api(host, "GET", "/api/session/active", None)?
@@ -441,7 +485,8 @@ fn reconcile(
         if let Some(receipt) = receipt {
             verify_input(&receipt, &body, packet)?;
             acknowledge(state, packet.number, id, at).map_err(invalid)?;
-            adapter.persist(state)?;
+            // Reconciliation changes only the cycle's private candidate. All
+            // receipt lookups/validation must succeed before its single commit.
         }
     }
     Ok(())
@@ -449,6 +494,7 @@ fn reconcile(
 
 fn compact(
     packet: &Packet,
+    identity: &Identity,
     state: &mut Value,
     observation: &Observation,
     adapter: &mut impl Adapter,
@@ -522,6 +568,7 @@ fn compact(
         }
         return Ok(true);
     }
+    verify_identity(&request(adapter, packet, "")?, packet, identity)?;
     let receipt = adapter
         .api(
             &packet.owner_host,
@@ -648,7 +695,14 @@ pub fn cycle(
             if (pending && (admitted || queued))
                 || (admitted && observation.context_tokens[&packet.number] >= 180_000)
             {
-                match compact(packet, state, &observation, adapter, at) {
+                match compact(
+                    packet,
+                    &expected[&packet.number],
+                    state,
+                    &observation,
+                    adapter,
+                    at,
+                ) {
                     Ok(false) => {}
                     outcome => {
                         compacting.insert(packet.number);
@@ -686,6 +740,11 @@ pub fn cycle(
                     .get_mut(&packet.owner_host)
                     .expect("validated host")
                     .insert(packet.number);
+                verify_identity(
+                    &request(adapter, packet, "")?,
+                    packet,
+                    &expected[&packet.number],
+                )?;
                 let receipt = adapter
                     .api(
                         &packet.owner_host,

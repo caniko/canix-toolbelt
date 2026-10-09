@@ -131,7 +131,7 @@ impl ForgeRest for Forge {
         self.calls.push(path.into());
         if path == "repos/owner/repo/pulls/1" {
             return Ok(
-                json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"now"}),
+                json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"2026-10-09T00:00:00Z"}),
             );
         }
         if path.contains("/status?") {
@@ -320,7 +320,7 @@ impl ForgeRest for ForgeScript {
 }
 
 fn forge_pull() -> Value {
-    json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"now"})
+    json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"2026-10-09T00:00:00Z"})
 }
 
 fn forge_status() -> Value {
@@ -438,6 +438,73 @@ fn forgejo_rejects_missing_and_replayed_history_identities() {
         .unwrap_err()
         .to_string()
         .contains("history identity")
+    );
+}
+
+#[test]
+fn forgejo_rejects_inline_identity_replay_across_distinct_reviews() {
+    let mut transport = ForgeScript(vec![
+        ("repos/owner/repo/pulls/1".into(), forge_pull()),
+        (
+            "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+            json!([{"id":1,"comments_count":1},{"id":2,"comments_count":1}]),
+        ),
+        (
+            "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
+            json!([]),
+        ),
+        (
+            "repos/owner/repo/pulls/1/reviews/1/comments?limit=100&page=1".into(),
+            json!([{"id":10,"body":"first"}]),
+        ),
+        (
+            "repos/owner/repo/pulls/1/reviews/2/comments?limit=100&page=1".into(),
+            json!([{"id":10,"body":"replayed"}]),
+        ),
+    ]);
+    let error = forgejo(
+        &mut transport,
+        "https://codefloe.com/owner/repo/pulls/1",
+        "now",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("inline comment identity"));
+    assert!(transport.0.is_empty());
+}
+
+#[test]
+fn forgejo_requires_a_valid_update_identity_before_collecting_history() {
+    for value in [
+        Value::Null,
+        json!(1),
+        json!({}),
+        json!(""),
+        json!("not a timestamp"),
+    ] {
+        let mut pull = forge_pull();
+        pull["updated_at"] = value;
+        let mut transport = ForgeScript(vec![("repos/owner/repo/pulls/1".into(), pull)]);
+        let error = forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("update identity"));
+        assert!(transport.0.is_empty());
+    }
+    let mut pull = forge_pull();
+    pull.as_object_mut().unwrap().remove("updated_at");
+    let mut transport = ForgeScript(vec![("repos/owner/repo/pulls/1".into(), pull)]);
+    assert!(
+        forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("update identity")
     );
 }
 

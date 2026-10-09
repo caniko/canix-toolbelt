@@ -368,6 +368,10 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
     let stem = format!("repos/{owner}/{repo}");
     let path = format!("{stem}/pulls/{number}");
     let p = transport.get(host, &path)?;
+    let updated = p["updated_at"]
+        .as_str()
+        .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+        .ok_or_else(|| invalid("missing or malformed forge update identity"))?;
     let head = p["head"]["sha"]
         .as_str()
         .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()) && !s.is_empty())
@@ -375,6 +379,7 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
     let reviews = forge_pages(transport, host, &format!("{path}/reviews"))?;
     let comments = forge_pages(transport, host, &format!("{stem}/issues/{number}/comments"))?;
     let mut inline = Vec::new();
+    let mut inline_ids = BTreeSet::new();
     for review in &reviews {
         let count = review["comments_count"]
             .as_u64()
@@ -390,11 +395,21 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
                     "forge review comment count does not establish complete history",
                 ));
             }
+            if comments.iter().any(|comment| {
+                !inline_ids.insert(comment["id"].as_u64().expect("validated comment ID"))
+            }) {
+                return Err(invalid(
+                    "repeated forge inline comment identity across reviews",
+                ));
+            }
             inline.extend(comments);
         }
     }
     let checks = forge_checks(transport, host, &stem, head)?;
     let fresh = transport.get(host, &path)?;
+    if fresh["updated_at"].as_str() != Some(updated) {
+        return Err(invalid("forge update identity moved during collection"));
+    }
     for key in ["head", "base", "state", "merged", "updated_at"] {
         if fresh[key] != p[key] {
             return Err(invalid(

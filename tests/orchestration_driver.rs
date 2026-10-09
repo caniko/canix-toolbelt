@@ -18,6 +18,11 @@ struct Fixture {
     start_during_inbox: bool,
     context_pages: BTreeMap<String, Value>,
     requests: Vec<String>,
+    queue_during_context: Option<String>,
+    policy_during_continuation: Option<String>,
+    lookup_error: Option<String>,
+    changed_agent: bool,
+    changed_permissions: bool,
 }
 
 impl Adapter for Fixture {
@@ -53,6 +58,9 @@ impl Adapter for Fixture {
             }
             json!(self.inbox.get(&id).cloned().unwrap_or_default())
         } else if let Some((_, message)) = path.split_once("/message/") {
+            if self.lookup_error.as_deref() == Some(message) {
+                return Err(io::Error::other("receipt transport unavailable"));
+            }
             return Ok(Reply {
                 status: if self.messages.contains_key(message) {
                     200
@@ -71,6 +79,16 @@ impl Adapter for Fixture {
             };
             json!({"data":self.recent.iter().filter(|message| message["type"] == kind).take(64).collect::<Vec<_>>(),"cursor":{"next":null,"previous":null}})
         } else if path.contains("/message?") {
+            if let Some(host) = self.queue_during_context.take() {
+                if host == "source" {
+                    self.mirror_inbox = true;
+                } else {
+                    self.inbox
+                        .entry(id.clone())
+                        .or_default()
+                        .push(json!({"id":"msg_queued_late","type":"user"}));
+                }
+            }
             json!(self.recent.iter().take(12).collect::<Vec<_>>())
         } else if method == "POST" && path.ends_with("/compact") {
             let body = body.unwrap();
@@ -97,7 +115,7 @@ impl Adapter for Fixture {
             }
             json!({"id":body["id"],"sessionID":id})
         } else {
-            json!({"id":id,"title":"PR review one","model":{"providerID":"test","id":if self.changed_model { "replacement" } else { "model" },"variant":"high"},"agent":"automatic","permissions":[]})
+            json!({"id":id,"title":"PR review one","model":{"providerID":"test","id":if self.changed_model { "replacement" } else { "model" },"variant":"high"},"agent":if self.changed_agent {"replacement"}else{"automatic"},"permissions":if self.changed_permissions {json!([{"permission":"*","action":"allow"}])}else{json!([])}})
         };
         Ok(Reply { status: 200, data })
     }
@@ -113,6 +131,12 @@ impl Adapter for Fixture {
         _: &canix_toolbelt::orchestration::Packet,
         _: &Value,
     ) -> io::Result<String> {
+        match self.policy_during_continuation.take().as_deref() {
+            Some("model") => self.changed_model = true,
+            Some("agent") => self.changed_agent = true,
+            Some("permissions") => self.changed_permissions = true,
+            _ => {}
+        }
         Ok("continue original owner".into())
     }
 }
@@ -152,6 +176,11 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         start_during_inbox: false,
         context_pages: BTreeMap::new(),
         requests: vec![],
+        queue_during_context: None,
+        policy_during_continuation: None,
+        lookup_error: None,
+        changed_agent: false,
+        changed_permissions: false,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -737,4 +766,132 @@ fn physical_context_search_exhaustion_is_bounded_and_never_zero() {
     );
     assert_eq!(state, original);
     assert!(fixture.submissions.is_empty());
+}
+
+#[test]
+fn inputs_queued_during_context_collection_invalidate_owner_and_mirror_observations() {
+    for host in ["source", "destination"] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        let original = state.clone();
+        fixture.queue_during_context = Some(host.into());
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(state, original);
+        assert_eq!(fixture.saved, original);
+        assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
+fn session_policy_changes_after_continuation_cannot_submit_a_prompt() {
+    for selector in ["model", "agent", "permissions"] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.policy_during_continuation = Some(selector.into());
+        let report = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].contains("selectors changed"));
+        assert!(fixture.submissions.is_empty());
+        assert!(state["packets"]["1"]["pending"].is_object());
+        assert_eq!(state, fixture.saved);
+    }
+}
+
+#[test]
+fn duplicate_inbox_receipts_cannot_acknowledge_or_dispatch_in_either_order() {
+    for reverse in [false, true] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        let body = json!({"id":"msg_pending","text":"exact","metadata":{}});
+        state["packets"]["1"]["pending"] =
+            json!({"body":body,"version":"old","goalPolicy":"goal","preparedAt":"before"});
+        let mut receipts = vec![
+            json!({"id":body["id"],"type":"user","payload":{"text":body["text"],"metadata":body["metadata"]}}),
+            json!({"id":body["id"],"type":"compact"}),
+        ];
+        if reverse {
+            receipts.reverse();
+        }
+        fixture.inbox.insert("ses_original".into(), receipts);
+        fixture.saved = state.clone();
+        let original = state.clone();
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(state, original);
+        assert_eq!(fixture.saved, original);
+        assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
+fn later_receipt_failure_cannot_persist_an_earlier_acknowledgement() {
+    for transport_failure in [false, true] {
+        let (mut manifest, policy, mut expected, mut state, mut fixture) = setup();
+        let mut second = manifest.packets[0].clone();
+        second.number = 2;
+        second.session_id = "ses_second".into();
+        second.prs = vec!["two".into()];
+        manifest.packets.push(second);
+        manifest.assignment_count = 2;
+        manifest.baseline_count = Some(2);
+        expected.insert(2, expected[&1].clone());
+        state["packets"]["2"] = state["packets"]["1"].clone();
+        for (number, session) in [(1, "ses_original"), (2, "ses_second")] {
+            let body = json!({"id":format!("msg_pending_{number}"),"text":"exact","metadata":{}});
+            state["packets"][number.to_string()]["pending"] =
+                json!({"body":body,"version":"old","goalPolicy":"goal","preparedAt":"before"});
+            fixture.messages.insert(format!("msg_pending_{number}"), json!({"id":body["id"],"sessionID":session,"type":"user","text":if number==2 {"altered"}else{"exact"},"metadata":{}}));
+        }
+        if transport_failure {
+            fixture.lookup_error = Some("msg_pending_2".into());
+        }
+        fixture.saved = state.clone();
+        let original = state.clone();
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(state, original);
+        assert_eq!(fixture.saved, original);
+        assert!(fixture.submissions.is_empty());
+    }
 }
