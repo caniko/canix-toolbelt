@@ -289,11 +289,13 @@ class PinentryIntegration(unittest.TestCase):
                   file=sys.stderr)
             for process in self.queries:
                 print("pinentry fixture child:", process.pid, "status:", process.poll(), file=sys.stderr)
-                if process.stderr is not None and not process.stderr.closed:
-                    os.set_blocking(process.stderr.fileno(), False)
+                for name, stream in [("stdout", process.stdout), ("stderr", process.stderr)]:
+                    if stream is None or stream.closed:
+                        continue
+                    os.set_blocking(stream.fileno(), False)
                     try:
-                        data = os.read(process.stderr.fileno(), 65536)
-                        print("pinentry fixture stderr:", data.decode(errors="replace"), file=sys.stderr)
+                        data = os.read(stream.fileno(), 65536)
+                        print(f"pinentry fixture {name}:", data.decode(errors="replace"), file=sys.stderr)
                     except BlockingIOError:
                         pass
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
