@@ -2,7 +2,7 @@
 
 <!-- simit:badges:start -->
 
-[![CI](https://img.shields.io/badge/CI-managed-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
+[![CI](https://img.shields.io/badge/CI-managed+extra-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
 
 <!-- simit:badges:end -->
 
