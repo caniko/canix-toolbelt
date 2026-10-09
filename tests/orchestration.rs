@@ -213,10 +213,15 @@ fn checkpoint_progress_deduplicates_and_stale_merge_claims_are_not_adopted() {
 #[test]
 fn old_audit_cannot_absorb_edited_feedback_or_a_new_linked_repair() {
     let mut manifest = manifest();
-    let mut state = json!({"prs":{"one":{"url":"one","state":"CLOSED","head":"h","comments":[]}},"packets":{"1":{"deliveredVersion":"v","pending":{"body":{"id":"original","text":"exact"}},"unrecognized":"keep"}}});
+    let (mut state, version) = delivered_state(
+        json!({"url":"one","state":"CLOSED","head":"h","comments":[]}),
+        &manifest,
+    );
+    state["packets"]["1"]["pending"] = json!({"body":{"id":"original","text":"exact"}});
+    state["packets"]["1"]["unrecognized"] = json!("keep");
     let reports = BTreeMap::from([(
         1,
-        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":"v","prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"withdrawn","evidence":"closure"}]}),
+        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":version,"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"withdrawn","evidence":"closure"}]}),
     )]);
     let refresh_state = |manifest: &Manifest, state: &mut Value| {
         refresh(
@@ -339,4 +344,422 @@ fn malformed_checkpoint_refresh_leaves_the_last_valid_journal_intact() {
         .is_err()
     );
     assert_eq!(state, original);
+}
+
+#[test]
+fn manifest_classification_is_immutable_and_new_work_is_explicitly_linked() {
+    let old = manifest();
+    let mut swapped = old.clone();
+    swapped.packets[0].linked_repairs.push("one".into());
+    swapped.packets[0].prs.push("replacement".into());
+    swapped.assignment_count += 1;
+    swapped.linked_count = Some(1);
+    assert!(swapped.validate(Some(&old)).is_err());
+    let mut previous = old.clone();
+    previous.packets[0]
+        .prs
+        .extend(["repair".into(), "release".into()]);
+    previous.packets[0].linked_repairs.push("repair".into());
+    previous.packets[0].linked_releases.push("release".into());
+    previous.assignment_count += 2;
+    previous.linked_count = Some(1);
+    previous.release_count = Some(1);
+    previous.validate(Some(&old)).unwrap();
+    let mut swapped = previous.clone();
+    swapped.packets[0].linked_repairs = vec!["release".into()];
+    swapped.packets[0].linked_releases = vec!["repair".into()];
+    assert!(swapped.validate(Some(&previous)).is_err());
+    let mut overlap = previous.clone();
+    overlap.packets[0].linked_releases.push("repair".into());
+    assert!(overlap.validate(None).is_err());
+    let mut added_baseline = previous.clone();
+    added_baseline.packets[0].prs.push("unclassified".into());
+    added_baseline.assignment_count += 1;
+    added_baseline.baseline_count = None;
+    let mut old_without_count = previous;
+    old_without_count.baseline_count = None;
+    assert!(added_baseline.validate(Some(&old_without_count)).is_err());
+}
+
+#[test]
+fn linked_release_coverage_keeps_the_188_baseline_and_two_repairs_separate() {
+    let mut manifest = manifest();
+    manifest.packets[0].prs = (0..188).map(|id| format!("baseline-{id}")).collect();
+    manifest.packets[1].prs = vec!["repair-1".into(), "repair-2".into(), "release".into()];
+    manifest.packets[1].linked_repairs = vec!["repair-1".into(), "repair-2".into()];
+    manifest.packets[1].linked_releases = vec!["release".into()];
+    manifest.assignment_count = 191;
+    manifest.baseline_count = Some(188);
+    manifest.linked_count = Some(2);
+    manifest.release_count = Some(1);
+    let mut state = json!({"prs":{},"packets":{}});
+    for url in &manifest.packets[0].prs {
+        state["prs"][url] = json!({"state":"MERGED"});
+    }
+    state["prs"]["repair-1"] = json!({"state":"CLOSED"});
+    state["prs"]["repair-2"] = json!({"state":"MERGED"});
+    state["prs"]["release"] = json!({"state":"OPEN"});
+    let coverage = serde_json::to_value(manifest.coverage(&state).unwrap()).unwrap();
+    assert_eq!(coverage["baselineAssignedPRCount"], 188);
+    assert_eq!(coverage["linkedRepairPRCount"], 2);
+    assert_eq!(coverage["linkedReleasePRCount"], 1);
+    assert_eq!(coverage["baselineStateCounts"]["MERGED"], 188);
+    assert_eq!(coverage["linkedRepairStateCounts"]["MERGED"], 1);
+    assert_eq!(coverage["linkedRepairStateCounts"]["CLOSED"], 1);
+    assert_eq!(coverage["linkedReleaseStateCounts"]["OPEN"], 1);
+}
+
+#[test]
+fn registered_release_is_scheduled_and_adopts_only_current_release_progress() {
+    let old = manifest();
+    let mut manifest = old.clone();
+    manifest.packets[0].prs.push("release".into());
+    manifest.packets[0].linked_releases.push("release".into());
+    manifest.assignment_count += 1;
+    manifest.release_count = Some(1);
+    let mut state = json!({"prs":{},"packets":{}});
+    refresh(
+        &old,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    state["prs"]["release"] = json!({"url":"release","state":"OPEN","head":"rh","base":"rb"});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(needs_wake(&state["packets"]["1"]));
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "qualify release",
+        "now",
+    )
+    .unwrap();
+    acknowledge(&mut state, 1, body["id"].as_str().unwrap(), "now").unwrap();
+    let reports = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"waiting","eventVersion":body["metadata"]["eventVersion"],"prs":[],"linkedReleasePRs":[{"url":"release","head":"rh","base":"rb","stage":"ready_for_merge","evidence":"current release qualification"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state["prs"]["release"]["progress"]["stage"],
+        "ready_for_merge"
+    );
+    assert_eq!(state["coverage"]["linkedReleaseStateCounts"]["OPEN"], 1);
+    assert_eq!(state["packets"]["1"]["terminal"], false);
+}
+
+#[test]
+fn refresh_retains_scope_across_restart_and_rejects_dropped_owners_or_assignments() {
+    let original_manifest = manifest();
+    let mut state = json!({"prs":{},"packets":{}});
+    refresh(
+        &original_manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let retained: Manifest = serde_json::from_value(state["retainedManifest"].clone()).unwrap();
+    assert_eq!(retained.assignment_count, 2);
+    for mutation in 0..3 {
+        let mut changed = original_manifest.clone();
+        match mutation {
+            0 => {
+                changed.packets.pop();
+                changed.assignment_count -= 1;
+                changed.baseline_count = Some(1);
+            }
+            1 => {
+                changed.packets[0].prs = vec!["replacement".into()];
+            }
+            _ => changed.packets[0].session_id = "ses_replacement".into(),
+        }
+        let mut restarted: Value =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(
+            refresh(
+                &changed,
+                &mut restarted,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(restarted, state);
+    }
+    let mut legacy = json!({"prs":{"dropped":{"state":"OPEN"}},"packets":{}});
+    let before = legacy.clone();
+    assert!(
+        refresh(
+            &original_manifest,
+            &mut legacy,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+    assert_eq!(legacy, before);
+}
+
+fn delivered_state(pr: Value, manifest: &Manifest) -> (Value, Value) {
+    let mut state = json!({"prs":{"one":pr},"packets":{}});
+    refresh(
+        manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "inspect this exact event",
+        "2026-10-09T00:00:00Z",
+    )
+    .unwrap();
+    acknowledge(
+        &mut state,
+        1,
+        body["id"].as_str().unwrap(),
+        "2026-10-09T00:00:01Z",
+    )
+    .unwrap();
+    (state, body["metadata"]["eventVersion"].clone())
+}
+
+#[test]
+fn late_terminal_report_cannot_audit_feedback_it_never_observed() {
+    let manifest = manifest();
+    let (mut state, delivered) = delivered_state(
+        json!({"url":"one","state":"CLOSED","head":"h","comments":[]}),
+        &manifest,
+    );
+    state["prs"]["one"]["comments"] = json!([{"id":"new","body":"new defect"}]);
+    let reports = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":delivered,"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"old audit"}]}),
+    )]);
+    for _ in 0..2 {
+        refresh(
+            &manifest,
+            &mut state,
+            &policy(),
+            &reports,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_ne!(state["packets"]["1"]["terminal"], true);
+        assert!(state["packets"]["1"]["auditedFeedback"]["one"].is_null());
+    }
+}
+
+#[test]
+fn old_progress_never_certifies_new_feedback_checks_or_dependency_evidence() {
+    for stage in ["ready_for_merge", "ready_for_close"] {
+        for mutation in 0..3 {
+            let mut manifest = manifest();
+            manifest.packets[0].dependencies = vec![2];
+            let (mut state, delivered) = delivered_state(
+                json!({"url":"one","state":"OPEN","head":"h","base":"b","comments":[],"checks":{"state":"SUCCESS"}}),
+                &manifest,
+            );
+            let reports = BTreeMap::from([(
+                1,
+                json!({"schemaVersion":1,"packet":1,"status":"waiting","eventVersion":delivered,"prs":[{"url":"one","head":"h","base":"b","stage":stage,"evidence":"old qualification"}]}),
+            )]);
+            let mut dependencies = BTreeMap::new();
+            match mutation {
+                0 => state["prs"]["one"]["comments"] = json!([{"body":"edited feedback"}]),
+                1 => state["prs"]["one"]["checks"]["state"] = json!("FAILURE"),
+                _ => {
+                    dependencies.insert(2, "new producer evidence".into());
+                }
+            }
+            for _ in 0..2 {
+                refresh(
+                    &manifest,
+                    &mut state,
+                    &policy(),
+                    &reports,
+                    &BTreeMap::new(),
+                    &dependencies,
+                )
+                .unwrap();
+                assert_ne!(state["prs"]["one"]["progress"]["stage"], stage);
+            }
+        }
+    }
+}
+
+#[test]
+fn fresh_source_bound_audit_replaces_stale_coverage_but_stale_inputs_do_not() {
+    let manifest = manifest();
+    let mut state =
+        json!({"prs":{"one":{"url":"one","state":"MERGED","head":"h","comments":[]}},"packets":{}});
+    let initial = feedback_version(&state["prs"]["one"]);
+    let mut audits = BTreeMap::from([(
+        1,
+        json!({"packet":1,"prs":[{"url":"one","feedbackVersion":initial,"evidence":"original"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &audits,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+    state["prs"]["one"]["comments"] = json!([{"body":"edited historical finding"}]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &audits,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], false);
+    let current = feedback_version(&state["prs"]["one"]);
+    audits.get_mut(&1).unwrap()["prs"][0]["feedbackVersion"] = json!(current);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &audits,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+    assert_eq!(state["packets"]["1"]["auditedFeedback"]["one"], current);
+    audits.get_mut(&1).unwrap()["prs"][0]["feedbackVersion"] = json!(initial);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &audits,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["auditedFeedback"]["one"], current);
+}
+
+#[test]
+fn repeated_event_versions_have_distinct_fresh_ids_and_exact_pending_retries() {
+    let manifest = manifest();
+    let mut state =
+        json!({"prs":{},"packets":{"1":{"version":"A","observationVersion":"observed-A"}}});
+    let first = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "same text",
+        "now",
+    )
+    .unwrap();
+    acknowledge(&mut state, 1, first["id"].as_str().unwrap(), "now").unwrap();
+    state["packets"]["1"]["version"] = json!("B");
+    let second = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "other event",
+        "now",
+    )
+    .unwrap();
+    acknowledge(&mut state, 1, second["id"].as_str().unwrap(), "now").unwrap();
+    state["packets"]["1"]["version"] = json!("A");
+    let third = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "same text",
+        "now",
+    )
+    .unwrap();
+    assert_ne!(first["id"], third["id"]);
+    assert_ne!(second["id"], third["id"]);
+    let mut restarted: Value =
+        serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_eq!(
+        prepare(
+            &mut restarted,
+            &manifest.packets[0],
+            &policy(),
+            "changed text",
+            "later"
+        )
+        .unwrap(),
+        third
+    );
+}
+
+#[test]
+fn repeat_fairness_compares_offsets_and_fractional_instants_chronologically() {
+    let mut manifest = manifest();
+    manifest.packets[1].owner_host = "builder".into();
+    let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    for (older, newer) in [
+        ("2026-10-09T08:00:00+02:00", "2026-10-09T07:00:00Z"),
+        ("2026-10-09T07:00:00Z", "2026-10-09T07:00:00.100Z"),
+    ] {
+        let states = json!({"1":{"version":"new","deliveredVersion":"old","goalAckVersion":"finish-v1","deliveredPreparedAt":older},"2":{"version":"new","deliveredVersion":"old","goalAckVersion":"finish-v1","deliveredPreparedAt":newer}});
+        assert_eq!(
+            select(&manifest, &states, &active, &policy()).unwrap()[0].number,
+            1
+        );
+    }
+}
+
+#[test]
+fn journal_publication_recovers_from_a_legacy_orphan_without_clobbering_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let value = json!({"pending":"retained"});
+    let orphan = dir.path().join(format!(
+        ".native-state-{}-{}",
+        std::process::id(),
+        digest(&value)
+    ));
+    std::fs::write(&orphan, b"unrelated abandoned bytes").unwrap();
+    let path = dir.path().join("journal.json");
+    atomic_json(&path, &value).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+        value
+    );
+    assert_eq!(std::fs::read(orphan).unwrap(), b"unrelated abandoned bytes");
 }

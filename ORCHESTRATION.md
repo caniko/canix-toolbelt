@@ -9,9 +9,12 @@ fetch credentials or confer merge authority.
 ## Journal compatibility
 
 `Manifest::validate` verifies complete assignment counts, distinct existing
-owners, linked repairs and producer references. A refresh accepts additive
-registered repairs and rejects changed ownership or lost assignments. Unknown
-manifest fields and journal fields remain available to the consumer.
+owners, linked repairs, linked releases and producer references. A refresh accepts
+additive registered linked work and rejects changed ownership, assignment
+classification or lost assignments. `linkedReleasePRs` and `linkedReleasePRCount`
+remain separate from baseline and supported-repair scope. `Manifest::coverage`
+reports each class's counts and native state totals, including UNKNOWN evidence.
+Unknown manifest fields and journal fields remain available to the consumer.
 
 `refresh` works transactionally against the existing JSON journal. It preserves
 pending request IDs/bodies, audit checkpoints, admission history and unknown
@@ -19,6 +22,13 @@ fields. Source/review/CI event hashes exclude poll timestamps and derived
 progress. Terminal comparison hashes ignore unrelated later target/check
 movement; edited historical feedback still invalidates the audit. Fingerprints
 retain sorted ASCII JSON and legacy finite-number spelling.
+The journal retains the validated manifest as `retainedManifest`; refreshes compare
+against it across restarts. Initial imports reject missing already-journaled scope.
+Worker progress and terminal audits require the delivered event and its retained
+observation fingerprint to match current source, feedback and dependency evidence.
+Legacy deliveries without an observation binding require a fresh turn before
+certifying progress. A new source-bound audit may supersede stale coverage only
+when its feedback fingerprint matches the current history.
 
 Native adapters must retain the original journal bytes for import, supply
 source-bound dependency digests and worker reports, and report unsuccessful
@@ -31,7 +41,8 @@ terminal coverage, including linked work and pending admissions.
 `Policy` declares host capacities, producer priority, explicit first-goal
 expedites and ordering. `select` rejects incomplete/wrong-host activity and
 chooses only original owners, preferring first current-goal turns before repeat
-turns and oldest admissions within the repeat class.
+turns and oldest admissions within the repeat class, ordered by parsed RFC 3339
+instants rather than their spelling.
 
 `prepare` retains an existing pending body verbatim. Persist its result through
 `atomic_json` before submitting it. On ambiguity, reconcile the exact ID against
@@ -40,6 +51,8 @@ both inbox and transcript; a transcript 404 can coexist with a queued input.
 execution or acceptance. OpenCode V2 models belong to registered sessions; a
 prompt body cannot override the model. Verify owner identity/model/permissions
 before native submission.
+Fresh inputs advance a durable `admissionGeneration`, so a reverted event cannot
+reuse an already-delivered request ID. Existing pending IDs and bodies stay exact.
 
 `record_idle_recovery` allows at most three bounded continuations for a source
 without a usable checkpoint. `schedule_recheck` permits one bounded follow-up
@@ -48,8 +61,9 @@ a new report can release further useful work.
 
 `Lease` acquires the existing persistent coordinator lock without replacing or
 unlinking its anchor. `atomic_json` uses private, fsynced, create-new staging and
-an atomic rename. A consumer must scope its state directory and serialize
-writers through the same lease, including the legacy coordinator during cutover.
+an atomic rename. Collision-resistant staging tolerates abandoned legacy temporary
+files without overwriting them. A consumer must scope its state directory and
+serialize writers through the same lease, including the legacy coordinator during cutover.
 Evaluation, activation and campaign leases remain distinct resources.
 
 ## Read-only shadow qualification
@@ -97,6 +111,9 @@ Use the cycle's `occupied` observation, including all queued inputs, in the fina
 `snapshots` collects full GitHub/Forgejo history through explicit authenticated
 transport traits. GitHub collection includes paginated issue comments, reviews,
 outdated/resolved review threads, nested inline comments and check contexts.
+All GitHub connections require stable declared counts; the single checked commit
+must match the PR head. Forgejo inline counts and nonempty unique history IDs are
+validated too. Both forges re-fetch the complete check rollup after collection.
 Malformed/truncated pagination, repeated cursors, and comparison movement fail
 collection. Consumers retain the last valid snapshot and record the error. These
 observations provide scheduling evidence, never merge or closure authority.

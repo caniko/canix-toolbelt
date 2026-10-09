@@ -31,11 +31,14 @@ pub struct Packet {
     pub owner_host: String,
     /// Preserved operator-visible title.
     pub title: String,
-    /// Original assignments and supported linked repairs.
+    /// Original assignments, supported linked repairs and linked releases.
     pub prs: Vec<String>,
     /// Linked repairs belonging to this same owner.
     #[serde(default, rename = "linkedRepairPRs")]
     pub linked_repairs: Vec<String>,
+    /// Linked release work belonging to this same owner, distinct from repairs.
+    #[serde(default, rename = "linkedReleasePRs")]
+    pub linked_releases: Vec<String>,
     /// Shared producer owners.
     #[serde(default)]
     pub dependencies: Vec<u32>,
@@ -58,6 +61,9 @@ pub struct Manifest {
     /// Explicit supported-repair count.
     #[serde(default, rename = "linkedRepairPRCount")]
     pub linked_count: Option<usize>,
+    /// Explicit linked-release count, separate from baseline and repair scope.
+    #[serde(default, rename = "linkedReleasePRCount")]
+    pub release_count: Option<usize>,
     /// Historical manifest fields retained without reinterpretation.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -70,6 +76,7 @@ impl Manifest {
         let mut sessions = BTreeSet::new();
         let mut urls = BTreeSet::new();
         let mut repairs = BTreeSet::new();
+        let mut releases = BTreeSet::new();
         for packet in &self.packets {
             if packet.number == 0
                 || !numbers.insert(packet.number)
@@ -95,6 +102,11 @@ impl Manifest {
                     return Err(format!("invalid linked repair {url}"));
                 }
             }
+            for url in &packet.linked_releases {
+                if !packet.prs.contains(url) || repairs.contains(url) || !releases.insert(url) {
+                    return Err(format!("invalid linked release {url}"));
+                }
+            }
         }
         if self.packets.is_empty()
             || urls.len() != self.assignment_count
@@ -103,7 +115,10 @@ impl Manifest {
                 .is_some_and(|count| count != repairs.len())
             || self
                 .baseline_count
-                .is_some_and(|count| count + repairs.len() != urls.len())
+                .is_some_and(|count| count != urls.len() - repairs.len() - releases.len())
+            || self
+                .release_count
+                .is_some_and(|count| count != releases.len())
         {
             return Err("assignment coverage does not match manifest counts".into());
         }
@@ -117,6 +132,7 @@ impl Manifest {
             }
         }
         if let Some(previous) = previous {
+            previous.validate(None)?;
             if self.packets.len() != previous.packets.len()
                 || self.baseline_count != previous.baseline_count
             {
@@ -132,10 +148,16 @@ impl Manifest {
                     || current.owner_host != old.owner_host
                     || current.title != old.title
                     || old.prs.iter().any(|url| !current.prs.contains(url))
-                    || old
-                        .linked_repairs
-                        .iter()
-                        .any(|url| !current.linked_repairs.contains(url))
+                    || old.prs.iter().any(|url| {
+                        old.linked_repairs.contains(url) != current.linked_repairs.contains(url)
+                            || old.linked_releases.contains(url)
+                                != current.linked_releases.contains(url)
+                    })
+                    || current.prs.iter().any(|url| {
+                        !old.prs.contains(url)
+                            && !current.linked_repairs.contains(url)
+                            && !current.linked_releases.contains(url)
+                    })
                 {
                     return Err(format!(
                         "ownership changed or assignments dropped for {}",
@@ -146,6 +168,50 @@ impl Manifest {
         }
         Ok(())
     }
+
+    /// Count observed states without reclassifying immutable baseline work.
+    pub fn coverage(&self, state: &Value) -> Result<Coverage, String> {
+        self.validate(None)?;
+        let mut coverage = Coverage::default();
+        for packet in &self.packets {
+            for url in &packet.prs {
+                let status = state["prs"][url]["state"].as_str().unwrap_or("UNKNOWN");
+                let (count, states) = if packet.linked_repairs.contains(url) {
+                    (&mut coverage.repair_count, &mut coverage.repair_states)
+                } else if packet.linked_releases.contains(url) {
+                    (&mut coverage.release_count, &mut coverage.release_states)
+                } else {
+                    (&mut coverage.baseline_count, &mut coverage.baseline_states)
+                };
+                *count += 1;
+                *states.entry(status.to_owned()).or_default() += 1;
+            }
+        }
+        Ok(coverage)
+    }
+}
+
+/// Manifest-bound coverage of original, linked-repair and linked-release work.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Coverage {
+    /// Immutable baseline assignment count.
+    #[serde(rename = "baselineAssignedPRCount")]
+    pub baseline_count: usize,
+    /// Supported-source repair assignment count.
+    #[serde(rename = "linkedRepairPRCount")]
+    pub repair_count: usize,
+    /// Linked release assignment count.
+    #[serde(rename = "linkedReleasePRCount")]
+    pub release_count: usize,
+    /// Baseline observations by native state; absent observations are UNKNOWN.
+    #[serde(rename = "baselineStateCounts")]
+    pub baseline_states: BTreeMap<String, usize>,
+    /// Linked repair observations by native state.
+    #[serde(rename = "linkedRepairStateCounts")]
+    pub repair_states: BTreeMap<String, usize>,
+    /// Linked release observations by native state.
+    #[serde(rename = "linkedReleaseStateCounts")]
+    pub release_states: BTreeMap<String, usize>,
 }
 
 /// Consumer-owned scheduler policy, independent of fleet names or model choices.
@@ -448,7 +514,40 @@ fn refresh_in_place(
     audits: &BTreeMap<u32, Value>,
     dependencies: &BTreeMap<u32, String>,
 ) -> Result<(), String> {
-    manifest.validate(None)?;
+    let retained = state
+        .get("retainedManifest")
+        .map(|value| {
+            serde_json::from_value::<Manifest>(value.clone())
+                .map_err(|error| format!("invalid retained manifest: {error}"))
+        })
+        .transpose()?;
+    manifest.validate(retained.as_ref())?;
+    // Imported journals must not lose their already-observed ownership scope.
+    if !state["prs"].is_object()
+        || !state["packets"].is_object()
+        || state["prs"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(url, _)| {
+                !manifest
+                    .packets
+                    .iter()
+                    .any(|packet| packet.prs.contains(url))
+            })
+        || state["packets"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(number, _)| {
+                !manifest
+                    .packets
+                    .iter()
+                    .any(|packet| packet.number.to_string() == *number)
+            })
+    {
+        return Err("manifest drops retained journal scope".into());
+    }
     for packet in &manifest.packets {
         journal_packet(state, packet.number)?;
         for url in &packet.prs {
@@ -477,6 +576,16 @@ fn refresh_in_place(
             .filter_map(|id| dependencies.get(id).map(|hash| (id.to_string(), hash)))
             .collect();
         let inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
+        let observation = json!(digest(&inputs));
+        // Bind an imported delivery only to its retained, unchanged observation.
+        // A journal without that evidence requires a fresh delivered turn.
+        if ps["deliveredObservationVersion"].is_null()
+            && ps["deliveredVersion"].is_string()
+            && ps["deliveredVersion"] == ps["version"]
+            && ps["observationVersion"].is_string()
+        {
+            ps["deliveredObservationVersion"] = ps["observationVersion"].clone();
+        }
         if let Some(report) = reports.get(&packet.number) {
             if report["packet"].as_u64() != Some(u64::from(packet.number))
                 || report["schemaVersion"] != 1
@@ -489,6 +598,7 @@ fn refresh_in_place(
             ps["workerStatus"] = report.clone();
             if report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
+                && ps["deliveredObservationVersion"] == observation
             {
                 if report["status"] == "ready_for_work" {
                     ps["progressVersion"] = json!(digest(report));
@@ -498,6 +608,7 @@ fn refresh_in_place(
                         .as_array()
                         .into_iter()
                         .flatten()
+                        .chain(report["linkedReleasePRs"].as_array().into_iter().flatten())
                         .find(|item| item["url"] == pr["url"]);
                     if let Some(item) = item {
                         let checkpoint = digest(&json!([report["eventVersion"], item]));
@@ -518,7 +629,7 @@ fn refresh_in_place(
                 }
             }
         }
-        ps["observationVersion"] = json!(digest(&inputs));
+        ps["observationVersion"] = observation;
         ps["versionInputs"] = inputs.clone();
         let mut version_inputs = inputs;
         version_inputs["progressVersion"] = ps["progressVersion"].clone();
@@ -535,7 +646,11 @@ fn refresh_in_place(
             for item in audit["prs"].as_array().into_iter().flatten() {
                 if present(&item["evidence"]) && present(&item["feedbackVersion"]) {
                     let url = item["url"].as_str().ok_or("audit is missing URL")?;
-                    if ps["auditedFeedback"][url].is_null() {
+                    if prs.iter().any(|pr| {
+                        pr["url"] == url
+                            && item["feedbackVersion"].as_str()
+                                == Some(feedback_version(pr).as_str())
+                    }) {
                         ps["auditedFeedback"][url] = item["feedbackVersion"].clone();
                     }
                 }
@@ -556,10 +671,23 @@ fn refresh_in_place(
                     .all(|pr| matches!(pr["state"].as_str(), Some("MERGED" | "CLOSED")))
         );
         ps["auditBacklog"] = json!(backlog);
-        let reported = ps["workerStatus"]["prs"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let current_report = ps["workerStatus"]["eventVersion"].is_string()
+            && ps["workerStatus"]["eventVersion"] == ps["deliveredVersion"]
+            && ps["deliveredObservationVersion"] == ps["observationVersion"];
+        let reported: Vec<_> = if current_report {
+            ["prs", "linkedReleasePRs"]
+                .into_iter()
+                .flat_map(|key| {
+                    ps["workerStatus"][key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .cloned()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let feedback = ps["auditedFeedback"].clone();
         for url in &packet.prs {
             let pr = &mut state["prs"][url];
@@ -573,6 +701,10 @@ fn refresh_in_place(
                 json!(feedback[url].as_str() == Some(feedback_version(pr).as_str()));
         }
     }
+    state["retainedManifest"] =
+        serde_json::to_value(manifest).map_err(|error| error.to_string())?;
+    state["coverage"] =
+        serde_json::to_value(manifest.coverage(state)?).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -724,14 +856,15 @@ pub fn select<'a>(
             state["deliveredPreparedAt"]
                 .as_str()
                 .or_else(|| state["deliveredAt"].as_str())
-                .unwrap_or("")
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|time| time.with_timezone(&chrono::Utc))
         } else {
-            ""
+            None
         };
         (
             class,
             expedited.unwrap_or(0),
-            oldest.to_owned(),
+            oldest,
             policy
                 .priority
                 .iter()
@@ -774,11 +907,22 @@ pub fn prepare(
         return Err("owner has no unadmitted event or continuation text is empty".into());
     }
     let version = ps["version"].clone();
-    let hash = digest(&json!([packet.session_id, version, policy.goal_policy]));
+    let generation = match ps.get("admissionGeneration") {
+        None | Some(Value::Null) => 0,
+        Some(value) => value.as_u64().ok_or("invalid admission generation")?,
+    }
+    .checked_add(1)
+    .ok_or("admission generation exhausted")?;
+    let hash = digest(&json!([
+        packet.session_id,
+        version,
+        policy.goal_policy,
+        generation
+    ]));
     let body = json!({"id":format!("msg_{}", &hash[..32]), "text":text, "delivery":"steer", "resume":true,
         "metadata":{"coordination":"native-campaign-v1", "packet":packet.number, "eventVersion":version}});
-    ps["pending"] =
-        json!({"version":version, "goalPolicy":policy.goal_policy,"body":body,"preparedAt":at});
+    ps["admissionGeneration"] = json!(generation);
+    ps["pending"] = json!({"version":version, "observationVersion":ps["observationVersion"], "goalPolicy":policy.goal_policy,"body":body,"preparedAt":at});
     Ok(body)
 }
 
@@ -790,6 +934,7 @@ pub fn acknowledge(state: &mut Value, number: u32, id: &str, at: &str) -> Result
         return Err("acknowledgement does not match the exact pending input".into());
     }
     ps["deliveredVersion"] = pending["version"].clone();
+    ps["deliveredObservationVersion"] = pending["observationVersion"].clone();
     ps["deliveredAt"] = json!(at);
     ps["deliveredPreparedAt"] = pending["preparedAt"].clone();
     ps["goalAckVersion"] = pending["goalPolicy"].clone();
@@ -875,26 +1020,16 @@ pub fn atomic_json(path: &Path, value: &Value) -> io::Result<()> {
             "state destination is not a regular file",
         ));
     }
-    let temp = parent.join(format!(
-        ".native-state-{}-{}",
-        std::process::id(),
-        digest(value)
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp)?;
-    let result = (|| {
+    let mut file = tempfile::Builder::new()
+        .prefix(".native-state-")
+        .tempfile_in(parent)?;
+    (|| {
         serde_json::to_writer_pretty(&mut file, value)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
-        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
-        fs::rename(&temp, path)?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.persist(path).map_err(|error| error.error)?;
         File::open(parent)?.sync_all()
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
+    })()
 }

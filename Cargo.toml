@@ -37,7 +37,7 @@ cli = ["dep:clap", "dep:signal-hook", "review"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process"]
-orchestration = ["dep:sha2", "dep:fs2", "dep:chrono"]
+orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
 
 [[bin]]
 name = "canix-toolbelt"
@@ -67,6 +67,7 @@ fs2 = { version = "0.4", optional = true }
 url = { version = "2", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 zeroize = { version = "1", optional = true }
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
