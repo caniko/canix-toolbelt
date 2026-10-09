@@ -27,6 +27,9 @@ jobs:
         env:
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
           GENERATOR_REF: github:caniko/simit/afb7939d925d3e8e9b8507387ada7efad6460df8
+          # Hosted generation uses the committed public trust root, just as the
+          # pinned generator supports for environments without a local GPG key.
+          SIMIT_MAINTAINERS_GPG: ${{ github.workspace }}/keys/maintainers.gpg
         run: |
           set -euo pipefail
           test "$RUNNER_ENVIRONMENT" = github-hosted
@@ -36,12 +39,14 @@ jobs:
           mkdir -p "$EVIDENCE/workflows"
           git show --no-patch --format='%H%n%T%n%P' HEAD > "$EVIDENCE/source.txt"
           cp simit.toml "$EVIDENCE/policy.toml"
+          sha256sum keys/maintainers.gpg > "$EVIDENCE/maintainers.sha256"
           printf '%s\n' "$GENERATOR_REF" > "$EVIDENCE/generator-ref.txt"
           nix build --no-link --no-write-lock-file --max-jobs 1 --cores 2 --json "$GENERATOR_REF#default" 2> >(tee "$EVIDENCE/producer-build.log" >&2) | tee "$EVIDENCE/producer-build.json"
           generator="$(jq -r '.[0].outputs.out' "$EVIDENCE/producer-build.json")/bin/simit"
           sha256sum "$generator" > "$EVIDENCE/generator.sha256"
           "$generator" init ci --platform github --ci-provider actions --runtime nix 2>&1 | tee "$EVIDENCE/generation.log"
           "$generator" init ci --platform github --ci-provider actions --runtime nix --check --diff 2>&1 | tee "$EVIDENCE/parity.log"
+          git diff --exit-code -- keys/maintainers.gpg
           git diff --binary -- .github/workflows > "$EVIDENCE/generated-ci.patch"
           cp .github/workflows/ci.yaml .github/workflows/nix-builds.yaml .github/workflows/pages.yaml .github/workflows/publish-crate.yaml "$EVIDENCE/workflows/"
       - name: Seal source preparation evidence
