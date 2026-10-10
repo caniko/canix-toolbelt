@@ -43,7 +43,15 @@ jobs:
           git ls-files -z | sort -z | sed -z 's|^|./|' | xargs -0 sha256sum -- > "$EVIDENCE/source.sha256"
           git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
-          nix develop --max-jobs 1 --cores 2 -c cargo test --locked --features orchestration --test orchestration_snapshots --test orchestration_evidence --test orchestration --test orchestration_driver 2>&1 | tee "$EVIDENCE/tests.log"
+          nix develop --max-jobs 1 --cores 2 -c bash -c '
+            set -uo pipefail
+            status=0
+            cargo test --locked --features orchestration --lib || status=1
+            for suite in orchestration_snapshots orchestration_evidence orchestration orchestration_driver; do
+              cargo test --locked --features orchestration --test "$suite" || status=1
+            done
+            exit "$status"
+          ' 2>&1 | tee "$EVIDENCE/tests.log"
       - name: Retain original qualification, including failed candidates
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

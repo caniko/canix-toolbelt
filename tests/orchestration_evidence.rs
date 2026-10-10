@@ -258,3 +258,84 @@ fn overlapping_roots_have_the_same_unique_budget_as_one_root() {
             .any(|path| overlap.files.iter().any(|file| &file.path == path))
     );
 }
+
+#[test]
+fn file_to_directory_transition_requires_a_retained_deletion_before_descendants() {
+    for foreign in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        fs::write(source.path().join("evidence/a"), b"acknowledged file").unwrap();
+        let allowed = vec![PathBuf::from("evidence")];
+        let initial = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let mut known = apply(target.path(), &allowed, &initial).unwrap().accepted;
+        fs::remove_file(source.path().join("evidence/a")).unwrap();
+        fs::create_dir(source.path().join("evidence/a")).unwrap();
+        fs::write(source.path().join("evidence/a/b"), b"new descendant").unwrap();
+        let transition = collect(source.path(), &allowed, &known).unwrap();
+        assert!(
+            transition.files.is_empty(),
+            "descendant must wait for deletion receipt"
+        );
+        assert_eq!(transition.delete.len(), 1);
+        assert_eq!(transition.delete[0].path, "evidence/a");
+        if foreign {
+            fs::write(target.path().join("evidence/a"), b"foreign bytes").unwrap();
+        }
+        let receipt = apply(target.path(), &allowed, &transition).unwrap();
+        if foreign {
+            assert!(receipt.removed.is_empty());
+            assert_eq!(receipt.conflicts, vec!["evidence/a"]);
+            assert_eq!(
+                fs::read(target.path().join("evidence/a")).unwrap(),
+                b"foreign bytes"
+            );
+            assert!(
+                collect(source.path(), &allowed, &known)
+                    .unwrap()
+                    .files
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(receipt.removed, known);
+            // Only the durably retained exact removal bindings release descendants.
+            for (path, sha) in receipt.removed {
+                assert_eq!(known.remove(&path), Some(sha));
+            }
+            let descendants = collect(source.path(), &allowed, &known).unwrap();
+            assert_eq!(descendants.files.len(), 1);
+            assert_eq!(descendants.files[0].path, "evidence/a/b");
+            apply(target.path(), &allowed, &descendants).unwrap();
+            assert_eq!(
+                fs::read(target.path().join("evidence/a/b")).unwrap(),
+                b"new descendant"
+            );
+        }
+    }
+}
+
+#[test]
+fn private_mirror_writers_serialize_on_the_pinned_root_before_mutating() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("handoff"), b"incoming").unwrap();
+    let allowed = vec![PathBuf::from("handoff")];
+    let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    let owner = fs::File::open(target.path()).unwrap();
+    fs2::FileExt::try_lock_exclusive(&owner).unwrap();
+    let contender = apply(target.path(), &allowed, &batch);
+    assert!(contender.is_err(), "another mirror writer holds the lease");
+    assert!(!target.path().join("handoff").exists());
+    fs2::FileExt::unlock(&owner).unwrap();
+    assert_eq!(
+        apply(target.path(), &allowed, &batch)
+            .unwrap()
+            .accepted
+            .len(),
+        1
+    );
+    assert_eq!(
+        fs::read(target.path().join("handoff")).unwrap(),
+        b"incoming"
+    );
+}

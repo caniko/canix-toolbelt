@@ -23,6 +23,7 @@ struct Fixture {
     lookup_error: Option<String>,
     changed_agent: bool,
     changed_permissions: bool,
+    reject_prompt: bool,
 }
 
 impl Adapter for Fixture {
@@ -109,6 +110,12 @@ impl Adapter for Fixture {
                 "input must be durable before network mutation"
             );
             self.submissions.push(body.clone());
+            if self.reject_prompt {
+                return Ok(Reply {
+                    status: 503,
+                    data: json!({"error":"definitive failed submission"}),
+                });
+            }
             self.inbox.entry(id.clone()).or_default().push(json!({"id":body["id"],"sessionID":id,"type":"user","payload":{"text":body["text"],"metadata":body["metadata"]}}));
             if self.ambiguous {
                 return Err(io::Error::other("lost POST response"));
@@ -181,6 +188,7 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         lookup_error: None,
         changed_agent: false,
         changed_permissions: false,
+        reject_prompt: false,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -225,6 +233,79 @@ fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate(
         pending["version"]
     );
     assert_eq!(fixture.submissions.len(), 1);
+}
+
+#[test]
+fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliation() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    state["packets"]["1"]["versionInputs"] = json!({"source":"same"});
+    fixture.reject_prompt = true;
+    let first = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "2026-10-08T00:00:00Z",
+        1791417600,
+        true,
+    )
+    .unwrap();
+    assert_eq!(first.errors.len(), 1);
+    assert!(fixture.inbox.is_empty());
+    let body = state["packets"]["1"]["pending"]["body"].clone();
+    fixture.recent.insert(
+        0,
+        json!({"id":"intervening-idle","type":"idle","time":{"created":1791419100000i64}}),
+    );
+    fixture.reject_prompt = false;
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "2026-10-08T01:00:00Z",
+        1791421200,
+        true,
+    )
+    .unwrap();
+    assert_eq!(fixture.submissions, vec![body.clone(), body.clone()]);
+    fixture.inbox.clear();
+    fixture.messages.insert(body["id"].as_str().unwrap().into(), json!({"id":body["id"],"sessionID":"ses_original","type":"user","payload":{"text":body["text"],"metadata":body["metadata"]}}));
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "2026-10-08T01:00:01Z",
+        1791421201,
+        true,
+    )
+    .unwrap();
+    assert!(state["packets"]["1"]["pending"].is_null());
+    assert!(state["packets"]["1"]["idleRecovery"].is_null());
+    assert_eq!(
+        fixture.submissions.len(),
+        2,
+        "stale idle must not trigger another prompt"
+    );
+    fixture.recent[0] =
+        json!({"id":"after-delivery-idle","type":"idle","time":{"created":1791421202000i64}});
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "2026-10-08T01:06:00Z",
+        1791421560,
+        true,
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["idleRecovery"]["attempts"], 1);
+    assert_eq!(fixture.submissions.len(), 3);
 }
 
 #[test]

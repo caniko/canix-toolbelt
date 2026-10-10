@@ -211,6 +211,82 @@ fn checkpoint_progress_deduplicates_and_stale_merge_claims_are_not_adopted() {
 }
 
 #[test]
+fn ready_for_work_cannot_close_a_terminal_packet_before_its_continuation_is_delivered() {
+    for native_state in ["MERGED", "CLOSED"] {
+        let mut manifest = manifest();
+        manifest.packets.truncate(1);
+        manifest.assignment_count = 1;
+        manifest.baseline_count = Some(1);
+        let (mut state, version) = delivered_state(
+            json!({"url":"one","state":native_state,"head":"h","comments":[]}),
+            &manifest,
+        );
+        let reports = BTreeMap::from([(
+            1,
+            json!({"schemaVersion":1,"packet":1,"status":"ready_for_work","eventVersion":version,"nextAction":"registered follow-up","prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"current audit"}]}),
+        )]);
+        refresh(
+            &manifest,
+            &mut state,
+            &policy(),
+            &reports,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(state["packets"]["1"]["auditBacklog"], 0);
+        assert!(state["packets"]["1"]["auditedFeedback"]["one"].is_string());
+        assert_eq!(state["packets"]["1"]["terminal"], false);
+        assert!(needs_wake(&state["packets"]["1"]));
+        let active = BTreeMap::from([("builder".into(), [].into())]);
+        assert!(!finished(&manifest, &state, &active, true));
+        // Completion independently rejects an imported stale terminal flag.
+        let mut stale = state.clone();
+        stale["packets"]["1"]["terminal"] = json!(true);
+        assert!(!finished(&manifest, &stale, &active, true));
+        let body = prepare(
+            &mut state,
+            &manifest.packets[0],
+            &policy(),
+            "deliver requested follow-up",
+            "2026-10-10T00:00:00Z",
+        )
+        .unwrap();
+        acknowledge(
+            &mut state,
+            1,
+            body["id"].as_str().unwrap(),
+            "2026-10-10T00:00:01Z",
+        )
+        .unwrap();
+        refresh(
+            &manifest,
+            &mut state,
+            &policy(),
+            &reports,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !needs_wake(&state["packets"]["1"]),
+            "old report must not regenerate the same continuation"
+        );
+    }
+}
+
+#[test]
+fn idle_recovery_uses_a_delivered_boundary_with_millisecond_precision() {
+    let mut ps = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z","deliveredAt":"2026-10-08T01:00:00.900Z","observationVersion":"source"});
+    let idle = json!({"id":"old-idle","time":{"created":1791421200899i64}});
+    assert!(!record_idle_recovery(&mut ps, &idle, 1791421800));
+    assert!(ps["idleRecovery"].is_null());
+    let idle = json!({"id":"new-idle","time":{"created":1791421200901i64}});
+    assert!(record_idle_recovery(&mut ps, &idle, 1791421800));
+    assert!(!record_idle_recovery(&mut ps, &idle, 1791421801));
+}
+
+#[test]
 fn old_audit_cannot_absorb_edited_feedback_or_a_new_linked_repair() {
     let mut manifest = manifest();
     let (mut state, version) = delivered_state(

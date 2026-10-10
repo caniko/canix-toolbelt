@@ -146,12 +146,22 @@ pub fn collect(
     allowed: &[PathBuf],
     known: &BTreeMap<String, String>,
 ) -> io::Result<Batch> {
+    collect_with(root, allowed, known, &mut |_| {})
+}
+
+fn collect_with(
+    root: &Path,
+    allowed: &[PathBuf],
+    known: &BTreeMap<String, String>,
+    directory_observed: &mut impl FnMut(&Path),
+) -> io::Result<Batch> {
     fn walk(
         root: &Path,
         path: &Path,
         known: &BTreeMap<String, String>,
         batch: &mut Batch,
         size: &mut usize,
+        directory_observed: &mut impl FnMut(&Path),
     ) -> io::Result<()> {
         let full = root.join(path);
         let meta = match fs::symlink_metadata(&full) {
@@ -172,10 +182,18 @@ pub fn collect(
         {
             batch.omitted.push(name);
         } else if meta.is_dir() {
+            directory_observed(path);
             let mut children = fs::read_dir(full)?.collect::<Result<Vec<_>, _>>()?;
             children.sort_by_key(|entry| entry.file_name());
             for child in children {
-                walk(root, &path.join(child.file_name()), known, batch, size)?;
+                walk(
+                    root,
+                    &path.join(child.file_name()),
+                    known,
+                    batch,
+                    size,
+                    directory_observed,
+                )?;
             }
         } else {
             let bytes = read(&full)?;
@@ -234,7 +252,7 @@ pub fn collect(
         if let Some(parent) = path.parent() {
             ancestors(root, parent)?;
         }
-        walk(root, path, known, &mut batch, &mut size)?;
+        walk(root, path, known, &mut batch, &mut size, directory_observed)?;
     }
     for (name, sha) in known {
         let path = Path::new(name);
@@ -513,6 +531,44 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_ancestor_replacement_never_collects_outside_bytes() {
+        let source = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        fs::write(source.path().join("evidence/receipt"), b"owned evidence").unwrap();
+        fs::write(outside.path().join("receipt"), b"OUTSIDE SENTINEL").unwrap();
+        let mut changed = false;
+        let result = collect_with(
+            source.path(),
+            &[PathBuf::from("evidence")],
+            &BTreeMap::new(),
+            &mut |path| {
+                if path == Path::new("evidence") && !changed {
+                    changed = true;
+                    fs::rename(
+                        source.path().join("evidence"),
+                        source.path().join("retained"),
+                    )
+                    .unwrap();
+                    std::os::unix::fs::symlink(outside.path(), source.path().join("evidence"))
+                        .unwrap();
+                }
+            },
+        );
+        assert!(changed, "did not exercise the ancestor replacement");
+        if let Ok(batch) = result {
+            assert!(
+                batch
+                    .files
+                    .iter()
+                    .all(|item| item.bytes != b"OUTSIDE SENTINEL")
+            );
+            assert_eq!(batch.files.len(), 1);
+            assert_eq!(batch.files[0].bytes, b"owned evidence");
+        }
+    }
+
     #[test]
     fn pinned_receiver_parent_cannot_follow_a_concurrent_ancestor_symlink() {
         let target = tempfile::tempdir().unwrap();
