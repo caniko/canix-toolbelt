@@ -3,6 +3,7 @@ name: Nix installable builds
 
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -10,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: ${{ github.workflow_ref }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -29,6 +30,7 @@ jobs:
           - ".#canix-toolbelt-build-train"
           - ".#canix-toolbelt-direct-network"
           - ".#checks.x86_64-linux.direct-network-eval"
+          - ".#checks.x86_64-linux.executor-admission-eval"
           - ".#checks.x86_64-linux.direct-network-transitions"
           - ".#checks.x86_64-linux.build-train-eval"
           - ".#checks.x86_64-linux.build-train-policy"
@@ -69,7 +71,7 @@ jobs:
           git rev-parse HEAD > "$SIMIT_NIX_BUILD_RESULTS/revision"
           printf '%s\n' "$INSTALLABLE" > "$SIMIT_NIX_BUILD_RESULTS/installable"
       - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
       - name: Configure GitHub input transport
         run: |
@@ -80,6 +82,17 @@ jobs:
         run: |
           set -eu
           test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          # Branch/PR qualification binds original attempt-1 production. A signed-tag
+          # release can retry its original run after a transient upload/registry failure.
+          if [ "${GITHUB_EVENT_NAME:-}" != push ] || [ "${GITHUB_REF_TYPE:-}" != tag ]; then
+            test "${GITHUB_RUN_ATTEMPT:-}" = 1
+          fi
+          if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+            revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            git fetch origin "$revision"
+            git checkout --detach "$revision"
+            test "$(git rev-parse HEAD)" = "$revision"
+          fi
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
@@ -88,6 +101,18 @@ jobs:
             printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
             printf '%s\n' 'SIMIT_HOSTED_NIX_CONFIG'
           } >> "$GITHUB_ENV"
+          if [ -n "${SIMIT_NIX_BUILD_RESULTS:-}" ]; then
+            # Preserve the runner's initial merge-checkout observation separately.
+            cp "$SIMIT_NIX_BUILD_RESULTS/revision" "$SIMIT_NIX_BUILD_RESULTS/checkout-revision"
+            expected="${GITHUB_SHA:?}"
+            if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+              expected="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            fi
+            test "$(git rev-parse HEAD)" = "$expected"
+            git diff --exit-code HEAD --
+            git rev-parse HEAD > "$SIMIT_NIX_BUILD_RESULTS/revision"
+            git rev-parse 'HEAD^{tree}' > "$SIMIT_NIX_BUILD_RESULTS/tree"
+          fi
 
       - name: Build ${{ matrix.installable }}
         env:
@@ -107,7 +132,7 @@ jobs:
 
         with:
           name: nix-build-${{ strategy.job-index }}
-          retention-days: 14
+          retention-days: 32
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/simit-nix-build-${{ strategy.job-index }}

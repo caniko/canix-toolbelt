@@ -3,6 +3,7 @@
   pkgs,
 }: let
   inherit (pkgs) lib;
+  pinentry = import ../lib/pinentry.nix {inherit lib;};
   evaluate = {
     settings ? {},
     nushell ? false,
@@ -32,6 +33,12 @@
     settings = {
       enable = true;
       rageIntegration = true;
+    };
+  };
+  explicitZellij = evaluate {
+    settings = {
+      enable = true;
+      inherit (pkgs) zellij;
     };
   };
   coexist = evaluate {
@@ -68,6 +75,9 @@ in
   assert !disabled.programs.gpg.enable;
   assert disabled.canix-toolbelt.pinentry.packages == {};
   assert !direct.programs.gpg.enable;
+  assert direct.canix-toolbelt.pinentry.zellij.drvPath == (pinentry.mkZellij {inherit pkgs;}).drvPath;
+  assert direct.canix-toolbelt.pinentry.packages.zellij.drvPath == direct.canix-toolbelt.pinentry.zellij.drvPath;
+  assert explicitZellij.canix-toolbelt.pinentry.packages.zellij.drvPath == pkgs.zellij.drvPath;
   assert lib.any (package: package.outPath == direct.canix-toolbelt.pinentry.packages.rage.outPath) direct.home.packages;
   assert gpg.programs.gpg.package.outPath == gpg.canix-toolbelt.pinentry.packages.gpg.outPath;
   assert gpg.services.gpg-agent.pinentry.program == "canix-toolbelt-pinentry-agent";

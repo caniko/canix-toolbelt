@@ -198,6 +198,7 @@
           {
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs inputs;};
             direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
+            executor-admission-eval = import ./nixos-tests/executor-admission-eval.nix {inherit pkgs inputs;};
             direct-network-transitions = import ./nixos-tests/direct-network-transitions.nix {inherit pkgs inputs;};
             build-train-policy = assert (import ./nixos-tests/build-train-policy.nix {inherit inputs;}) != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};

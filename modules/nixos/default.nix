@@ -40,6 +40,7 @@
   caddy-service-registry = ./services/caddy-service-registry.nix;
   dev-agent-isolation = ./services/dev-agent-isolation.nix;
   dev-oom-guard = ./services/dev-oom-guard.nix;
+  executor-admission = ./services/executor-admission.nix;
   gatus-instances = ./services/gatus-instances.nix;
   gatus-health-publisher = ./services/gatus-health-publisher.nix;
   gatus-external-ingress = ./services/gatus-external-ingress.nix;

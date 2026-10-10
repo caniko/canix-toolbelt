@@ -2,7 +2,7 @@
 
 <!-- simit:badges:start -->
 
-[![CI](https://img.shields.io/badge/CI-managed-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
+[![CI](https://img.shields.io/badge/CI-managed+extra-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
 
 <!-- simit:badges:end -->
 
@@ -28,6 +28,27 @@ Two output families:
   apps without carrying per-project copies.
 
 ## Usage
+
+### Hosted evidence custody
+
+`retain-producer-evidence.yaml` observes the existing exact-head, attempt-1
+CI and installable runs for both branch pushes and pull requests. It binds each
+packet to its own event and head, with separate push and PR archives. It retains
+the event payload, original provider logs, job metadata, source workflow hashes
+and a SHA-256-bound receipt for 32 days. The final step checks actual provider
+expiry against the 30-day floor and requires both original producer conclusions
+to pass. It never reruns either producer.
+Custody does not establish complete test coverage, zero skips or architecture
+execution; those still require independent inspection of the retained results.
+Failed pinentry integration cases print disposable fixture pane and process
+state before cleanup, preserving their original assertions and deadlines.
+
+### Live executor admission
+
+`nixosModules.executor-admission` binds independently enabled workers to live
+toolbelt profiles and registers their admission files as activation artifacts.
+Detaching a profile closes new admission without changing worker units or their
+restart triggers. See [executor admission](docs/executor-admission.md).
 
 ### Hardware-key pinentry
 
