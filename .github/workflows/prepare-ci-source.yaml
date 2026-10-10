@@ -6,6 +6,10 @@ on:
       - simit.toml
       - README.md
       - .github/workflows/prepare-ci-source.yaml
+      - .github/workflows/ci.yaml
+      - .github/workflows/nix-builds.yaml
+      - .github/workflows/pages.yaml
+      - .github/workflows/publish-crate.yaml
 
 permissions:
   contents: read
