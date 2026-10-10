@@ -194,6 +194,50 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
 }
 
 #[test]
+fn completion_of_an_old_compaction_cannot_release_a_new_physical_context() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    state["packets"]["1"]["pendingCompaction"] = json!({"body":{"id":"msg_old_compaction","delivery":"steer"},"physicalMessageID":"msg_old_physical","preparedAt":"before"});
+    fixture.messages.insert(
+        "msg_old_compaction".into(),
+        json!({"id":"msg_old_compaction","type":"compaction","status":"completed"}),
+    );
+    fixture.recent = vec![assistant("msg_new_physical", 2000, 200_000)];
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(
+        fixture.submissions.is_empty(),
+        "old compaction released a still-oversized new context"
+    );
+    assert!(state["packets"]["1"]["pending"].is_null());
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "next",
+        1,
+        true,
+    )
+    .unwrap();
+    assert_eq!(fixture.submissions.len(), 1);
+    assert!(fixture.submissions[0]["text"].is_null());
+    assert_eq!(
+        state["packets"]["1"]["pendingCompaction"]["physicalMessageID"],
+        "msg_new_physical"
+    );
+}
+
+#[test]
 fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.ambiguous = true;

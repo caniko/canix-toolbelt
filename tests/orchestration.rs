@@ -20,6 +20,69 @@ fn policy() -> Policy {
 }
 
 #[test]
+fn retained_manifest_and_packet_extensions_cannot_be_silently_lost() {
+    let mut old = manifest();
+    old.extra
+        .insert("launchEvidence".into(), json!({"source":"original"}));
+    old.packets[0]
+        .extra
+        .insert("ownerEvidence".into(), json!({"identity":"retained"}));
+    let mut state = json!({"prs":{},"packets":{}});
+    refresh(
+        &old,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    for scope in ["manifest", "packet"] {
+        let mut new = old.clone();
+        if scope == "manifest" {
+            new.extra.clear();
+        } else {
+            new.packets[0].extra.clear();
+        }
+        let before = state.clone();
+        assert!(
+            refresh(
+                &new,
+                &mut state,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err(),
+            "retained {scope} evidence was silently discarded"
+        );
+        assert_eq!(state, before);
+    }
+}
+
+#[test]
+fn retained_pr_record_urls_must_equal_their_assignment_keys() {
+    for url in [Value::Null, json!("other"), json!("")] {
+        let mut state = json!({"prs":{"one":{"url":url,"state":"CLOSED"}},"packets":{}});
+        let before = state.clone();
+        assert!(
+            refresh(
+                &manifest(),
+                &mut state,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err(),
+            "foreign PR identity entered the retained journal"
+        );
+        assert_eq!(state, before);
+    }
+}
+
+#[test]
 fn additive_repair_keeps_original_owner_and_baseline() {
     let old = manifest();
     let mut new = old.clone();

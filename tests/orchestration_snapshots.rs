@@ -24,6 +24,31 @@ fn pull() -> Value {
 }
 
 #[test]
+fn github_bounds_inline_comments_across_all_threads() {
+    let mut p = pull();
+    let nodes: Vec<_> = (0..21).map(|thread| json!({"id":format!("thread_{thread}"),"comments":{"totalCount":100,"nodes":(0..100).map(|comment|json!({"id":format!("comment_{thread}_{comment}")})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
+    p["reviewThreads"] = json!({"totalCount":21,"nodes":nodes,"pageInfo":{"hasNextPage":false}});
+    let mut transport = Graph(vec![
+        json!({"repository":{"pullRequest":p}}),
+        json!({"repository":{"pullRequest":p}}),
+    ]);
+    let error = github(
+        &mut transport,
+        "https://github.com/owner/repo/pull/1",
+        &json!({}),
+        "now",
+        0,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("aggregate"), "{error}");
+    assert_eq!(
+        transport.0.len(),
+        1,
+        "oversized aggregate fetched the final observation"
+    );
+}
+
+#[test]
 fn github_rejects_another_pull_identity_before_collecting_its_history() {
     for url in [
         Value::Null,
@@ -166,9 +191,7 @@ impl ForgeRest for Forge {
         assert_eq!(host, "codefloe.com");
         self.calls.push(path.into());
         if path == "repos/owner/repo/pulls/1" {
-            return Ok(
-                json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"2026-10-09T00:00:00Z"}),
-            );
+            return Ok(forge_pull());
         }
         if path.contains("/status?") {
             return Ok(if path.ends_with("page=1") {
@@ -356,7 +379,87 @@ impl ForgeRest for ForgeScript {
 }
 
 fn forge_pull() -> Value {
-    json!({"head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"2026-10-09T00:00:00Z"})
+    json!({"number":1,"html_url":"https://codefloe.com/owner/repo/pulls/1","head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"updated_at":"2026-10-09T00:00:00Z"})
+}
+
+#[test]
+fn forgejo_binds_the_returned_pull_identity_before_history_collection() {
+    for (field, bad) in [
+        ("number", json!(2)),
+        ("number", Value::Null),
+        ("html_url", json!("https://codefloe.com/other/repo/pulls/1")),
+        ("html_url", Value::Null),
+    ] {
+        let mut p = forge_pull();
+        p[field] = bad;
+        let mut transport = ForgeScript(vec![
+            ("repos/owner/repo/pulls/1".into(), p),
+            (
+                "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+                json!([]),
+            ),
+        ]);
+        assert!(
+            forgejo(
+                &mut transport,
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now"
+            )
+            .is_err()
+        );
+        assert_eq!(transport.0.len(), 1, "wrong pull collected history");
+    }
+}
+
+#[test]
+fn forgejo_bounds_inline_comments_across_all_reviews_before_pagination() {
+    struct LargeForge {
+        calls: usize,
+    }
+    impl ForgeRest for LargeForge {
+        fn get(&mut self, _: &str, path: &str) -> io::Result<Value> {
+            self.calls += 1;
+            if path == "repos/owner/repo/pulls/1" {
+                return Ok(forge_pull());
+            }
+            if path.contains("/status?") {
+                return Ok(forge_status());
+            }
+            if path == "repos/owner/repo/pulls/1/reviews?limit=100&page=1" {
+                return Ok(json!(
+                    (1..=21)
+                        .map(|id| json!({"id":id,"comments_count":100}))
+                        .collect::<Vec<_>>()
+                ));
+            }
+            if let Some(id) = path
+                .strip_prefix("repos/owner/repo/pulls/1/reviews/")
+                .and_then(|s| s.split('/').next())
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                if path.ends_with("page=1") {
+                    return Ok(json!(
+                        (1..=100)
+                            .map(|c| json!({"id":id*1000+c}))
+                            .collect::<Vec<_>>()
+                    ));
+                }
+            }
+            Ok(json!([]))
+        }
+    }
+    let mut transport = LargeForge { calls: 0 };
+    let error = forgejo(
+        &mut transport,
+        "https://codefloe.com/owner/repo/pulls/1",
+        "now",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("aggregate"), "{error}");
+    assert!(
+        transport.calls <= 3,
+        "oversized aggregate launched inline pagination"
+    );
 }
 
 fn forge_status() -> Value {

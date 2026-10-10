@@ -323,6 +323,114 @@ fn file_to_directory_transition_requires_a_retained_deletion_before_descendants(
 }
 
 #[test]
+fn directory_to_file_transition_stages_descendant_removal_before_replacement() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    fs::create_dir_all(source.path().join("evidence/a/nested")).unwrap();
+    fs::write(
+        source.path().join("evidence/a/nested/b"),
+        b"acknowledged descendant",
+    )
+    .unwrap();
+    let allowed = vec![PathBuf::from("evidence")];
+    let initial = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    let mut known = apply(target.path(), &allowed, &initial).unwrap().accepted;
+    fs::remove_dir_all(source.path().join("evidence/a")).unwrap();
+    fs::write(source.path().join("evidence/a"), b"replacement file").unwrap();
+    let transition = collect(source.path(), &allowed, &known)
+        .expect("regular ancestor must stage descendant deletion");
+    assert!(transition.files.is_empty());
+    assert_eq!(transition.delete.len(), 1);
+    let receipt = apply(target.path(), &allowed, &transition).unwrap();
+    assert_eq!(receipt.removed, known);
+    for (path, sha) in receipt.removed {
+        assert_eq!(known.remove(&path), Some(sha));
+    }
+    let replacement = collect(source.path(), &allowed, &known).unwrap();
+    apply(target.path(), &allowed, &replacement).unwrap();
+    assert_eq!(
+        fs::read(target.path().join("evidence/a")).unwrap(),
+        b"replacement file"
+    );
+}
+
+#[test]
+fn receiver_leaf_type_changes_are_conflicts_while_unrelated_artifacts_advance() {
+    use std::os::unix::fs::symlink;
+    for kind in ["directory", "symlink", "fifo", "oversized"] {
+        let source = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        fs::write(source.path().join("evidence/a"), b"acknowledged").unwrap();
+        let allowed = vec![PathBuf::from("evidence")];
+        let first = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let known = apply(target.path(), &allowed, &first).unwrap().accepted;
+        let path = target.path().join("evidence/a");
+        fs::remove_file(&path).unwrap();
+        match kind {
+            "directory" => fs::create_dir(&path).unwrap(),
+            "symlink" => symlink("/nonexistent-foreign-evidence", &path).unwrap(),
+            "fifo" => rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::from_bits_truncate(0o600),
+                0,
+            )
+            .unwrap(),
+            _ => fs::File::create(&path)
+                .unwrap()
+                .set_len(8 * 1024 * 1024 + 1)
+                .unwrap(),
+        }
+        fs::write(source.path().join("evidence/a"), b"source changed").unwrap();
+        fs::write(source.path().join("evidence/b"), b"independent addition").unwrap();
+        let batch = collect(source.path(), &allowed, &known).unwrap();
+        let receipt = apply(target.path(), &allowed, &batch)
+            .expect("leaf type change must be a per-path conflict");
+        assert_eq!(receipt.conflicts, vec!["evidence/a"]);
+        assert!(receipt.accepted.contains_key("evidence/b"));
+        assert_eq!(
+            fs::read(target.path().join("evidence/b")).unwrap(),
+            b"independent addition"
+        );
+        assert!(
+            fs::symlink_metadata(path).is_ok(),
+            "foreign leaf was removed"
+        );
+    }
+}
+
+#[test]
+fn source_inventory_is_bounded_across_directories_and_in_depth() {
+    let source = tempfile::tempdir().unwrap();
+    let mut deep = source.path().join("evidence");
+    for _ in 0..65 {
+        deep = deep.join("d");
+    }
+    fs::create_dir_all(&deep).unwrap();
+    assert!(
+        collect(
+            source.path(),
+            &[PathBuf::from("evidence")],
+            &BTreeMap::new()
+        )
+        .is_err(),
+        "unbounded directory depth accepted"
+    );
+    let broad = tempfile::tempdir().unwrap();
+    for parent in ["left", "right"] {
+        for child in 0..10001 {
+            fs::create_dir_all(broad.path().join(format!("evidence/{parent}/{child}"))).unwrap();
+        }
+    }
+    assert!(
+        collect(broad.path(), &[PathBuf::from("evidence")], &BTreeMap::new()).is_err(),
+        "per-directory limits allowed an oversized aggregate walk"
+    );
+}
+
+#[test]
 fn private_mirror_writers_serialize_on_the_pinned_root_before_mutating() {
     let source = tempfile::tempdir().unwrap();
     let target = mirror_dir();
