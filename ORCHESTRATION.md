@@ -35,6 +35,9 @@ source-bound dependency digests and worker reports, and report unsuccessful
 observations independently. Neither an idle session nor a waiting report proves
 completion. `finished` requires complete idle host observations and exact audited
 terminal coverage, including linked work and pending admissions.
+An audited terminal PR with a `ready_for_work` checkpoint remains unfinished until
+the resulting progress version has a durable delivery receipt. Pending inputs
+retain `progressVersion`; acknowledgment records `deliveredProgressVersion`.
 
 ## Admission and recovery
 
@@ -58,6 +61,10 @@ reuse an already-delivered request ID. Existing pending IDs and bodies stay exac
 without a usable checkpoint. `schedule_recheck` permits one bounded follow-up
 per unchanged waiting report. Both use an injected clock. New source/evidence or
 a new report can release further useful work.
+Each POST attempt persists `pending.submissionAttemptAt` before submission, and
+its receipt retains `deliveredSubmissionAttemptAt`. Idle recovery compares the
+full instant against that actual attempt, falling back conservatively to
+`deliveredAt` for historical receipts. Preparation time alone is insufficient.
 
 `Lease` acquires the existing persistent coordinator lock without replacing or
 unlinking its anchor. `atomic_json` uses private, fsynced, create-new staging and
@@ -118,6 +125,10 @@ outdated/resolved review threads, nested inline comments and check contexts.
 All GitHub connections require stable declared counts; the single checked commit
 must match the PR head. Forgejo inline counts and nonempty unique history IDs are
 validated too. Both forges re-fetch the complete check rollup after collection.
+GitHub revisions must be full 40-digit hexadecimal object IDs, and its update
+identity must parse as RFC 3339 before history is fetched. Malformed check rollups
+return errors. Forgejo accepts exactly 2,000 rows only after an empty sentinel
+page; a nonempty or malformed sentinel fails the bounded observation.
 Forgejo requires a valid retained update timestamp, and inline-comment identities
 must remain unique across the combined review history.
 Malformed/truncated pagination, repeated cursors, and comparison movement fail
@@ -130,15 +141,30 @@ omitted/deferred artifacts separately. Scope and digests are validated before
 application. Unexpected receiver edits remain conflicts; only acknowledged
 digests advance the exchange journal. Replication targets are private mirrors of
 the authoritative owner's paths, serialized by the shared exchange lease.
+`evidence::apply` acquires the lease before receiver validation or mutation.
+`evidence::Mirror::acquire` pins a mode-0700 root and locks that directory inode
+exclusively, without waiting. Retain this guard around every authorized local
+mutation and use `Mirror::apply` for exchanges within the same lease. Legacy
+adapters must lock the same root inode before editing, renaming or deleting its
+contents. The active root itself must not be replaced. This contract serializes
+cooperative writers; it supplies no inode-CAS guarantee against lease-bypassing
+processes. Conflicts observed under the lease preserve receiver bytes.
 Overlapping roots are normalized before traversal. Unchanged acknowledged paths
 remain in `Batch.verify`, so receiver edits or deletions cannot evade comparison.
 Source deletions enter `Batch.delete` and remove only the acknowledged receiver
 bytes; replays are idempotent. Persist `Receipt.removed` and remove those exact
-path/digest bindings from the sender's `known` map. Application independently
+path/digest bindings from the sender's `known` map. A source file becoming a
+directory uses two exchanges: defer descendants, remove the acknowledged receiver
+file, retain that removal receipt, then transfer descendants once its old identity
+is removed from `known`. A conflicting receiver file continues to block descendants.
+Application independently
 enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/deferred
 entries and the
 48 MiB encoded-payload estimate. Receiver reads, directory creation, staging,
 rename and deletion use pinned no-follow directory handles.
+Source enumeration, artifact reads and deletion discovery also use pinned
+no-follow handles; an ancestor replacement cannot redirect collection outside
+the already-open authoritative directory.
 
 Worker report URLs must be unique across `prs` and `linkedReleasePRs`; duplicate
 entries reject the entire refresh without adopting partial progress or audits.

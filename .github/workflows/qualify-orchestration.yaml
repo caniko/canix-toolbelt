@@ -52,6 +52,10 @@ jobs:
             done
             exit "$status"
           ' 2>&1 | tee "$EVIDENCE/tests.log"
+      - name: Strict orchestration lint gate
+        run: |
+          set -euo pipefail
+          nix develop --max-jobs 1 --cores 2 -c cargo clippy --locked --features orchestration --all-targets -- -D warnings 2>&1 | tee "$RUNNER_TEMP/orchestration-qualification/clippy.log"
       - name: Retain original qualification, including failed candidates
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
