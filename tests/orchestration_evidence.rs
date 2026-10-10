@@ -488,6 +488,117 @@ fn directory_retirement_preserves_foreign_content_and_retains_retry_identities()
 }
 
 #[test]
+fn blocked_receiver_ancestors_are_conflicts_for_writes_verifies_and_deletions() {
+    use std::os::unix::fs::symlink;
+    for kind in ["file", "symlink", "checkout"] {
+        for change in ["update", "verify", "delete"] {
+            let source = tempfile::tempdir().unwrap();
+            let target = mirror_dir();
+            let outside = tempfile::tempdir().unwrap();
+            fs::create_dir_all(source.path().join("evidence/nested")).unwrap();
+            fs::write(source.path().join("evidence/nested/a"), b"acknowledged").unwrap();
+            let allowed = vec![PathBuf::from("evidence")];
+            let known = apply(
+                target.path(),
+                &allowed,
+                &collect(source.path(), &allowed, &BTreeMap::new()).unwrap(),
+            )
+            .unwrap()
+            .accepted;
+            fs::remove_dir_all(target.path().join("evidence/nested")).unwrap();
+            let path = target.path().join("evidence/nested");
+            match kind {
+                "file" => fs::write(&path, b"foreign ancestor").unwrap(),
+                "symlink" => {
+                    fs::write(outside.path().join("a"), b"outside sentinel").unwrap();
+                    symlink(outside.path(), &path).unwrap();
+                }
+                _ => {
+                    fs::create_dir(&path).unwrap();
+                    fs::create_dir(path.join(".git")).unwrap();
+                    fs::write(path.join("a"), b"checkout sentinel").unwrap();
+                }
+            }
+            if change == "update" {
+                fs::write(source.path().join("evidence/nested/a"), b"new owned").unwrap();
+            }
+            if change == "delete" {
+                fs::remove_file(source.path().join("evidence/nested/a")).unwrap();
+            }
+            fs::write(source.path().join("evidence/independent"), b"independent").unwrap();
+            let batch = collect(source.path(), &allowed, &known).unwrap();
+            let receipt = apply(target.path(), &allowed, &batch).unwrap();
+            assert!(receipt.conflicts.contains(&"evidence/nested/a".into()));
+            assert!(receipt.accepted.contains_key("evidence/independent"));
+            assert!(!receipt.accepted.contains_key("evidence/nested/a"));
+            assert!(receipt.removed.is_empty());
+            if kind == "file" {
+                assert_eq!(fs::read(path).unwrap(), b"foreign ancestor");
+            } else if kind == "symlink" {
+                assert_eq!(
+                    fs::read(outside.path().join("a")).unwrap(),
+                    b"outside sentinel"
+                );
+            } else {
+                assert_eq!(fs::read(path.join("a")).unwrap(), b"checkout sentinel");
+            }
+        }
+    }
+}
+
+#[test]
+fn oversized_directory_transitions_drain_acknowledged_descendants_in_bounded_exchanges() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    fs::create_dir_all(source.path().join("evidence/a/nested")).unwrap();
+    for id in 0..15000 {
+        fs::write(
+            source.path().join(format!("evidence/a/nested/{id:05}")),
+            b"old",
+        )
+        .unwrap();
+    }
+    let allowed = vec![PathBuf::from("evidence")];
+    let mut known = BTreeMap::new();
+    for _ in 0..2 {
+        let batch = collect(source.path(), &allowed, &known).unwrap();
+        known.extend(apply(target.path(), &allowed, &batch).unwrap().accepted);
+    }
+    assert_eq!(known.len(), 15000);
+    fs::remove_dir_all(source.path().join("evidence/a")).unwrap();
+    fs::write(source.path().join("evidence/a"), b"new file").unwrap();
+    for count in [5000, 0] {
+        let batch = collect(source.path(), &allowed, &known).unwrap();
+        assert!(batch.files.is_empty());
+        assert!(batch.delete.len() <= 10000);
+        let receipt = apply(target.path(), &allowed, &batch).unwrap();
+        assert!(receipt.conflicts.is_empty());
+        for (path, sha) in receipt.removed {
+            assert_eq!(known.remove(&path).as_deref(), Some(sha.as_str()));
+        }
+        assert_eq!(known.len(), count);
+        if count > 0 {
+            assert!(receipt.pruned.is_empty());
+            assert!(target.path().join("evidence/a").is_dir());
+        } else {
+            assert_eq!(receipt.pruned, vec!["evidence/a"]);
+        }
+    }
+    let batch = collect(source.path(), &allowed, &known).unwrap();
+    assert_eq!(
+        apply(target.path(), &allowed, &batch)
+            .unwrap()
+            .accepted
+            .len(),
+        1
+    );
+    assert_eq!(
+        fs::read(target.path().join("evidence/a")).unwrap(),
+        b"new file"
+    );
+}
+
+#[test]
 fn source_inventory_is_bounded_across_directories_and_in_depth() {
     let source = tempfile::tempdir().unwrap();
     let mut deep = source.path().join("evidence");
