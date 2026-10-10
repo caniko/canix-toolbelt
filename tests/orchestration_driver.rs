@@ -336,6 +336,70 @@ fn retained_legacy_compaction_ids_and_bodies_are_retried_verbatim() {
 }
 
 #[test]
+fn queued_compactions_remain_healthy_waits_without_new_dispatch() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    let body = json!({"id":"msg_queued_compaction","delivery":"steer"});
+    state["packets"]["1"]["pendingCompaction"] =
+        json!({"body":body,"physicalMessageID":"msg_physical","preparedAt":"before"});
+    fixture.recent = vec![
+        assistant("msg_physical", 1000, 200_000),
+        json!({"id":"msg_queued_compaction","type":"compaction","status":"queued","time":{"created":2000}}),
+    ];
+    fixture
+        .messages
+        .insert("msg_queued_compaction".into(), fixture.recent[1].clone());
+    let original = state["packets"]["1"]["pendingCompaction"].clone();
+    let result = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert!(fixture.submissions.is_empty());
+    assert_eq!(state["packets"]["1"]["pendingCompaction"], original);
+}
+
+#[test]
+fn malformed_retained_compactions_fail_before_journal_publication_or_dispatch() {
+    for pending in [
+        json!(false),
+        json!([]),
+        json!("unknown"),
+        json!({}),
+        json!({"body":{"id":"msg_pending"}}),
+        json!({"body":{"id":"bad identity","delivery":"steer"},"physicalMessageID":"msg_physical","preparedAt":"before"}),
+        json!({"body":{"id":"msg_pending","delivery":"wrong"},"physicalMessageID":"msg_physical","preparedAt":"before"}),
+    ] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        state["packets"]["1"]["pendingCompaction"] = pending;
+        let original = state.clone();
+        let saved = fixture.saved.clone();
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert!(fixture.submissions.is_empty());
+        assert_eq!(state, original);
+        assert_eq!(fixture.saved, saved);
+    }
+}
+
+#[test]
 fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.ambiguous = true;

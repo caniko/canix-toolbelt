@@ -279,6 +279,56 @@ fn finished_rejects_imported_terminal_flags_with_a_retained_waiting_obligation()
 }
 
 #[test]
+fn unsupported_worker_status_cannot_adopt_terminal_audits() {
+    for status in [
+        None,
+        Some(json!(null)),
+        Some(json!("")),
+        Some(json!("unknown")),
+        Some(json!(true)),
+    ] {
+        let manifest = manifest();
+        let policy = policy();
+        let mut state = json!({"prs":{"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}},"packets":{}});
+        refresh(
+            &manifest,
+            &mut state,
+            &policy,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let input = prepare(
+            &mut state,
+            &manifest.packets[0],
+            &policy,
+            "audit source",
+            "at",
+        )
+        .unwrap();
+        acknowledge(&mut state, 1, input["id"].as_str().unwrap(), "at").unwrap();
+        let mut report = json!({"schemaVersion":1,"packet":1,"eventVersion":input["metadata"]["eventVersion"],"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"malformed report must not certify"}]});
+        if let Some(status) = status {
+            report["status"] = status;
+        }
+        let original = state.clone();
+        assert!(
+            refresh(
+                &manifest,
+                &mut state,
+                &policy,
+                &BTreeMap::from([(1, report)]),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(state, original);
+    }
+}
+
+#[test]
 fn additive_repair_keeps_original_owner_and_baseline() {
     let old = manifest();
     let mut new = old.clone();
