@@ -603,7 +603,12 @@ fn refresh_in_place(
             .filter_map(|id| dependencies.get(id).map(|hash| (id.to_string(), hash)))
             .collect();
         let dependency_version = digest(&json!({"producers":packet.dependencies,"evidence":deps}));
-        let inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
+        let mut inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
+        // A declared producer is useful new input even before its first handoff.
+        // Preserve historical fingerprints for packets without dependencies.
+        if !packet.dependencies.is_empty() {
+            inputs["producers"] = json!(packet.dependencies);
+        }
         let observation = json!(digest(&inputs));
         // Bind an imported delivery only to its retained, unchanged observation.
         // A journal without that evidence requires a fresh delivered turn.

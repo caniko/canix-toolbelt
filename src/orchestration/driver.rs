@@ -162,11 +162,11 @@ fn context_message(
     adapter: &mut impl Adapter,
     packet: &Packet,
     kind: &str,
+    ids: &mut BTreeSet<String>,
     mut select: impl FnMut(&Value) -> io::Result<ContextSearch>,
 ) -> io::Result<Option<Value>> {
     let mut cursor = None::<String>;
     let mut cursors = BTreeSet::new();
-    let mut ids = BTreeSet::new();
     let mut previous_time = u64::MAX;
     for _ in 0..4 {
         let suffix = match &cursor {
@@ -253,6 +253,13 @@ fn physical_tokens(message: &Value) -> io::Result<u64> {
     })
 }
 
+fn compaction_status(message: &Value) -> io::Result<&str> {
+    message["status"]
+        .as_str()
+        .filter(|status| matches!(*status, "completed" | "failed" | "running"))
+        .ok_or_else(|| invalid("malformed context compaction status"))
+}
+
 /// Validate every host and owner before any new admission. Mirrors cannot execute.
 pub fn observe(
     manifest: &Manifest,
@@ -323,40 +330,39 @@ pub fn observe(
             .or_else(|| recent_page["data"].as_array())
             .cloned()
             .ok_or_else(|| invalid("incomplete context observation"))?;
-        let physical = context_message(adapter, packet, "assistant", |message| {
-            Ok(if physical_tokens(message)? > 0 {
-                ContextSearch::Found
-            } else {
-                ContextSearch::Continue
-            })
-        })?
-        .ok_or_else(|| {
-            invalid(format!(
-                "owner {} physical context is unknown",
-                packet.number
-            ))
-        })?;
-        let physical_time = physical["time"]["created"]
-            .as_u64()
-            .expect("validated time");
-        let compacted = context_message(adapter, packet, "compaction", |message| {
-            if !matches!(
-                message["status"].as_str(),
-                Some("completed" | "failed" | "running")
-            ) {
-                return Err(invalid("malformed context compaction status"));
-            }
-            Ok(
-                if message["time"]["created"].as_u64().expect("validated time") <= physical_time {
-                    ContextSearch::Finished
-                } else if message["status"] == "completed" {
+        let mut context_ids = BTreeSet::new();
+        let physical =
+            context_message(adapter, packet, "assistant", &mut context_ids, |message| {
+                Ok(if physical_tokens(message)? > 0 {
                     ContextSearch::Found
                 } else {
                     ContextSearch::Continue
-                },
-            )
-        })?
-        .is_some();
+                })
+            })?
+            .ok_or_else(|| {
+                invalid(format!(
+                    "owner {} physical context is unknown",
+                    packet.number
+                ))
+            })?;
+        let physical_time = physical["time"]["created"]
+            .as_u64()
+            .expect("validated time");
+        let compacted =
+            context_message(adapter, packet, "compaction", &mut context_ids, |message| {
+                let status = compaction_status(message)?;
+                Ok(
+                    if message["time"]["created"].as_u64().expect("validated time") <= physical_time
+                    {
+                        ContextSearch::Finished
+                    } else if status == "completed" {
+                        ContextSearch::Found
+                    } else {
+                        ContextSearch::Continue
+                    },
+                )
+            })?
+            .is_some();
         let tokens = if compacted {
             0
         } else {
@@ -551,12 +557,13 @@ fn compact(
         if message["id"] != id || message["type"] != "compaction" {
             return Err(invalid("compaction transcript receipt differs"));
         }
-        if message["status"] == "failed" {
+        let status = compaction_status(&message)?;
+        if status == "failed" {
             return Err(invalid(
                 "native compaction failed; retain its exact receipt for recovery",
             ));
         }
-        if message["status"] == "completed" {
+        if status == "completed" {
             if !state["packets"][&key]["compactionReceipts"].is_object() {
                 state["packets"][&key]["compactionReceipts"] = json!({});
             }

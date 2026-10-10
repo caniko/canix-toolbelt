@@ -136,6 +136,9 @@ fn collect_with(
     known: &BTreeMap<String, String>,
     directory_observed: &mut impl FnMut(&Path),
 ) -> io::Result<Batch> {
+    for path in allowed {
+        relative(path, std::slice::from_ref(path))?;
+    }
     fn walk(
         parent: &File,
         path: &Path,
@@ -416,7 +419,7 @@ fn receiver_parent_with(
     root: &File,
     path: &Path,
     create: bool,
-    _sync: &mut impl FnMut(&File) -> io::Result<()>,
+    sync: &mut impl FnMut(&File) -> io::Result<()>,
 ) -> io::Result<Option<File>> {
     let mut parent = root.try_clone()?;
     for component in path
@@ -440,6 +443,11 @@ fn receiver_parent_with(
             Err(rustix::io::Errno::NOENT) => return Ok(None),
             Err(error) => return Err(error.into()),
         };
+        if create {
+            // Also sync existing entries: a previous failed exchange may have
+            // created this ancestor without durably acknowledging its link.
+            sync(&parent)?;
+        }
         parent = File::from(fd);
         match rustix::fs::statat(&parent, ".git", AtFlags::SYMLINK_NOFOLLOW) {
             Ok(_) => return Err(invalid("evidence path traverses a project checkout")),
@@ -524,6 +532,9 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
 }
 
 fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
+    for path in allowed {
+        relative(path, std::slice::from_ref(path))?;
+    }
     if batch.files.len().saturating_add(batch.delete.len()) > FILE_COUNT_LIMIT
         || batch.verify.len() > INVENTORY_LIMIT
         || batch.omitted.len().saturating_add(batch.deferred.len()) > INVENTORY_LIMIT

@@ -183,6 +183,9 @@ pub fn github(
     let response = transport.query(&query)?;
     let mut p = response["repository"]["pullRequest"].clone();
     if !p.is_object()
+        || p["id"].as_str().is_none_or(str::is_empty)
+        || p["url"].as_str().and_then(|url| coordinate(url, true).ok())
+            != Some(("github.com", owner, repo, number))
         || !github_revision(&p["headRefOid"])
         || !github_revision(&p["baseRefOid"])
         || (!p["baseRef"].is_null() && !github_revision(&p["baseRef"]["target"]["oid"]))
@@ -239,6 +242,8 @@ pub fn github(
     let rollup = github_checks(transport, &p)?;
     let fresh = transport.query(&format!("query{{{repository}{{{pull}{{{basic}}}}}}}"))?;
     for key in [
+        "id",
+        "url",
         "headRefOid",
         "baseRefOid",
         "baseRef",

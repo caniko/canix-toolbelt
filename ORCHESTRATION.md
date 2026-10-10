@@ -15,6 +15,8 @@ classification or lost assignments. `linkedReleasePRs` and `linkedReleasePRCount
 remain separate from baseline and supported-repair scope. `Manifest::coverage`
 reports each class's counts and native state totals, including UNKNOWN evidence.
 Unknown manifest fields and journal fields remain available to the consumer.
+Declared producer IDs enter the event fingerprint before their first handoff, so
+an additive producer declaration generates a useful new delivery immediately.
 
 `refresh` works transactionally against the existing JSON journal. It preserves
 pending request IDs/bodies, audit checkpoints, admission history and unknown
@@ -116,6 +118,9 @@ malformed, overflowing or exhausted physical usage fails observation; it never
 defaults to zero. Input, cache reads and cache writes all count. The actual
 usage-bearing assistant ID is retained even when newer empty assistants or
 completed compactions are present.
+Assistant and compaction pages share an identity set; a message cannot alias both
+kinds. Unknown pending-compaction statuses report malformed evidence while
+retaining the pending request and preventing dispatch.
 Use the cycle's `occupied` observation, including all queued inputs, in the final
 `finished` check. Refresh again after mutations before claiming completion.
 
@@ -125,6 +130,8 @@ outdated/resolved review threads, nested inline comments and check contexts.
 All GitHub connections require stable declared counts; the single checked commit
 must match the PR head. Forgejo inline counts and nonempty unique history IDs are
 validated too. Both forges re-fetch the complete check rollup after collection.
+GitHub's returned PR URL must match the requested coordinate; its URL and opaque
+ID must remain stable through that final re-fetch.
 GitHub revisions must be full 40-digit hexadecimal object IDs, and its update
 identity must parse as RFC 3339 before history is fetched. Malformed check rollups
 return errors. Forgejo accepts exactly 2,000 rows only after an empty sentinel
@@ -165,6 +172,9 @@ enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/defe
 entries and the
 48 MiB encoded-payload estimate. Receiver reads, directory creation, staging,
 rename and deletion use pinned no-follow directory handles.
+Allowlist roots must be nonempty scoped relative paths. Ancestor links are
+fsynced before descending or writing, including existing links on a retry after
+an interrupted exchange. Fsync failure prevents an acceptance receipt.
 Source enumeration, artifact reads and deletion discovery also use pinned
 no-follow handles; an ancestor replacement cannot redirect collection outside
 the already-open authoritative directory.
