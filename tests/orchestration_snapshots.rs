@@ -130,6 +130,36 @@ fn github_rejects_another_pull_identity_before_collecting_its_history() {
 }
 
 #[test]
+fn github_revalidates_every_published_status_and_target_field() {
+    for (field, changed) in [
+        ("mergeable", json!("CONFLICTING")),
+        ("mergeStateStatus", json!("DIRTY")),
+        ("reviewDecision", json!("CHANGES_REQUESTED")),
+        ("isDraft", json!(true)),
+        ("baseRefName", json!("another-target")),
+    ] {
+        let p = pull();
+        let mut fresh = p.clone();
+        fresh[field] = changed;
+        let mut transport = Graph(vec![
+            json!({"repository":{"pullRequest":p}}),
+            json!({"repository":{"pullRequest":fresh}}),
+        ]);
+        assert!(
+            github(
+                &mut transport,
+                "https://github.com/owner/repo/pull/1",
+                &json!({}),
+                "now",
+                0
+            )
+            .is_err(),
+            "stale {field} was published"
+        );
+    }
+}
+
+#[test]
 fn complete_history_keeps_old_comment_bodies_and_uses_live_target() {
     let p = pull();
     let mut transport = Graph(vec![

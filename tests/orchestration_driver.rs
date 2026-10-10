@@ -287,6 +287,55 @@ fn old_compaction_at_the_exact_threshold_preserves_a_retained_continuation() {
 }
 
 #[test]
+fn fresh_compaction_ids_separate_owner_and_physical_message_boundaries() {
+    let mut ids = Vec::new();
+    for (session, physical) in [("ses_a", "msg_xmsg_y"), ("ses_amsg_x", "msg_y")] {
+        let (mut manifest, policy, expected, mut state, mut fixture) = setup();
+        manifest.packets[0].session_id = session.into();
+        fixture.inbox.insert(session.into(), vec![]);
+        fixture.recent = vec![assistant(physical, 2000, 200_000)];
+        cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .unwrap();
+        ids.push(state["packets"]["1"]["pendingCompaction"]["body"]["id"].clone());
+    }
+    assert_ne!(
+        ids[0], ids[1],
+        "distinct session/message tuples collided before hashing"
+    );
+}
+
+#[test]
+fn retained_legacy_compaction_ids_and_bodies_are_retried_verbatim() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    let body = json!({"id":"msg_legacy_compaction","delivery":"steer"});
+    state["packets"]["1"]["pendingCompaction"] =
+        json!({"body":body,"physicalMessageID":"msg_physical","preparedAt":"before"});
+    fixture.recent = vec![assistant("msg_physical", 2000, 200_000)];
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert_eq!(fixture.submissions, vec![body.clone()]);
+    assert_eq!(state["packets"]["1"]["pendingCompaction"]["body"], body);
+}
+
+#[test]
 fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.ambiguous = true;

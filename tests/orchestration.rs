@@ -150,6 +150,97 @@ fn additive_extension_keys_become_retained_scope_and_cannot_be_reassigned() {
 }
 
 #[test]
+fn waiting_reports_cannot_finish_audited_terminal_work_or_drop_the_followup() {
+    let manifest = manifest();
+    let policy = policy();
+    let at = "2026-10-08T00:00:00Z";
+    let now = chrono::DateTime::parse_from_rfc3339(at)
+        .unwrap()
+        .timestamp()
+        + 600;
+    let mut state = json!({"prs":{"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}},"packets":{}});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let input = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy,
+        "audit terminal source",
+        at,
+    )
+    .unwrap();
+    acknowledge(&mut state, 1, input["id"].as_str().unwrap(), at).unwrap();
+    let mut reports = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"waiting","eventVersion":input["metadata"]["eventVersion"],"updatedAt":at,"retryAfterSeconds":600,"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"audited source awaiting follow-up"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state["packets"]["1"]["terminal"], false,
+        "waiting report certified completion"
+    );
+    assert!(schedule_recheck(&mut state["packets"]["1"], &policy, now));
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let followup = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy,
+        "bounded waiting follow-up",
+        at,
+    )
+    .unwrap();
+    acknowledge(&mut state, 1, followup["id"].as_str().unwrap(), at).unwrap();
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state["packets"]["1"]["terminal"], false,
+        "stale waiting report closed a freshly delivered follow-up"
+    );
+    reports.get_mut(&1).unwrap()["eventVersion"] = followup["metadata"]["eventVersion"].clone();
+    reports.get_mut(&1).unwrap()["status"] = json!("complete");
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+}
+
+#[test]
 fn additive_repair_keeps_original_owner_and_baseline() {
     let old = manifest();
     let mut new = old.clone();
