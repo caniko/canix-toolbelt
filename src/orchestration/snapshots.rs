@@ -298,6 +298,11 @@ pub fn github(
         "baseRef",
         "updatedAt",
         "state",
+        "mergeable",
+        "mergeStateStatus",
+        "reviewDecision",
+        "isDraft",
+        "baseRefName",
         "mergeCommit",
         "commits",
     ] {

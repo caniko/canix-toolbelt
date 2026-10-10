@@ -5,7 +5,6 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
@@ -517,12 +516,11 @@ fn compact(
         let physical = &observation.physical_message_ids[&packet.number];
         let id = format!(
             "msg_{}",
-            &format!(
-                "{:x}",
-                Sha256::digest(
-                    format!("{}{}context-checkpoint", packet.session_id, physical).as_bytes()
-                )
-            )[..32]
+            &digest(&json!([
+                "context-checkpoint:v2",
+                packet.session_id,
+                physical
+            ]))[..32]
         );
         state["packets"][&key]["pendingCompaction"] = json!({"body":{"id":id,"delivery":"steer"},"physicalMessageID":physical,"preparedAt":at});
         adapter.persist(state)?;

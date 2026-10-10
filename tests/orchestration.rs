@@ -226,7 +226,6 @@ fn waiting_reports_cannot_finish_audited_terminal_work_or_drop_the_followup() {
         state["packets"]["1"]["terminal"], false,
         "stale waiting report closed a freshly delivered follow-up"
     );
-    reports.get_mut(&1).unwrap()["eventVersion"] = followup["metadata"]["eventVersion"].clone();
     reports.get_mut(&1).unwrap()["status"] = json!("complete");
     refresh(
         &manifest,
@@ -237,7 +236,46 @@ fn waiting_reports_cannot_finish_audited_terminal_work_or_drop_the_followup() {
         &BTreeMap::new(),
     )
     .unwrap();
+    assert_eq!(
+        state["packets"]["1"]["terminal"], false,
+        "stale complete report released the waiting obligation"
+    );
+    reports.get_mut(&1).unwrap()["eventVersion"] = followup["metadata"]["eventVersion"].clone();
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
     assert_eq!(state["packets"]["1"]["terminal"], true);
+}
+
+#[test]
+fn finished_rejects_imported_terminal_flags_with_a_retained_waiting_obligation() {
+    let manifest = manifest();
+    let mut state = json!({"prs":{},"packets":{}});
+    let active = BTreeMap::from([
+        ("builder".into(), Default::default()),
+        ("mobile".into(), Default::default()),
+    ]);
+    for packet in &manifest.packets {
+        let number = packet.number.to_string();
+        state["packets"][&number] = json!({"terminal":true,"auditedFeedback":{}});
+        for url in &packet.prs {
+            state["prs"][url] = json!({"url":url,"state":"MERGED","head":"h","comments":[]});
+            state["packets"][&number]["auditedFeedback"][url] =
+                json!(feedback_version(&state["prs"][url]));
+        }
+    }
+    assert!(finished(&manifest, &state, &active, true));
+    state["packets"]["1"]["workerStatus"] = json!({"status":"waiting"});
+    assert!(!finished(&manifest, &state, &active, true));
+    state["packets"]["1"]["workerStatus"] = json!({"status":"complete"});
+    state["packets"]["1"]["waitingReportPending"] = json!(true);
+    assert!(!finished(&manifest, &state, &active, true));
 }
 
 #[test]

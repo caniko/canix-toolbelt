@@ -40,6 +40,10 @@ terminal coverage, including linked work and pending admissions.
 An audited terminal PR with a `ready_for_work` checkpoint remains unfinished until
 the resulting progress version has a durable delivery receipt. Pending inputs
 retain `progressVersion`; acknowledgment records `deliveredProgressVersion`.
+A waiting checkpoint retains its follow-up obligation across refreshes, restarts
+and delivery of the bounded recheck. An old non-waiting report cannot release it;
+only a supported non-waiting report bound to the current delivery and source can
+permit completion. Existing source-bound audits remain retained.
 
 ## Admission and recovery
 
@@ -108,8 +112,10 @@ receipt before committing its candidate journal. Session selectors are checked
 again immediately before prompt or compaction submission.
 
 Context compaction begins at 180k observed input/cache tokens, with a hard 300k
-ceiling. Compaction IDs retain the legacy physical-message fingerprint and are
-persisted before submission. Queued, running, completed and failed compactions
+ceiling. New compaction IDs hash a versioned tuple of session and physical message
+IDs, so distinct field boundaries cannot alias. Retained pending IDs and bodies,
+including legacy IDs, are retried verbatim. Requests are persisted before
+submission. Queued, running, completed and failed compactions
 remain distinct; only a verified completed compaction releases continuation.
 Physical usage is retrieved through V2's pre-pagination assistant/compaction
 filters, bounded to four 64-message pages per type. Preserve message-list
@@ -130,6 +136,8 @@ outdated/resolved review threads, nested inline comments and check contexts.
 All GitHub connections require stable declared counts; the single checked commit
 must match the PR head. Forgejo inline counts and nonempty unique history IDs are
 validated too. Both forges re-fetch the complete check rollup after collection.
+GitHub also revalidates every published mergeability, review, draft and target
+field; asynchronous changes reject the observation rather than publish stale status.
 GitHub's returned PR URL must match the requested coordinate; its URL and opaque
 ID must remain stable through that final re-fetch.
 GitHub revisions must be full 40-digit hexadecimal object IDs, and its update

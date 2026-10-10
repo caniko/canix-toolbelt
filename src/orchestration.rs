@@ -639,6 +639,11 @@ fn refresh_in_place(
         {
             ps["deliveredProgressVersion"] = ps["progressVersion"].clone();
         }
+        // Keep the waiting obligation when a follow-up makes the old report
+        // stale. Only a report bound to the current delivery can release it.
+        if ps["workerStatus"]["status"] == "waiting" {
+            ps["waitingReportPending"] = json!(true);
+        }
         if let Some(report) = reports.get(&packet.number) {
             if report["packet"].as_u64() != Some(u64::from(packet.number))
                 || report["schemaVersion"] != 1
@@ -654,6 +659,12 @@ fn refresh_in_place(
                 && report["eventVersion"] == ps["deliveredVersion"]
                 && ps["deliveredObservationVersion"] == observation
             {
+                if matches!(
+                    report["status"].as_str(),
+                    Some("waiting" | "ready_for_work" | "merged" | "closed" | "complete")
+                ) {
+                    ps["waitingReportPending"] = json!(report["status"] == "waiting");
+                }
                 if report["status"] == "ready_for_work" {
                     ps["progressVersion"] = json!(digest(report));
                 }
@@ -736,6 +747,8 @@ fn refresh_in_place(
             .count();
         ps["terminal"] = json!(
             backlog == 0
+                && ps["waitingReportPending"] != true
+                && ps["workerStatus"]["status"] != "waiting"
                 && !undelivered_progress(ps)
                 && prs
                     .iter()
@@ -1048,6 +1061,8 @@ pub fn finished(
         && manifest.packets.iter().all(|packet| {
             let ps = &state["packets"][packet.number.to_string()];
             ps["terminal"] == true
+                && ps["waitingReportPending"] != true
+                && ps["workerStatus"]["status"] != "waiting"
                 && !undelivered_progress(ps)
                 && ps["pending"].is_null()
                 && ps["pendingCompaction"].is_null()
