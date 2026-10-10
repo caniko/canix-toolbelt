@@ -82,7 +82,11 @@ jobs:
         run: |
           set -eu
           test "${RUNNER_ENVIRONMENT:-}" = github-hosted
-          test "${GITHUB_RUN_ATTEMPT:-}" = 1
+          # Branch/PR qualification binds original attempt-1 production. A signed-tag
+          # release can retry its original run after a transient upload/registry failure.
+          if [ "${GITHUB_EVENT_NAME:-}" != push ] || [ "${GITHUB_REF_TYPE:-}" != tag ]; then
+            test "${GITHUB_RUN_ATTEMPT:-}" = 1
+          fi
           if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
             revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
             git fetch origin "$revision"
