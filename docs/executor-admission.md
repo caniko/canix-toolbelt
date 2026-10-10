@@ -54,7 +54,13 @@ The preparation artifact contains the exact source, generator and maintainer
 trust hashes, generated files and a member-hashed receipt. Preparation alone
 does not qualify the successor; its own attempt-1 required gates must pass.
 
-This successor's workflows were generated with the declared Simit revision
-`afb7939d925d3e8e9b8507387ada7efad6460df8` (`simit 0.19.0`). Its
-`init ci --platform github --ci-provider actions --runtime nix --check --diff`
-check passed. This verifies generated-file parity, not hosted execution.
+The declared generator is Simit
+`0d917f8cbbf99bf271006a0cf6f590c34aa828bc` (`simit 0.19.0`, merged in #43).
+Its original push/PR checks and exact-head production/regeneration run
+`38065064067` passed. Independent provider-archive verification bound all 276
+tracked source files, tree `318fbe76c8c9a4f646c3a77cd3be1cf19e110cd3`, and
+generator SHA-256 `8acc30d1d8f1d291568b1634e4a029608176f0cc59cd9f005e994e73a5c8063d`.
+The matrix explicitly selects `separate_events = true`: push and PR producers
+must both succeed independently. Source preparation is followed by complete
+generated-patch import and successor qualification; no preparation receipt or
+cancelled predecessor grants acceptance.
