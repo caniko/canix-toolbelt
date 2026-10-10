@@ -1,12 +1,13 @@
 //! Bounded, byte-exact evidence replication. This module never resumes agents.
-use rustix::fs::{AtFlags, Mode, OFlags};
+use fs2::FileExt;
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::{self, Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -102,33 +103,13 @@ fn relative(path: &Path, allowed: &[PathBuf]) -> io::Result<()> {
     Ok(())
 }
 
-fn ancestors(root: &Path, relative: &Path) -> io::Result<()> {
-    if !fs::symlink_metadata(root)?.is_dir() {
-        return Err(invalid("evidence root must be a real directory"));
-    }
-    let mut path = root.to_path_buf();
-    for c in relative.components() {
-        path.push(c);
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(invalid("evidence path traverses a symlink"));
-            }
-            Ok(meta) if meta.is_dir() && path.join(".git").try_exists()? => {
-                return Err(invalid("evidence path traverses a project checkout"));
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-fn read(path: &Path) -> io::Result<Vec<u8>> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(path)?;
+fn read_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Vec<u8>> {
+    let file = File::from(rustix::fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
     if !file.metadata()?.is_file() || file.metadata()?.len() > FILE_LIMIT {
         return Err(invalid("artifact is not a bounded regular file"));
     }
@@ -156,47 +137,75 @@ fn collect_with(
     directory_observed: &mut impl FnMut(&Path),
 ) -> io::Result<Batch> {
     fn walk(
-        root: &Path,
+        parent: &File,
         path: &Path,
         known: &BTreeMap<String, String>,
         batch: &mut Batch,
         size: &mut usize,
         directory_observed: &mut impl FnMut(&Path),
     ) -> io::Result<()> {
-        let full = root.join(path);
-        let meta = match fs::symlink_metadata(&full) {
+        let leaf = path
+            .file_name()
+            .ok_or_else(|| invalid("artifact has no filename"))?;
+        let meta = match rustix::fs::statat(parent, leaf, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e),
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
         let name = path
             .to_str()
             .ok_or_else(|| invalid("artifact path must be UTF-8"))?
             .to_owned();
-        if meta.file_type().is_symlink()
-            || path
-                .components()
-                .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "worktrees")))
-            || (meta.is_dir() && full.join(".git").try_exists()?)
-            || (!meta.is_dir() && (!meta.is_file() || meta.len() > FILE_LIMIT))
+        let kind = FileType::from_raw_mode(meta.st_mode);
+        if path
+            .components()
+            .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "worktrees")))
+            || !matches!(kind, FileType::Directory | FileType::RegularFile)
+            || (kind == FileType::RegularFile
+                && (meta.st_size < 0 || meta.st_size as u64 > FILE_LIMIT))
         {
             batch.omitted.push(name);
-        } else if meta.is_dir() {
-            directory_observed(path);
-            let mut children = fs::read_dir(full)?.collect::<Result<Vec<_>, _>>()?;
-            children.sort_by_key(|entry| entry.file_name());
-            for child in children {
-                walk(
-                    root,
-                    &path.join(child.file_name()),
-                    known,
-                    batch,
-                    size,
-                    directory_observed,
-                )?;
+        } else if kind == FileType::Directory {
+            let directory = File::from(rustix::fs::openat(
+                parent,
+                leaf,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?);
+            if checkout(&directory)? {
+                batch.omitted.push(name);
+            } else if known.contains_key(&name) {
+                // First remove the previously acknowledged file identity. The
+                // retained removal receipt releases descendants next exchange.
+                batch.deferred.push(name);
+            } else {
+                directory_observed(path);
+                let mut children = Vec::new();
+                for entry in rustix::fs::Dir::read_from(&directory)? {
+                    let entry = entry?;
+                    let bytes = entry.file_name().to_bytes();
+                    if matches!(bytes, b"." | b"..") {
+                        continue;
+                    }
+                    if children.len() >= INVENTORY_LIMIT {
+                        return Err(invalid("evidence directory inventory exceeds its bound"));
+                    }
+                    children.push(std::ffi::OsStr::from_bytes(bytes).to_owned());
+                }
+                children.sort();
+                for child in children {
+                    walk(
+                        &directory,
+                        &path.join(child),
+                        known,
+                        batch,
+                        size,
+                        directory_observed,
+                    )?;
+                }
             }
         } else {
-            let bytes = read(&full)?;
+            let bytes = read_at(parent, leaf)?;
             let sha = hash(&bytes);
             if known.get(&name) == Some(&sha) {
                 let encoded = name.len().saturating_add(1024);
@@ -237,6 +246,7 @@ fn collect_with(
         Ok(())
     }
     let mut batch = Batch::default();
+    let root = open_directory(root)?;
     let mut size = 0;
     let mut roots = allowed.to_vec();
     roots.sort();
@@ -249,10 +259,16 @@ fn collect_with(
     }
     for path in &unique {
         relative(path, allowed)?;
-        if let Some(parent) = path.parent() {
-            ancestors(root, parent)?;
+        if let Some(parent) = receiver_parent(&root, path, false)? {
+            walk(
+                &parent,
+                path,
+                known,
+                &mut batch,
+                &mut size,
+                directory_observed,
+            )?;
         }
-        walk(root, path, known, &mut batch, &mut size, directory_observed)?;
     }
     for (name, sha) in known {
         let path = Path::new(name);
@@ -260,13 +276,38 @@ fn collect_with(
             continue;
         }
         relative(path, &unique)?;
-        // Check every ancestor so a missing leaf behind a replaced symlink or
-        // checkout cannot be mistaken for an authoritative deletion.
-        ancestors(root, path)?;
-        let deleted = match fs::symlink_metadata(root.join(path)) {
-            Ok(_) => false,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-            Err(error) => return Err(error),
+        // Resolve deletion discovery through pinned ancestors too. A replaced
+        // symlink or checkout never supplies authority to delete receiver bytes.
+        let deleted = match receiver_parent(&root, path, false)? {
+            None => true,
+            Some(parent) => {
+                let leaf = path.file_name().expect("validated filename");
+                match rustix::fs::statat(&parent, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+                    Ok(meta) => match FileType::from_raw_mode(meta.st_mode) {
+                        FileType::Symlink => {
+                            return Err(invalid("evidence identity became a symlink"));
+                        }
+                        FileType::Directory => {
+                            let directory = File::from(rustix::fs::openat(
+                                &parent,
+                                leaf,
+                                OFlags::RDONLY
+                                    | OFlags::DIRECTORY
+                                    | OFlags::NOFOLLOW
+                                    | OFlags::CLOEXEC,
+                                Mode::empty(),
+                            )?);
+                            if checkout(&directory)? {
+                                return Err(invalid("evidence identity became a project checkout"));
+                            }
+                            true
+                        }
+                        _ => false,
+                    },
+                    Err(rustix::io::Errno::NOENT) => true,
+                    Err(error) => return Err(error.into()),
+                }
+            }
         };
         if deleted {
             if !valid_digest(sha) {
@@ -298,6 +339,54 @@ fn collect_with(
         return Err(invalid("evidence inventory exceeds its payload bound"));
     }
     Ok(batch)
+}
+
+fn open_directory(path: &Path) -> io::Result<File> {
+    Ok(File::from(rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?))
+}
+
+fn checkout(directory: &File) -> io::Result<bool> {
+    match rustix::fs::statat(directory, ".git", AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => Ok(true),
+        Err(rustix::io::Errno::NOENT) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Exclusive lease for a private receiver root. Every authorized mirror writer
+/// must hold this lease, including local edits and legacy adapters. The pinned
+/// root inode is the shared kernel lock anchor; never replace it during exchange.
+/// This serializes cooperative writers, not processes bypassing the contract.
+pub struct Mirror {
+    root: File,
+}
+
+impl Mirror {
+    /// Pin and lease a private mirror without waiting. No receiver mutation is
+    /// allowed before this succeeds. Root directories must be mode 0700.
+    pub fn acquire(root: &Path) -> io::Result<Self> {
+        let root = open_directory(root)?;
+        if root.metadata()?.permissions().mode() & 0o777 != 0o700 {
+            return Err(invalid("evidence mirror root must be private (mode 0700)"));
+        }
+        root.try_lock_exclusive()?;
+        Ok(Self { root })
+    }
+
+    /// Apply one exchange while retaining exclusive mirror ownership.
+    pub fn apply(&self, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
+        apply_locked(&self.root, allowed, batch)
+    }
+}
+
+impl Drop for Mirror {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.root);
+    }
 }
 
 // Every receiver operation resolves relative to pinned, no-follow directory
@@ -402,20 +491,19 @@ fn write(parent: &File, name: &std::ffi::OsStr, bytes: &[u8], sha: &str) -> io::
     result
 }
 
-/// Verify scope/digests before writing and retain independently edited receiver files.
-/// Call under the shared exchange lease, against a private replication directory.
+/// Acquire the private mirror's shared lease, then verify/apply one exchange.
+/// For a longer authorized mutation, retain `Mirror` and call `Mirror::apply`.
 pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
+    Mirror::acquire(root)?.apply(allowed, batch)
+}
+
+fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
     if batch.files.len().saturating_add(batch.delete.len()) > FILE_COUNT_LIMIT
         || batch.verify.len() > INVENTORY_LIMIT
         || batch.omitted.len().saturating_add(batch.deferred.len()) > INVENTORY_LIMIT
     {
         return Err(invalid("evidence file count exceeds its bound"));
     }
-    let root = File::from(rustix::fs::open(
-        root,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?);
     let mut size = batch
         .omitted
         .iter()
@@ -429,7 +517,7 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
     let mut paths = std::collections::BTreeSet::new();
     for item in &batch.files {
         relative(Path::new(&item.path), allowed)?;
-        receiver_hash(&root, Path::new(&item.path))?;
+        receiver_hash(root, Path::new(&item.path))?;
         size = size.saturating_add(
             item.bytes
                 .len()
@@ -447,7 +535,7 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
     }
     for item in batch.verify.iter().chain(&batch.delete) {
         relative(Path::new(&item.path), allowed)?;
-        receiver_hash(&root, Path::new(&item.path))?;
+        receiver_hash(root, Path::new(&item.path))?;
         size = size.saturating_add(item.path.len().saturating_add(1024));
         if !paths.insert(PathBuf::from(&item.path))
             || !valid_digest(&item.sha256)
@@ -469,7 +557,7 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
     }
     let mut receipt = Receipt::default();
     for item in &batch.verify {
-        if receiver_hash(&root, Path::new(&item.path))?.as_ref() == Some(&item.sha256) {
+        if receiver_hash(root, Path::new(&item.path))?.as_ref() == Some(&item.sha256) {
             receipt
                 .accepted
                 .insert(item.path.clone(), item.sha256.clone());
@@ -479,13 +567,13 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
     }
     for item in &batch.files {
         let path = Path::new(&item.path);
-        let current = receiver_hash(&root, path)?;
+        let current = receiver_hash(root, path)?;
         if current.as_ref() != Some(&item.sha256) && current != item.expected {
             receipt.conflicts.push(item.path.clone());
             continue;
         }
         if current.as_ref() != Some(&item.sha256) {
-            let parent = receiver_parent(&root, path, true)?.expect("created parent");
+            let parent = receiver_parent(root, path, true)?.expect("created parent");
             let name = path.file_name().expect("validated name");
             let pinned = receiver_hash_at(&parent, name)?;
             if pinned.as_ref() != Some(&item.sha256) && pinned != item.expected {
@@ -502,13 +590,13 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
     }
     for item in &batch.delete {
         let path = Path::new(&item.path);
-        let current = receiver_hash(&root, path)?;
+        let current = receiver_hash(root, path)?;
         if current.is_some() && current.as_ref() != Some(&item.sha256) {
             receipt.conflicts.push(item.path.clone());
             continue;
         }
         if current.is_some() {
-            let parent = receiver_parent(&root, path, false)?
+            let parent = receiver_parent(root, path, false)?
                 .ok_or_else(|| invalid("receiver deletion parent moved"))?;
             let name = path.file_name().expect("validated name");
             let pinned = receiver_hash_at(&parent, name)?;
@@ -531,6 +619,7 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn source_ancestor_replacement_never_collects_outside_bytes() {
         let source = tempfile::tempdir().unwrap();

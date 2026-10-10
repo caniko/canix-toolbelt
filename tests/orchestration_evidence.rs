@@ -2,10 +2,18 @@
 use canix_toolbelt::orchestration::evidence::*;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
+fn mirror_dir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
+
 #[test]
 fn exact_evidence_bytes_and_foreign_edits_are_preserved() {
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::create_dir(source.path().join("evidence")).unwrap();
     fs::write(source.path().join("evidence/receipt"), b"\0binary\xff").unwrap();
     let allowed = vec![PathBuf::from("evidence")];
@@ -28,7 +36,7 @@ fn exact_evidence_bytes_and_foreign_edits_are_preserved() {
 #[test]
 fn acknowledged_receiver_deletion_remains_a_conflict() {
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::create_dir(source.path().join("evidence")).unwrap();
     fs::write(source.path().join("evidence/receipt"), b"initial").unwrap();
     let allowed = vec![PathBuf::from("evidence")];
@@ -56,7 +64,7 @@ fn conflicting_file_and_descendant_paths_fail_before_any_write() {
     batch.files[0].path = "evidence/parent".into();
     batch.files[1].path = "evidence/parent/child".into();
     for _ in 0..2 {
-        let target = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
         assert!(apply(target.path(), &allowed, &batch).is_err());
         assert!(!target.path().join("evidence").exists());
         batch.files.reverse();
@@ -66,7 +74,7 @@ fn conflicting_file_and_descendant_paths_fail_before_any_write() {
 #[test]
 fn tampered_payload_or_unowned_path_cannot_be_applied() {
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::write(source.path().join("handoff"), b"exact").unwrap();
     let allowed = vec![PathBuf::from("handoff")];
     let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
@@ -83,7 +91,7 @@ fn tampered_payload_or_unowned_path_cannot_be_applied() {
 fn symlinks_checkouts_and_large_files_remain_host_local() {
     use std::os::unix::fs::symlink;
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::create_dir(source.path().join("evidence")).unwrap();
     symlink("/etc/passwd", source.path().join("evidence/link")).unwrap();
     fs::create_dir(source.path().join("evidence/project")).unwrap();
@@ -110,7 +118,7 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
 fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
     for delete in [false, true] {
         let source = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
         fs::write(source.path().join("handoff"), b"exact").unwrap();
         let allowed = vec![PathBuf::from("handoff")];
         let first = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
@@ -145,7 +153,7 @@ fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
 fn authoritative_deletions_remove_only_acknowledged_receiver_bytes() {
     for foreign in [false, true] {
         let source = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
         fs::create_dir(source.path().join("evidence")).unwrap();
         fs::write(source.path().join("evidence/receipt"), b"exact").unwrap();
         let allowed = vec![PathBuf::from("evidence")];
@@ -179,7 +187,7 @@ fn authoritative_deletions_remove_only_acknowledged_receiver_bytes() {
 #[test]
 fn forged_file_counts_are_rejected_before_any_receiver_write() {
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::write(source.path().join("seed"), b"").unwrap();
     let seed = collect(source.path(), &[PathBuf::from("seed")], &BTreeMap::new())
         .unwrap()
@@ -263,7 +271,7 @@ fn overlapping_roots_have_the_same_unique_budget_as_one_root() {
 fn file_to_directory_transition_requires_a_retained_deletion_before_descendants() {
     for foreign in [false, true] {
         let source = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
         fs::create_dir(source.path().join("evidence")).unwrap();
         fs::write(source.path().join("evidence/a"), b"acknowledged file").unwrap();
         let allowed = vec![PathBuf::from("evidence")];
@@ -317,7 +325,7 @@ fn file_to_directory_transition_requires_a_retained_deletion_before_descendants(
 #[test]
 fn private_mirror_writers_serialize_on_the_pinned_root_before_mutating() {
     let source = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
     fs::write(source.path().join("handoff"), b"incoming").unwrap();
     let allowed = vec![PathBuf::from("handoff")];
     let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
@@ -338,4 +346,50 @@ fn private_mirror_writers_serialize_on_the_pinned_root_before_mutating() {
         fs::read(target.path().join("handoff")).unwrap(),
         b"incoming"
     );
+}
+
+#[test]
+fn retained_mirror_lease_covers_local_writers_and_exchange_without_reacquisition() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    let allowed = vec![PathBuf::from("handoff")];
+    fs::write(source.path().join("handoff"), b"incoming").unwrap();
+    let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    let mirror = Mirror::acquire(target.path()).unwrap();
+    assert!(Mirror::acquire(target.path()).is_err());
+    assert!(apply(target.path(), &allowed, &batch).is_err());
+    assert!(!target.path().join("handoff").exists());
+    mirror.apply(&allowed, &batch).unwrap();
+    fs::write(target.path().join("handoff"), b"authorized local edit").unwrap();
+    assert_eq!(
+        mirror.apply(&allowed, &batch).unwrap().conflicts,
+        vec!["handoff"]
+    );
+    drop(mirror);
+    assert_eq!(
+        apply(target.path(), &allowed, &batch).unwrap().conflicts,
+        vec!["handoff"]
+    );
+    assert_eq!(
+        fs::read(target.path().join("handoff")).unwrap(),
+        b"authorized local edit"
+    );
+}
+
+#[test]
+fn mirror_rejects_public_or_symlink_roots_before_any_mutation() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    fs::write(source.path().join("handoff"), b"incoming").unwrap();
+    let allowed = vec![PathBuf::from("handoff")];
+    let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    fs::set_permissions(target.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(apply(target.path(), &allowed, &batch).is_err());
+    assert!(!target.path().join("handoff").exists());
+    fs::set_permissions(target.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let links = tempfile::tempdir().unwrap();
+    symlink(target.path(), links.path().join("mirror")).unwrap();
+    assert!(apply(&links.path().join("mirror"), &allowed, &batch).is_err());
+    assert!(!target.path().join("handoff").exists());
 }
