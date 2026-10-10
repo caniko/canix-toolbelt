@@ -3,7 +3,7 @@ name: Qualify orchestration repairs
 
 on:
   push:
-    branches: ["pr-review/**"]
+    branches: ["feat/native-orchestration-release"]
   pull_request:
 
 permissions:
