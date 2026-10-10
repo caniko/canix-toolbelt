@@ -1034,7 +1034,7 @@ fn context_message_ids_cannot_alias_assistant_and_completed_compaction_history()
 fn unknown_pending_compaction_status_reports_malformed_evidence_without_dispatch() {
     for status in [Value::Null, json!("unknown"), json!(1), json!({})] {
         let (manifest, policy, expected, mut state, mut fixture) = setup();
-        let pending = json!({"body":{"id":"msg_compaction","physicalMessageID":"msg_previous"}});
+        let pending = json!({"body":{"id":"msg_compaction","delivery":"steer"},"physicalMessageID":"msg_previous","preparedAt":"before"});
         state["packets"]["1"]["pendingCompaction"] = pending.clone();
         fixture.messages.insert(
             "msg_compaction".into(),

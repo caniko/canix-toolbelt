@@ -654,17 +654,18 @@ fn refresh_in_place(
                 ));
             }
             validate_report_urls(report, packet.number)?;
+            if !matches!(
+                report["status"].as_str(),
+                Some("waiting" | "ready_for_work" | "merged" | "closed" | "complete")
+            ) {
+                return Err(format!("unsupported worker status for {}", packet.number));
+            }
             ps["workerStatus"] = report.clone();
             if report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
                 && ps["deliveredObservationVersion"] == observation
             {
-                if matches!(
-                    report["status"].as_str(),
-                    Some("waiting" | "ready_for_work" | "merged" | "closed" | "complete")
-                ) {
-                    ps["waitingReportPending"] = json!(report["status"] == "waiting");
-                }
+                ps["waitingReportPending"] = json!(report["status"] == "waiting");
                 if report["status"] == "ready_for_work" {
                     ps["progressVersion"] = json!(digest(report));
                 }

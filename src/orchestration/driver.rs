@@ -255,7 +255,7 @@ fn physical_tokens(message: &Value) -> io::Result<u64> {
 fn compaction_status(message: &Value) -> io::Result<&str> {
     message["status"]
         .as_str()
-        .filter(|status| matches!(*status, "completed" | "failed" | "running"))
+        .filter(|status| matches!(*status, "completed" | "failed" | "running" | "queued"))
         .ok_or_else(|| invalid("malformed context compaction status"))
 }
 
@@ -637,6 +637,28 @@ pub fn cycle(
             return Err(invalid(
                 "refresh the complete journal before observation/admission",
             ));
+        }
+        let pending = &ps["pendingCompaction"];
+        let message_id = |value: &Value| {
+            value.as_str().is_some_and(|id| {
+                id.starts_with("msg_")
+                    && id.len() > 4
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            })
+        };
+        if !pending.is_null()
+            && (!pending.is_object()
+                || !pending["body"].is_object()
+                || !message_id(&pending["body"]["id"])
+                || pending["body"]["delivery"] != "steer"
+                || !message_id(&pending["physicalMessageID"])
+                || !pending["preparedAt"]
+                    .as_str()
+                    .is_some_and(|at| !at.is_empty()))
+        {
+            return Err(invalid("malformed retained pending compaction"));
         }
     }
     let mut observation = observe(manifest, policy, expected, adapter)?;

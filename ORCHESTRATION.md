@@ -44,6 +44,8 @@ A waiting checkpoint retains its follow-up obligation across refreshes, restarts
 and delivery of the bounded recheck. An old non-waiting report cannot release it;
 only a supported non-waiting report bound to the current delivery and source can
 permit completion. Existing source-bound audits remain retained.
+Unsupported or missing report statuses reject refresh transactionally before
+adopting any terminal audit evidence.
 
 ## Admission and recovery
 
@@ -127,6 +129,9 @@ completed compactions are present.
 Assistant and compaction pages share an identity set; a message cannot alias both
 kinds. Unknown pending-compaction statuses report malformed evidence while
 retaining the pending request and preventing dispatch.
+Queued compactions remain healthy waits. Every non-null retained compaction must
+have an object body, valid durable message and physical IDs, steer delivery and
+a retained preparation marker before observation, publication or capacity selection.
 Use the cycle's `occupied` observation, including all queued inputs, in the final
 `finished` check. Refresh again after mutations before claiming completion.
 
