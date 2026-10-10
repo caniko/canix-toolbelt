@@ -144,8 +144,11 @@ the authoritative owner's paths, serialized by the shared exchange lease.
 `evidence::apply` acquires the lease before receiver validation or mutation.
 `evidence::Mirror::acquire` pins a mode-0700 root and locks that directory inode
 exclusively, without waiting. Retain this guard around every authorized local
-mutation and use `Mirror::apply` for exchanges within the same lease. Legacy
-adapters must lock the same root inode before editing, renaming or deleting its
+mutation and use `Mirror::apply` for exchanges within the same lease.
+`Mirror::apply` requires an exclusive mutable borrow so sharing one guard cannot
+admit simultaneous exchanges. Use a caller-owned mutex when sharing the retained
+guard between threads. Legacy adapters must lock the same root inode before
+editing, renaming or deleting its
 contents. The active root itself must not be replaced. This contract serializes
 cooperative writers; it supplies no inode-CAS guarantee against lease-bypassing
 processes. Conflicts observed under the lease preserve receiver bytes.

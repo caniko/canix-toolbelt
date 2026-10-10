@@ -393,8 +393,9 @@ impl Mirror {
         Ok(Self { root })
     }
 
-    /// Apply one exchange while retaining exclusive mirror ownership.
-    pub fn apply(&self, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
+    /// Apply one exchange under an exclusive mutable borrow of the retained
+    /// lease. Sharing a guard cannot admit concurrent exchanges under one flock.
+    pub fn apply(&mut self, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
         apply_locked(&self.root, allowed, batch)
     }
 }

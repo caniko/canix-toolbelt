@@ -355,7 +355,7 @@ fn retained_mirror_lease_covers_local_writers_and_exchange_without_reacquisition
     let allowed = vec![PathBuf::from("handoff")];
     fs::write(source.path().join("handoff"), b"incoming").unwrap();
     let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
-    let mirror = Mirror::acquire(target.path()).unwrap();
+    let mut mirror = Mirror::acquire(target.path()).unwrap();
     assert!(Mirror::acquire(target.path()).is_err());
     assert!(apply(target.path(), &allowed, &batch).is_err());
     assert!(!target.path().join("handoff").exists());
