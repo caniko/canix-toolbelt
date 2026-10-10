@@ -491,7 +491,18 @@ fn receiver_hash_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Option<
     Ok(Some(hash(&bytes)))
 }
 
+#[cfg(test)]
 fn write(parent: &File, name: &std::ffi::OsStr, bytes: &[u8], sha: &str) -> io::Result<()> {
+    write_with(parent, name, bytes, sha, &mut File::sync_all)
+}
+
+fn write_with(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+    sha: &str,
+    sync: &mut impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut staging = None;
     for _ in 0..32 {
@@ -517,7 +528,7 @@ fn write(parent: &File, name: &std::ffi::OsStr, bytes: &[u8], sha: &str) -> io::
         file.write_all(bytes)?;
         file.sync_all()?;
         rustix::fs::renameat(parent, &temp, parent, name)?;
-        parent.sync_all()
+        sync(parent)
     })();
     if result.is_err() {
         let _ = rustix::fs::unlinkat(parent, &temp, AtFlags::empty());
@@ -532,6 +543,15 @@ pub fn apply(root: &Path, allowed: &[PathBuf], batch: &Batch) -> io::Result<Rece
 }
 
 fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<Receipt> {
+    apply_locked_with(root, allowed, batch, &mut File::sync_all)
+}
+
+fn apply_locked_with(
+    root: &File,
+    allowed: &[PathBuf],
+    batch: &Batch,
+    sync: &mut impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<Receipt> {
     for path in allowed {
         relative(path, std::slice::from_ref(path))?;
     }
@@ -610,7 +630,7 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
             continue;
         }
         if current.as_ref() != Some(&item.sha256) {
-            let parent = receiver_parent(root, path, true)?.expect("created parent");
+            let parent = receiver_parent_with(root, path, true, sync)?.expect("created parent");
             let name = path.file_name().expect("validated name");
             let pinned = receiver_hash_at(&parent, name)?;
             if pinned.as_ref() != Some(&item.sha256) && pinned != item.expected {
@@ -618,7 +638,7 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
                 continue;
             }
             if pinned.as_ref() != Some(&item.sha256) {
-                write(&parent, name, &item.bytes, &item.sha256)?;
+                write_with(&parent, name, &item.bytes, &item.sha256, sync)?;
             }
         }
         receipt
@@ -644,7 +664,7 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
             if pinned.is_some() {
                 rustix::fs::unlinkat(&parent, name, AtFlags::empty())?;
             }
-            parent.sync_all()?;
+            sync(&parent)?;
         }
         receipt
             .removed
@@ -657,6 +677,66 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn post_rename_sync_failure_cannot_be_acknowledged_by_an_idempotent_replay() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let root = open_directory(target.path()).unwrap();
+        let allowed = vec![PathBuf::from("handoff")];
+        fs::write(source.path().join("handoff"), b"durable evidence").unwrap();
+        let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let mut sync_attempts = 0;
+        let mut failing_sync = |_: &File| {
+            sync_attempts += 1;
+            Err(io::Error::other(
+                "injected post-rename directory fsync failure",
+            ))
+        };
+        assert!(apply_locked_with(&root, &allowed, &batch, &mut failing_sync).is_err());
+        assert_eq!(
+            fs::read(target.path().join("handoff")).unwrap(),
+            b"durable evidence"
+        );
+        assert!(
+            apply_locked_with(&root, &allowed, &batch, &mut failing_sync).is_err(),
+            "digest equality acknowledged a still-unsynced rename"
+        );
+        assert_eq!(sync_attempts, 2);
+        let receipt = apply_locked(&root, &allowed, &batch).unwrap();
+        assert_eq!(receipt.accepted["handoff"], batch.files[0].sha256);
+    }
+
+    #[test]
+    fn post_unlink_sync_failure_cannot_be_acknowledged_by_an_absent_file_replay() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let root = open_directory(target.path()).unwrap();
+        let allowed = vec![PathBuf::from("handoff")];
+        fs::write(source.path().join("handoff"), b"durable evidence").unwrap();
+        let initial = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let known = apply_locked(&root, &allowed, &initial).unwrap().accepted;
+        fs::remove_file(source.path().join("handoff")).unwrap();
+        let deletion = collect(source.path(), &allowed, &known).unwrap();
+        let mut sync_attempts = 0;
+        let mut failing_sync = |_: &File| {
+            sync_attempts += 1;
+            Err(io::Error::other(
+                "injected post-unlink directory fsync failure",
+            ))
+        };
+        assert!(apply_locked_with(&root, &allowed, &deletion, &mut failing_sync).is_err());
+        assert!(!target.path().join("handoff").exists());
+        assert!(
+            apply_locked_with(&root, &allowed, &deletion, &mut failing_sync).is_err(),
+            "absence acknowledged a still-unsynced unlink"
+        );
+        assert_eq!(sync_attempts, 2);
+        assert_eq!(
+            apply_locked(&root, &allowed, &deletion).unwrap().removed,
+            known
+        );
+    }
     #[test]
     fn ancestor_sync_failure_prevents_further_receiver_directory_creation() {
         let target = tempfile::tempdir().unwrap();
