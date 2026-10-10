@@ -35,6 +35,16 @@ def validate_event_source(payload, event, head, workflow_sha):
         assert payload["pull_request"]["head"]["sha"] == head, "PR source changed"
 
 
+def provider_log_members(raw, conclusion):
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        names = archive.namelist()
+        assert len(names) == len(set(names)), "Duplicate provider log members"
+        members = {name: hashlib.sha256(archive.read(name)).hexdigest()
+                   for name in names if not name.endswith("/")}
+    assert members or conclusion != "success", "Successful producer has no provider log files"
+    return members
+
+
 def main():
     assert os.environ["RUNNER_ENVIRONMENT"] == "github-hosted"
     assert os.environ["GITHUB_RUN_ATTEMPT"] == "1"
@@ -82,15 +92,12 @@ def main():
         (folder / "jobs.json").write_text(json.dumps(jobs, indent=2) + "\n")
         raw = api(f"actions/runs/{run['id']}/attempts/1/logs")
         (folder / "provider-logs.zip").write_bytes(raw)
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            names = archive.namelist()
-            assert names and len(names) == len(set(names)), "Missing or duplicate provider log members"
-            members = {name: hashlib.sha256(archive.read(name)).hexdigest()
-                       for name in names if not name.endswith("/")}
+        members = provider_log_members(raw, terminal["conclusion"])
         (folder / "provider-log-members.json").write_text(json.dumps(members, indent=2) + "\n")
         return {"run_id": run["id"], "head": head, "workflow": workflow, "event": event,
                 "run_attempt": 1, "status": terminal["status"], "conclusion": terminal["conclusion"],
                 "watch_exit_status": watched.returncode, "url": terminal["html_url"],
+                "provider_logs_complete": bool(members), "provider_log_member_count": len(members),
                 "raw_logs_sha256": hashlib.sha256(raw).hexdigest()}
 
     try:

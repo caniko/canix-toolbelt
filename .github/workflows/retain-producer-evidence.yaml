@@ -59,6 +59,7 @@ jobs:
           assert receipt['event'] == os.environ['GITHUB_EVENT_NAME']
           assert len(receipt['producers']) == 2
           assert all(row['status'] == 'completed' and row['conclusion'] == 'success'
-                     and row['run_attempt'] == 1 and row['event'] == receipt['event']
-                     for row in receipt['producers'])
+                      and row['run_attempt'] == 1 and row['event'] == receipt['event']
+                      and row['provider_logs_complete'] and row['provider_log_member_count'] > 0
+                      for row in receipt['producers'])
           PY
