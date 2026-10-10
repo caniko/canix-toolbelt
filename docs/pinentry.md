@@ -94,15 +94,21 @@ rage's `/dev/tty`, to that PTY. PIN-bearing Assuan stdout remains directly
 connected to the caller. PIN input is hidden and never enters the socket,
 arguments, logs or temporary files.
 
-Popup startup has a ten-second deadline. Startup failure can fall back to the
-requesting terminal before any Assuan input is consumed. Closing or timing out
-an active prompt ends the request; it never falls back or opens another prompt.
+Popup startup has one ten-second deadline. Zellij's exact pre-dispatch
+`There is no active session!` discovery failure permits at most three launch
+attempts with 100 ms between them, only while no pane helper has connected.
+Other failures and successful launches are never replayed. Startup failure can
+fall back to the requesting terminal before any Assuan input is consumed.
+Closing or timing out an active prompt ends the request; it never falls back or
+opens another prompt. Launch diagnostics stay off Assuan stdout, in a private
+mode-0600 temporary file removed with the popup's runtime directory.
 
 ## Qualification
 
 Production outputs `canix-toolbelt-pinentry` and `rage-pinentry` run installed
 integration tests. They exercise disposable GnuPG signing, real Qt/Xvfb and
-Zellij, SSH and headless routing, startup fallback, cancellation, timeout,
+Zellij, SSH and headless routing, transient discovery recovery, bounded startup
+fallback, post-dispatch no-replay, cancellation, timeout,
 concurrent requests, and runtime cleanup. A disposable age protocol fixture
 named `age-plugin-fido2-hmac` exercises real rage confirmation and secret
 callbacks with piped stdin/stdout; its plaintext key stanzas are test-only.

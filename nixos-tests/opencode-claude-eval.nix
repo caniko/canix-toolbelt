@@ -105,6 +105,27 @@
       jevEndpoint = "jev";
     };
   };
+  direct = evaluate {
+    programs.opencode.enable = true;
+    canix-toolbelt.opencodeClaude = {
+      enable = true;
+      package = pkgs.emptyDirectory;
+      inherit topology;
+      hostName = "example";
+      meridianEndpoint = "claude";
+    };
+  };
+  gatewayDisabled = evaluate {
+    programs.opencode.enable = true;
+    canix-toolbelt.opencodeClaude = {
+      enable = true;
+      package = pkgs.emptyDirectory;
+      inherit topology;
+      hostName = "example";
+      meridianEndpoint = "claude";
+      jevEndpoint = "jev";
+    };
+  };
   invalid = evaluate {
     programs.opencode.enable = true;
     canix-toolbelt.opencodeJev = {
@@ -140,6 +161,13 @@ in
   assert (selectClient currentClient).drvPath == currentClient.drvPath;
   assert (evaluate {}).programs.opencode.settings == {};
   assert lib.all (a: a.assertion) enabled.assertions;
+  assert lib.all (a: a.assertion) direct.assertions;
+  assert !(lib.all (a: a.assertion) gatewayDisabled.assertions);
+  assert direct.canix-toolbelt.opencodeJev.gateways == {};
+  assert direct.canix-toolbelt.opencodeJev.units == [];
+  assert builtins.attrNames direct.systemd.user.services == ["meridian-opencode"];
+  assert builtins.length direct.programs.opencode.settings.plugins == 1;
+  assert direct.programs.opencode.settings.providers.anthropic.settings.baseURL == "http://127.0.0.1:3460/v1";
   assert !(lib.all (a: a.assertion) invalid.assertions);
   assert !(builtins.tryEval (builtins.deepSeq missing.assertions true)).success;
   assert enabled.programs.opencode.settings.providers.anthropic.settings.baseURL == "http://127.0.0.1:3460/v1";

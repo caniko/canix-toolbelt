@@ -23,7 +23,16 @@ export async function acquireExternalRuntime(value, ctx) {
           }
           // Meridian 1.79 extracts cwd from this block. No process-global cwd
           // override: different sessions in a shared backend can use different projects.
-          event.system.push({ type: "text", text: `<env>\nWorking directory: ${directory}\n</env>` });
+          const system = event.system.flatMap(part => {
+            if (part.type !== "text") return [part];
+            const text = part.text.replace(/<env>([\s\S]*?)<\/env>/gi, (block, body) => {
+              const cleaned = body.replace(/(^|[\r\n])[ \t]*Working directory:[^\r\n]*/gi, "$1");
+              return cleaned === body ? block : cleaned.trim() ? `<env>${cleaned}</env>` : "";
+            });
+            return text === part.text ? [part] : text.trim() ? [{ ...part, text }] : [];
+          });
+          event.system.splice(0, event.system.length, ...system,
+            { type: "text", text: `<env>\nWorking directory: ${directory}\n</env>` });
         }, { providerID: "anthropic" }));
       }
     }
