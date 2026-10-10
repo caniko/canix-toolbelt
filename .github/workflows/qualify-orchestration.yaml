@@ -1,0 +1,54 @@
+# Project-owned exact-head, provider-free repair qualification.
+name: Qualify orchestration repairs
+
+on:
+  push:
+    branches: ["pr-review/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orchestration-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: "2"
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        max-jobs = 1
+        cores = 2
+      SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+      - name: Capture immutable source and execute provider-free regressions
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          EVIDENCE="$RUNNER_TEMP/orchestration-qualification"
+          mkdir -p "$EVIDENCE"
+          git rev-parse HEAD > "$EVIDENCE/revision"
+          git rev-parse 'HEAD^{tree}' > "$EVIDENCE/tree"
+          git ls-files -z | sort -z | sed -z 's|^|./|' | xargs -0 sha256sum -- > "$EVIDENCE/source.sha256"
+          git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
+          git config --global --add url.https://github.com/.insteadOf git@github.com:
+          nix develop --max-jobs 1 --cores 2 -c cargo test --locked --features orchestration --test orchestration_snapshots --test orchestration_evidence --test orchestration --test orchestration_driver 2>&1 | tee "$EVIDENCE/tests.log"
+      - name: Retain original qualification, including failed candidates
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: orchestration-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          retention-days: 32
+          if-no-files-found: error
+          path: ${{ runner.temp }}/orchestration-qualification/

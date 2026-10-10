@@ -20,7 +20,7 @@ impl GraphQl for Graph {
 }
 
 fn pull() -> Value {
-    json!({"id":"PR_one","state":"OPEN","headRefOid":"head","baseRefOid":"reported","baseRef":{"target":{"oid":"base"}},"baseRefName":"main","updatedAt":"now","isDraft":false,"commits":{"nodes":[{"commit":{"id":"commit_head","oid":"head","statusCheckRollup":null}}]},"comments":{"totalCount":1,"nodes":[{"id":"historical","body":"edited feedback","author":{"__typename":"Bot","login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviews":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+    json!({"id":"PR_one","state":"OPEN","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRef":{"target":{"oid":"cccccccccccccccccccccccccccccccccccccccc"}},"baseRefName":"main","updatedAt":"2026-10-10T00:00:00Z","isDraft":false,"commits":{"nodes":[{"commit":{"id":"commit_head","oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":null}}]},"comments":{"totalCount":1,"nodes":[{"id":"historical","body":"edited feedback","author":{"__typename":"Bot","login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviews":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
 #[test]
@@ -38,8 +38,11 @@ fn complete_history_keeps_old_comment_bodies_and_uses_live_target() {
         12,
     )
     .unwrap();
-    assert_eq!(got["base"], "base");
-    assert_eq!(got["reportedBase"], "reported");
+    assert_eq!(got["base"], "cccccccccccccccccccccccccccccccccccccccc");
+    assert_eq!(
+        got["reportedBase"],
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
     assert_eq!(got["issueComments"][0]["body"], "edited feedback");
     assert_eq!(got["unknown"], "retained");
     assert!(got.get("lastError").is_none());
@@ -593,5 +596,134 @@ fn dot_segment_coordinates_are_rejected_before_transport() {
                     .contains("coordinate")
             );
         }
+    }
+}
+
+#[test]
+fn github_rejects_invalid_revision_and_update_identities_before_history() {
+    for pointer in [
+        "/headRefOid",
+        "/baseRefOid",
+        "/baseRef/target/oid",
+        "/updatedAt",
+    ] {
+        for bad in [
+            Value::Null,
+            json!(1),
+            json!({}),
+            json!(""),
+            json!("invalid"),
+        ] {
+            let mut p = pull();
+            *p.pointer_mut(pointer).unwrap() = bad;
+            // Even matching empty commit/head values cannot establish identity.
+            if pointer == "/headRefOid" {
+                p["commits"]["nodes"][0]["commit"]["oid"] = p["headRefOid"].clone();
+            }
+            let sentinel = json!({"unexpected":"history fetched before identity validation"});
+            let mut transport = Graph(vec![
+                json!({"repository":{"pullRequest":p}}),
+                sentinel.clone(),
+            ]);
+            let error = github(
+                &mut transport,
+                "https://github.com/owner/repo/pull/1",
+                &json!({}),
+                "now",
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::InvalidData,
+                "{pointer}: {error}"
+            );
+            assert_eq!(
+                transport.0,
+                vec![sentinel],
+                "{pointer}: fetched history for invalid identity"
+            );
+        }
+    }
+}
+
+#[test]
+fn github_malformed_check_rollups_return_errors_without_panicking() {
+    for malformed in [
+        json!(false),
+        json!(42),
+        json!("success"),
+        json!([]),
+        json!([{}]),
+    ] {
+        let mut p = pull();
+        p["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = malformed;
+        let mut transport = Graph(vec![json!({"repository":{"pullRequest":p}})]);
+        let error = github(
+            &mut transport,
+            "https://github.com/owner/repo/pull/1",
+            &json!({}),
+            "now",
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+}
+
+#[test]
+fn forgejo_accepts_exactly_2000_history_rows_with_an_empty_sentinel_page() {
+    for count in [1999usize, 2000, 2001] {
+        let mut script = vec![
+            ("repos/owner/repo/pulls/1".into(), forge_pull()),
+            (
+                "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+                json!([{"id":1,"comments_count":count.min(2000)}]),
+            ),
+            (
+                "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
+                json!([]),
+            ),
+        ];
+        let last_page = if count < 2000 { 20 } else { 21 };
+        for page in 1..=last_page {
+            let start = (page - 1) * 100;
+            let rows: Vec<_> = (start..(start + 100).min(count))
+                .map(|id| json!({"id":id + 1,"body":format!("comment {id}")}))
+                .collect();
+            script.push((
+                format!("repos/owner/repo/pulls/1/reviews/1/comments?limit=100&page={page}"),
+                json!(rows),
+            ));
+        }
+        if count <= 2000 {
+            script.extend([
+                (
+                    "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                    forge_status(),
+                ),
+                ("repos/owner/repo/pulls/1".into(), forge_pull()),
+                (
+                    "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                    forge_status(),
+                ),
+            ]);
+        }
+        let mut transport = ForgeScript(script);
+        let result = forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        );
+        if count <= 2000 {
+            let snapshot = result.unwrap_or_else(|error| panic!("{count}: {error}"));
+            assert_eq!(snapshot["inlineComments"].as_array().unwrap().len(), count);
+        } else {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        assert!(
+            transport.0.is_empty(),
+            "{count}: boundary page was not inspected"
+        );
     }
 }
