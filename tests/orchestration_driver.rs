@@ -799,6 +799,63 @@ fn only_valid_completed_compaction_releases_observed_context() {
 }
 
 #[test]
+fn context_message_ids_cannot_alias_assistant_and_completed_compaction_history() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    fixture.recent = vec![
+        json!({"id":"msg_same","type":"compaction","status":"completed","time":{"created":2000}}),
+        assistant("msg_same", 1000, 300_000),
+    ];
+    let before = state.clone();
+    assert!(
+        cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true
+        )
+        .is_err()
+    );
+    assert_eq!(state, before);
+    assert_eq!(fixture.saved, before);
+    assert!(fixture.submissions.is_empty());
+}
+
+#[test]
+fn unknown_pending_compaction_status_reports_malformed_evidence_without_dispatch() {
+    for status in [Value::Null, json!("unknown"), json!(1), json!({})] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        let pending = json!({"body":{"id":"msg_compaction","physicalMessageID":"msg_previous"}});
+        state["packets"]["1"]["pendingCompaction"] = pending.clone();
+        fixture.messages.insert(
+            "msg_compaction".into(),
+            json!({"id":"msg_compaction","type":"compaction","status":status}),
+        );
+        let report = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            report.errors.len(),
+            1,
+            "malformed compaction looked like a healthy wait"
+        );
+        assert_eq!(state["packets"]["1"]["pendingCompaction"], pending);
+        assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
 fn physical_context_search_exhaustion_is_bounded_and_never_zero() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     for page in 0..4 {

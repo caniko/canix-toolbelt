@@ -409,6 +409,15 @@ impl Drop for Mirror {
 // Every receiver operation resolves relative to pinned, no-follow directory
 // handles. A concurrent ancestor symlink replacement cannot redirect it.
 fn receiver_parent(root: &File, path: &Path, create: bool) -> io::Result<Option<File>> {
+    receiver_parent_with(root, path, create, &mut File::sync_all)
+}
+
+fn receiver_parent_with(
+    root: &File,
+    path: &Path,
+    create: bool,
+    _sync: &mut impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<Option<File>> {
     let mut parent = root.try_clone()?;
     for component in path
         .parent()
@@ -637,6 +646,40 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn ancestor_sync_failure_prevents_further_receiver_directory_creation() {
+        let target = tempfile::tempdir().unwrap();
+        let root = open_directory(target.path()).unwrap();
+        let mut sync_attempts = 0;
+        let result = receiver_parent_with(
+            &root,
+            Path::new("evidence/nested/receipt"),
+            true,
+            &mut |_| {
+                sync_attempts += 1;
+                Err(io::Error::other("injected directory fsync failure"))
+            },
+        );
+        assert!(result.is_err(), "ancestor durability failure was ignored");
+        assert_eq!(sync_attempts, 1);
+        assert!(!target.path().join("evidence/nested").exists());
+        // A retry must sync even an ancestor left by the failed attempt.
+        let mut retry_syncs = 0;
+        receiver_parent_with(
+            &root,
+            Path::new("evidence/nested/receipt"),
+            true,
+            &mut |parent| {
+                retry_syncs += 1;
+                parent.sync_all()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            retry_syncs, 2,
+            "retry skipped an existing but unacknowledged ancestor"
+        );
+    }
     #[test]
     fn source_ancestor_replacement_never_collects_outside_bytes() {
         let source = tempfile::tempdir().unwrap();

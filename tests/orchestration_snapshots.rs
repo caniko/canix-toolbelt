@@ -20,7 +20,40 @@ impl GraphQl for Graph {
 }
 
 fn pull() -> Value {
-    json!({"id":"PR_one","state":"OPEN","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRef":{"target":{"oid":"cccccccccccccccccccccccccccccccccccccccc"}},"baseRefName":"main","updatedAt":"2026-10-10T00:00:00Z","isDraft":false,"commits":{"nodes":[{"commit":{"id":"commit_head","oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":null}}]},"comments":{"totalCount":1,"nodes":[{"id":"historical","body":"edited feedback","author":{"__typename":"Bot","login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviews":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+    json!({"id":"PR_one","url":"https://github.com/owner/repo/pull/1","state":"OPEN","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRef":{"target":{"oid":"cccccccccccccccccccccccccccccccccccccccc"}},"baseRefName":"main","updatedAt":"2026-10-10T00:00:00Z","isDraft":false,"commits":{"nodes":[{"commit":{"id":"commit_head","oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","statusCheckRollup":null}}]},"comments":{"totalCount":1,"nodes":[{"id":"historical","body":"edited feedback","author":{"__typename":"Bot","login":"chatgpt-codex-connector"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviews":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+}
+
+#[test]
+fn github_rejects_another_pull_identity_before_collecting_its_history() {
+    for url in [
+        Value::Null,
+        json!(""),
+        json!("https://github.com/owner/repo/pull/2"),
+        json!("https://github.com/other/repo/pull/1"),
+    ] {
+        let mut p = pull();
+        p["url"] = url;
+        let sentinel = json!({"unexpected":"wrong pull history"});
+        let mut transport = Graph(vec![
+            json!({"repository":{"pullRequest":p}}),
+            sentinel.clone(),
+        ]);
+        assert!(
+            github(
+                &mut transport,
+                "https://github.com/owner/repo/pull/1",
+                &json!({}),
+                "now",
+                0
+            )
+            .is_err()
+        );
+        assert_eq!(
+            transport.0,
+            vec![sentinel],
+            "history for the wrong pull was collected"
+        );
+    }
 }
 
 #[test]

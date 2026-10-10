@@ -393,3 +393,18 @@ fn mirror_rejects_public_or_symlink_roots_before_any_mutation() {
     assert!(apply(&links.path().join("mirror"), &allowed, &batch).is_err());
     assert!(!target.path().join("handoff").exists());
 }
+
+#[test]
+fn empty_allowlist_roots_never_grant_receiver_wide_mutation_scope() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    fs::write(source.path().join("handoff"), b"incoming").unwrap();
+    let batch = collect(source.path(), &[PathBuf::from("handoff")], &BTreeMap::new()).unwrap();
+    for allowed in [
+        vec![PathBuf::new()],
+        vec![PathBuf::from("evidence"), PathBuf::new()],
+    ] {
+        assert!(apply(target.path(), &allowed, &batch).is_err());
+        assert!(!target.path().join("handoff").exists());
+    }
+}

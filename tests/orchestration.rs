@@ -1005,3 +1005,50 @@ fn terminal_audits_expire_when_producer_evidence_changes() {
     .unwrap();
     assert_eq!(state["packets"]["1"]["terminal"], true);
 }
+
+#[test]
+fn adding_a_declared_producer_without_a_handoff_is_a_new_deliverable_event() {
+    let mut manifest = manifest();
+    let (mut state, version) = delivered_state(
+        json!({"url":"one","state":"MERGED","head":"h","comments":[]}),
+        &manifest,
+    );
+    let reports = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":version,"prs":[{"url":"one","head":"h","auditComplete":true,"evidence":"current audit"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], true);
+    manifest.packets[0].dependencies.push(2);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["terminal"], false);
+    assert!(
+        needs_wake(&state["packets"]["1"]),
+        "a newly declared producer must be observable before its handoff exists"
+    );
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "inspect the new producer dependency",
+        "2026-10-10T00:00:00Z",
+    )
+    .unwrap();
+    assert_ne!(body["metadata"]["eventVersion"], version);
+}
