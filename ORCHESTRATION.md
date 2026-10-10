@@ -175,6 +175,9 @@ rename and deletion use pinned no-follow directory handles.
 Allowlist roots must be nonempty scoped relative paths. Ancestor links are
 fsynced before descending or writing, including existing links on a retry after
 an interrupted exchange. Fsync failure prevents an acceptance receipt.
+Successful verification and idempotent write/deletion replays also resync their
+ancestor links and containing directory. Visible byte equality or absence alone
+cannot acknowledge a previous rename/unlink whose final fsync failed.
 Source enumeration, artifact reads and deletion discovery also use pinned
 no-follow handles; an ancestor replacement cannot redirect collection outside
 the already-open authoritative directory.

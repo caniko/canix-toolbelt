@@ -412,7 +412,12 @@ impl Drop for Mirror {
 // Every receiver operation resolves relative to pinned, no-follow directory
 // handles. A concurrent ancestor symlink replacement cannot redirect it.
 fn receiver_parent(root: &File, path: &Path, create: bool) -> io::Result<Option<File>> {
-    receiver_parent_with(root, path, create, &mut File::sync_all)
+    if create {
+        receiver_parent_with(root, path, true, &mut File::sync_all)
+    } else {
+        // Source collection and comparison reads establish no durable receipt.
+        receiver_parent_with(root, path, false, &mut |_| Ok(()))
+    }
 }
 
 fn receiver_parent_with(
@@ -440,14 +445,17 @@ fn receiver_parent_with(
                 }
                 rustix::fs::openat(&parent, name, flags, Mode::empty())?
             }
-            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                // A replay may observe a directory entry removed by a previous
+                // failed exchange. Its absence needs durable parent evidence.
+                sync(&parent)?;
+                return Ok(None);
+            }
             Err(error) => return Err(error.into()),
         };
-        if create {
-            // Also sync existing entries: a previous failed exchange may have
-            // created this ancestor without durably acknowledging its link.
-            sync(&parent)?;
-        }
+        // Also sync existing entries: a previous failed exchange may have
+        // created this ancestor without durably acknowledging its link.
+        sync(&parent)?;
         parent = File::from(fd);
         match rustix::fs::statat(&parent, ".git", AtFlags::SYMLINK_NOFOLLOW) {
             Ok(_) => return Err(invalid("evidence path traverses a project checkout")),
@@ -615,6 +623,9 @@ fn apply_locked_with(
     let mut receipt = Receipt::default();
     for item in &batch.verify {
         if receiver_hash(root, Path::new(&item.path))?.as_ref() == Some(&item.sha256) {
+            let parent = receiver_parent_with(root, Path::new(&item.path), false, sync)?
+                .ok_or_else(|| invalid("receiver verification parent moved"))?;
+            sync(&parent)?;
             receipt
                 .accepted
                 .insert(item.path.clone(), item.sha256.clone());
@@ -629,17 +640,18 @@ fn apply_locked_with(
             receipt.conflicts.push(item.path.clone());
             continue;
         }
-        if current.as_ref() != Some(&item.sha256) {
-            let parent = receiver_parent_with(root, path, true, sync)?.expect("created parent");
-            let name = path.file_name().expect("validated name");
-            let pinned = receiver_hash_at(&parent, name)?;
-            if pinned.as_ref() != Some(&item.sha256) && pinned != item.expected {
-                receipt.conflicts.push(item.path.clone());
-                continue;
-            }
-            if pinned.as_ref() != Some(&item.sha256) {
-                write_with(&parent, name, &item.bytes, &item.sha256, sync)?;
-            }
+        let parent = receiver_parent_with(root, path, true, sync)?.expect("created parent");
+        let name = path.file_name().expect("validated name");
+        let pinned = receiver_hash_at(&parent, name)?;
+        if pinned.as_ref() != Some(&item.sha256) && pinned != item.expected {
+            receipt.conflicts.push(item.path.clone());
+            continue;
+        }
+        if pinned.as_ref() != Some(&item.sha256) {
+            write_with(&parent, name, &item.bytes, &item.sha256, sync)?;
+        } else {
+            // Byte equality after a failed rename fsync is not durability.
+            sync(&parent)?;
         }
         receipt
             .accepted
@@ -652,9 +664,7 @@ fn apply_locked_with(
             receipt.conflicts.push(item.path.clone());
             continue;
         }
-        if current.is_some() {
-            let parent = receiver_parent(root, path, false)?
-                .ok_or_else(|| invalid("receiver deletion parent moved"))?;
+        if let Some(parent) = receiver_parent_with(root, path, false, sync)? {
             let name = path.file_name().expect("validated name");
             let pinned = receiver_hash_at(&parent, name)?;
             if pinned.is_some() && pinned.as_ref() != Some(&item.sha256) {
@@ -665,6 +675,8 @@ fn apply_locked_with(
                 rustix::fs::unlinkat(&parent, name, AtFlags::empty())?;
             }
             sync(&parent)?;
+        } else if current.is_some() {
+            return Err(invalid("receiver deletion parent moved"));
         }
         receipt
             .removed
