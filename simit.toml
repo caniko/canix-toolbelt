@@ -78,6 +78,7 @@ fi
 ''']
 
 [ci.nix_build]
+separate_events = true
 max_parallel = 2
 max_jobs = 1
 cores = 2
@@ -103,7 +104,7 @@ timeout_minutes = 30
 
 [[ci.required_gates]]
 id = "generated-parity"
-run = "bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/afb7939d925d3e8e9b8507387ada7efad6460df8 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
+run = "bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/0d917f8cbbf99bf271006a0cf6f590c34aa828bc -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
 timeout_minutes = 30
 
 [[ci.required_gates]]

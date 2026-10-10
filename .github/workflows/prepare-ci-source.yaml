@@ -27,7 +27,7 @@ jobs:
       - name: Render through the declared immutable generator
         env:
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
-          GENERATOR_REF: github:caniko/simit/afb7939d925d3e8e9b8507387ada7efad6460df8
+          GENERATOR_REF: github:caniko/simit/0d917f8cbbf99bf271006a0cf6f590c34aa828bc
           # Hosted generation uses the committed public trust root, just as the
           # pinned generator supports for environments without a local GPG key.
           SIMIT_MAINTAINERS_GPG: ${{ github.workspace }}/keys/maintainers.gpg
