@@ -14,7 +14,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   them, and retain generated README badges alongside the workflow preparation
   patch for complete declared-generator imports.
 
-## [0.5.0] - 2026-10-07
+## [0.5.0] - 2026-10-08
 
 ### Changed
 
@@ -33,6 +33,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Host-neutral native campaign journal, admission and bounded recovery primitives
+  behind the `orchestration` feature, including native input reconciliation,
+  complete forge-history collection, evidence replication, bounded context
+  compaction and a read-only legacy shadow probe.
 - Expose held registration, admission, bounded completion waiting, drain and
   activation-readiness commands through the existing `build-train` frontend.
 - Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
