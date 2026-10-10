@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Retain empty provider-log archives from cancelled original producers with
+  their terminal status and byte hashes; require actual log files for success
+  and reject duplicate archive members for every conclusion.
 - Bind hosted required CI gates to the selected source revision before running
   them, and retain generated README badges alongside the workflow preparation
   patch for complete declared-generator imports.
