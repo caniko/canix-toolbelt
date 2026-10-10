@@ -745,6 +745,11 @@ pub fn cycle(
                     packet,
                     &expected[&packet.number],
                 )?;
+                // A retry may occur long after preparation. Bind this actual
+                // submission attempt to the exact pending body before POST.
+                state["packets"][packet.number.to_string()]["pending"]["submissionAttemptAt"] =
+                    json!(at);
+                adapter.persist(state)?;
                 let receipt = adapter
                     .api(
                         &packet.owner_host,

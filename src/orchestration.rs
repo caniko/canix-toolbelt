@@ -614,6 +614,15 @@ fn refresh_in_place(
         {
             ps["deliveredObservationVersion"] = ps["observationVersion"].clone();
         }
+        // Migrate only progress already included in the exact delivered event,
+        // before adopting a new ready-for-work report in this refresh.
+        if ps["deliveredProgressVersion"].is_null()
+            && ps["deliveredVersion"].is_string()
+            && ps["deliveredVersion"] == ps["version"]
+            && present(&ps["progressVersion"])
+        {
+            ps["deliveredProgressVersion"] = ps["progressVersion"].clone();
+        }
         if let Some(report) = reports.get(&packet.number) {
             if report["packet"].as_u64() != Some(u64::from(packet.number))
                 || report["schemaVersion"] != 1
@@ -711,6 +720,7 @@ fn refresh_in_place(
             .count();
         ps["terminal"] = json!(
             backlog == 0
+                && !undelivered_progress(ps)
                 && prs
                     .iter()
                     .all(|pr| matches!(pr["state"].as_str(), Some("MERGED" | "CLOSED")))
@@ -764,6 +774,10 @@ fn timestamp(value: &Value) -> Option<i64> {
         .map(|time| time.timestamp())
 }
 
+fn undelivered_progress(ps: &Value) -> bool {
+    present(&ps["progressVersion"]) && ps["progressVersion"] != ps["deliveredProgressVersion"]
+}
+
 /// One bounded follow-up for each unchanged waiting checkpoint, with an injected clock.
 pub fn schedule_recheck(ps: &mut Value, policy: &Policy, now: i64) -> bool {
     if ps["terminal"] == true || present(&ps["pending"]) || needs_wake(ps) {
@@ -804,14 +818,20 @@ pub fn record_idle_recovery(ps: &mut Value, idle: &Value, now: i64) -> bool {
         return false;
     }
     let (Some(started), Some(id), Some(idle_ms)) = (
-        timestamp(&ps["deliveredPreparedAt"]),
+        ps.get("deliveredSubmissionAttemptAt")
+            .filter(|value| !value.is_null())
+            .unwrap_or(&ps["deliveredAt"])
+            .as_str()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()),
         idle["id"].as_str(),
         idle["time"]["created"].as_i64(),
     ) else {
         return false;
     };
-    let idle_at = idle_ms / 1000;
-    if idle_at < started || now.saturating_sub(idle_at) < 300 {
+    let Some(idle_at) = chrono::DateTime::from_timestamp_millis(idle_ms) else {
+        return false;
+    };
+    if idle_at < started || now.saturating_mul(1000).saturating_sub(idle_ms) < 300_000 {
         return false;
     }
     let report = &ps["workerStatus"];
@@ -972,7 +992,7 @@ pub fn prepare(
     let body = json!({"id":format!("msg_{}", &hash[..32]), "text":text, "delivery":"steer", "resume":true,
         "metadata":{"coordination":"native-campaign-v1", "packet":packet.number, "eventVersion":version}});
     ps["admissionGeneration"] = json!(generation);
-    ps["pending"] = json!({"version":version, "observationVersion":ps["observationVersion"], "goalPolicy":policy.goal_policy,"body":body,"preparedAt":at});
+    ps["pending"] = json!({"version":version, "observationVersion":ps["observationVersion"], "progressVersion":ps["progressVersion"], "goalPolicy":policy.goal_policy,"body":body,"preparedAt":at});
     Ok(body)
 }
 
@@ -987,6 +1007,8 @@ pub fn acknowledge(state: &mut Value, number: u32, id: &str, at: &str) -> Result
     ps["deliveredObservationVersion"] = pending["observationVersion"].clone();
     ps["deliveredAt"] = json!(at);
     ps["deliveredPreparedAt"] = pending["preparedAt"].clone();
+    ps["deliveredSubmissionAttemptAt"] = pending["submissionAttemptAt"].clone();
+    ps["deliveredProgressVersion"] = pending["progressVersion"].clone();
     ps["goalAckVersion"] = pending["goalPolicy"].clone();
     ps["pending"] = Value::Null;
     Ok(())
@@ -1010,6 +1032,7 @@ pub fn finished(
         && manifest.packets.iter().all(|packet| {
             let ps = &state["packets"][packet.number.to_string()];
             ps["terminal"] == true
+                && !undelivered_progress(ps)
                 && ps["pending"].is_null()
                 && ps["pendingCompaction"].is_null()
                 && packet.prs.iter().all(|url| {

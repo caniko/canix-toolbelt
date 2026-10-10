@@ -284,6 +284,18 @@ fn idle_recovery_uses_a_delivered_boundary_with_millisecond_precision() {
     let idle = json!({"id":"new-idle","time":{"created":1791421200901i64}});
     assert!(record_idle_recovery(&mut ps, &idle, 1791421800));
     assert!(!record_idle_recovery(&mut ps, &idle, 1791421801));
+
+    let mut delayed = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z","deliveredSubmissionAttemptAt":"2026-10-08T01:00:00.900Z","deliveredAt":"2026-10-08T01:05:00Z","observationVersion":"source"});
+    assert!(
+        record_idle_recovery(&mut delayed, &idle, 1791421800),
+        "an idle after actual submission remains usable despite delayed receipt reconciliation"
+    );
+    let mut legacy =
+        json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z"});
+    assert!(
+        !record_idle_recovery(&mut legacy, &idle, 1791421800),
+        "preparation alone cannot authorize idle recovery"
+    );
 }
 
 #[test]
@@ -344,7 +356,7 @@ fn fairness_serves_first_current_goal_then_oldest_repeat() {
 
 #[test]
 fn waiting_followups_and_idle_recovery_are_clock_injected_and_bounded() {
-    let mut ps = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00+00:00","observationVersion":"source","workerStatus":{"eventVersion":"v","status":"waiting","retryAfterSeconds":900}});
+    let mut ps = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00+00:00","deliveredAt":"2026-10-08T00:00:00+00:00","observationVersion":"source","workerStatus":{"eventVersion":"v","status":"waiting","retryAfterSeconds":900}});
     assert!(!schedule_recheck(&mut ps, &policy(), 1791418000));
     assert!(schedule_recheck(&mut ps, &policy(), 1791419000));
     let before = ps["recheckVersion"].clone();
