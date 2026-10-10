@@ -31,11 +31,13 @@ Two output families:
 
 ### Hosted evidence custody
 
-`retain-producer-evidence.yaml` observes the existing exact-head, attempt-1 PR
-CI and installable runs. It retains their original provider logs, job metadata,
-source workflow hashes and a SHA-256-bound receipt for 32 days. The final step
-checks actual provider expiry against the 30-day floor and requires both
-original producer conclusions to pass. It never reruns either producer.
+`retain-producer-evidence.yaml` observes the existing exact-head, attempt-1
+CI and installable runs for both branch pushes and pull requests. It binds each
+packet to its own event and head, with separate push and PR archives. It retains
+the event payload, original provider logs, job metadata, source workflow hashes
+and a SHA-256-bound receipt for 32 days. The final step checks actual provider
+expiry against the 30-day floor and requires both original producer conclusions
+to pass. It never reruns either producer.
 Custody does not establish complete test coverage, zero skips or architecture
 execution; those still require independent inspection of the retained results.
 Failed pinentry integration cases print disposable fixture pane and process

@@ -15,20 +15,33 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 
-def validate_run(run, head, workflow):
+def validate_run(run, head, workflow, event="pull_request"):
+    assert event in ("pull_request", "push"), "Unsupported custody event"
     assert run["head_sha"] == head, "Producer source changed"
     assert run["run_attempt"] == 1, "Producer attempt is not one"
-    assert run["event"] == "pull_request", "Wrong producer event"
+    assert run["event"] == event, "Wrong producer event"
     assert run["path"] == workflow, "Wrong producer workflow"
     assert type(run["id"]) is int and run["id"] > 0
+
+
+def validate_event_source(payload, event, head, workflow_sha):
+    assert event in ("pull_request", "push"), "Unsupported custody event"
+    assert re.fullmatch(r"[0-9a-f]{40}", head), "Invalid source head"
+    if event == "push":
+        assert payload["after"] == head == workflow_sha, "Push source changed"
+        assert payload["ref"].startswith("refs/heads/"), "Only branch pushes qualify"
+        assert payload["deleted"] is False, "Deleted branches cannot qualify"
+    else:
+        assert payload["pull_request"]["head"]["sha"] == head, "PR source changed"
 
 
 def main():
     assert os.environ["RUNNER_ENVIRONMENT"] == "github-hosted"
     assert os.environ["GITHUB_RUN_ATTEMPT"] == "1"
-    assert os.environ["GITHUB_EVENT_NAME"] == "pull_request"
+    event = os.environ["GITHUB_EVENT_NAME"]
     head = os.environ["SOURCE_HEAD"]
-    assert re.fullmatch(r"[0-9a-f]{40}", head)
+    payload_bytes = Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes()
+    validate_event_source(json.loads(payload_bytes), event, head, os.environ["GITHUB_SHA"])
     repo = os.environ["GITHUB_REPOSITORY"]
     assert repo == "caniko/canix-toolbelt"
     assert subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == head
@@ -39,6 +52,8 @@ def main():
                "head": head, "repository": repo, "run_id": os.environ["GITHUB_RUN_ID"],
                "run_attempt": 1, "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
                "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+               "event": event, "event_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+               "custody_tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                "observation_is_execution": False, "capture_complete": False, "producers": []}
 
     def write(name, data):
@@ -49,7 +64,7 @@ def main():
 
     def observe(run):
         workflow = run["path"]
-        validate_run(run, head, workflow)
+        validate_run(run, head, workflow, event)
         folder = destination / str(run["id"])
         folder.mkdir()
         (folder / "before.json").write_text(json.dumps(run, indent=2) + "\n")
@@ -58,7 +73,7 @@ def main():
                                       "--exit-status", "--interval", "60"],
                                      stdout=log, stderr=subprocess.STDOUT, check=False)
         terminal = json.loads(api(f"actions/runs/{run['id']}"))
-        validate_run(terminal, head, workflow)
+        validate_run(terminal, head, workflow, event)
         assert terminal["status"] == "completed", "Producer did not reach terminal state"
         (folder / "terminal.json").write_text(json.dumps(terminal, indent=2) + "\n")
         jobs = json.loads(subprocess.check_output([
@@ -73,12 +88,13 @@ def main():
             members = {name: hashlib.sha256(archive.read(name)).hexdigest()
                        for name in names if not name.endswith("/")}
         (folder / "provider-log-members.json").write_text(json.dumps(members, indent=2) + "\n")
-        return {"run_id": run["id"], "head": head, "workflow": workflow,
+        return {"run_id": run["id"], "head": head, "workflow": workflow, "event": event,
                 "run_attempt": 1, "status": terminal["status"], "conclusion": terminal["conclusion"],
                 "watch_exit_status": watched.returncode, "url": terminal["html_url"],
                 "raw_logs_sha256": hashlib.sha256(raw).hexdigest()}
 
     try:
+        (destination / "event.json").write_bytes(payload_bytes)
         with (destination / "identity-tests.log").open("w") as log:
             subprocess.run([sys.executable, "-m", "unittest", "discover", "-v", "-s", "tests",
                             "-p", "test_producer_evidence.py"], stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -86,7 +102,7 @@ def main():
             "git", "show", "--no-patch", "--format=%H%n%T%n%P", "HEAD"]))
         write("source-workflow-hashes.json", {path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
                                               for path in workflows})
-        query = urlencode({"head_sha": head, "event": "pull_request", "per_page": 100})
+        query = urlencode({"head_sha": head, "event": event, "per_page": 100})
         # Actions creates sibling workflow records asynchronously. This is a
         # bounded discovery wait, never a producer retry or a rerun request.
         for attempt in range(12):
@@ -99,7 +115,7 @@ def main():
             time.sleep(10)
         assert sorted(run["path"] for run in selected) == sorted(workflows), "Missing producer workflow"
         for run in selected:
-            validate_run(run, head, run["path"])
+            validate_run(run, head, run["path"], event)
         with ThreadPoolExecutor(max_workers=2) as pool:
             for result in pool.map(observe, selected):
                 receipt["producers"].append(result)

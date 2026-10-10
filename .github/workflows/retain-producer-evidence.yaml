@@ -1,6 +1,8 @@
 name: Retain exact-source producer evidence
 
 on:
+  push:
+    branches: ["**"]
   pull_request:
 
 permissions:
@@ -8,7 +10,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: producer-custody-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  group: producer-custody-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -17,11 +19,11 @@ jobs:
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
-      SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+      SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Observe the existing attempt-1 producers and preserve raw evidence
         run: python3 scripts/retain-producer-evidence.py "$RUNNER_TEMP/producer-evidence"
@@ -30,7 +32,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: producer-custody-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          name: producer-custody-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           retention-days: 32
           if-no-files-found: error
           path: ${{ runner.temp }}/producer-evidence/
@@ -51,9 +53,12 @@ jobs:
           print(json.dumps({'artifact': artifact, 'retention_seconds': seconds}, indent=2))
           assert seconds >= 2592000 and not artifact['expired']
           assert artifact['digest'] == 'sha256:' + digest
+          assert artifact['workflow_run']['head_sha'] == os.environ['SOURCE_HEAD']
           receipt = json.loads((Path(os.environ['RUNNER_TEMP']) / 'producer-evidence/receipt.json').read_text())
           assert receipt['head'] == os.environ['SOURCE_HEAD'] and receipt['capture_complete']
+          assert receipt['event'] == os.environ['GITHUB_EVENT_NAME']
           assert len(receipt['producers']) == 2
           assert all(row['status'] == 'completed' and row['conclusion'] == 'success'
-                     and row['run_attempt'] == 1 for row in receipt['producers'])
+                     and row['run_attempt'] == 1 and row['event'] == receipt['event']
+                     for row in receipt['producers'])
           PY
