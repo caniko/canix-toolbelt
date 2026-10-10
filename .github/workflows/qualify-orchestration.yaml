@@ -47,6 +47,7 @@ jobs:
             set -uo pipefail
             status=0
             cargo test --locked --features orchestration --lib || status=1
+            cargo test --locked --features orchestration --doc || status=1
             for suite in orchestration_snapshots orchestration_evidence orchestration orchestration_driver; do
               cargo test --locked --features orchestration --test "$suite" || status=1
             done

@@ -361,6 +361,22 @@ fn checkout(directory: &File) -> io::Result<bool> {
 /// must hold this lease, including local edits and legacy adapters. The pinned
 /// root inode is the shared kernel lock anchor; never replace it during exchange.
 /// This serializes cooperative writers, not processes bypassing the contract.
+///
+/// Shared references cannot apply simultaneous mutations under one retained lease:
+///
+/// ```compile_fail
+/// # #[cfg(all(unix, feature = "orchestration"))] {
+/// use canix_toolbelt::orchestration::evidence::{Batch, Mirror};
+/// use std::{path::{Path, PathBuf}, sync::Arc};
+/// let mirror = Arc::new(Mirror::acquire(Path::new("private-mirror")).unwrap());
+/// let first = Arc::clone(&mirror);
+/// let second = Arc::clone(&mirror);
+/// std::thread::scope(|scope| {
+///     scope.spawn(move || first.apply(&[PathBuf::from("evidence")], &Batch::default()));
+///     scope.spawn(move || second.apply(&[PathBuf::from("evidence")], &Batch::default()));
+/// });
+/// # }
+/// ```
 pub struct Mirror {
     root: File,
 }
