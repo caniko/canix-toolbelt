@@ -25,6 +25,11 @@ fn invalid(message: impl Into<String>) -> io::Error {
 fn quote(value: &str) -> String {
     json!(value).to_string()
 }
+fn github_revision(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|oid| oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
 fn coordinate(url: &str, github: bool) -> io::Result<(&str, &str, &str, u64)> {
     let rest = url
         .strip_prefix("https://")
@@ -141,7 +146,11 @@ fn github_checks(transport: &mut impl GraphQl, pull: &Value) -> io::Result<Value
         .ok_or_else(|| invalid("missing checked commit identity"))?;
     let mut rollup = commit["statusCheckRollup"].clone();
     if !rollup.is_null() {
-        connection(transport, &mut rollup["contexts"], |transport, cursor| {
+        let contexts = rollup
+            .as_object_mut()
+            .and_then(|rollup| rollup.get_mut("contexts"))
+            .ok_or_else(|| invalid("missing or malformed GitHub check rollup"))?;
+        connection(transport, contexts, |transport, cursor| {
             let data = transport.query(&format!("query{{node(id:{}){{... on Commit{{statusCheckRollup{{contexts(first:100,after:{}){{{CHECKS}}}}}}}}}}}",quote(id),quote(cursor)))?;
             Ok(data["node"]["statusCheckRollup"]["contexts"].clone())
         })?;
@@ -174,9 +183,12 @@ pub fn github(
     let response = transport.query(&query)?;
     let mut p = response["repository"]["pullRequest"].clone();
     if !p.is_object()
-        || !p["headRefOid"].is_string()
-        || !p["baseRefOid"].is_string()
-        || !p["updatedAt"].is_string()
+        || !github_revision(&p["headRefOid"])
+        || !github_revision(&p["baseRefOid"])
+        || (!p["baseRef"].is_null() && !github_revision(&p["baseRef"]["target"]["oid"]))
+        || !p["updatedAt"]
+            .as_str()
+            .is_some_and(|at| chrono::DateTime::parse_from_rfc3339(at).is_ok())
     {
         return Err(invalid("missing GitHub candidate identity"));
     }
@@ -329,7 +341,16 @@ fn forge_pages(transport: &mut impl ForgeRest, host: &str, path: &str) -> io::Re
             return Ok(result);
         }
     }
-    Err(invalid("forge pagination exceeds 2000 rows"))
+    // A full last page is not proof of overflow. One bounded sentinel establishes
+    // exact completion at the inclusive 2,000-row limit; never append it.
+    let sentinel = transport.get(host, &format!("{path}?limit=100&page=21"))?;
+    if sentinel.as_array().is_some_and(Vec::is_empty) {
+        Ok(result)
+    } else {
+        Err(invalid(
+            "forge pagination exceeds 2000 rows or has a malformed sentinel",
+        ))
+    }
 }
 
 fn forge_checks(
