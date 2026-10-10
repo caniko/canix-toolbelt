@@ -357,7 +357,7 @@ fn directory_to_file_transition_stages_descendant_removal_before_replacement() {
 #[test]
 fn receiver_leaf_type_changes_are_conflicts_while_unrelated_artifacts_advance() {
     use std::os::unix::fs::symlink;
-    for kind in ["directory", "symlink", "fifo", "oversized"] {
+    for kind in ["directory", "symlink", "fifo", "socket", "oversized"] {
         let source = tempfile::tempdir().unwrap();
         let target = mirror_dir();
         fs::create_dir(source.path().join("evidence")).unwrap();
@@ -367,6 +367,7 @@ fn receiver_leaf_type_changes_are_conflicts_while_unrelated_artifacts_advance() 
         let known = apply(target.path(), &allowed, &first).unwrap().accepted;
         let path = target.path().join("evidence/a");
         fs::remove_file(&path).unwrap();
+        let mut socket = None;
         match kind {
             "directory" => fs::create_dir(&path).unwrap(),
             "symlink" => symlink("/nonexistent-foreign-evidence", &path).unwrap(),
@@ -378,6 +379,7 @@ fn receiver_leaf_type_changes_are_conflicts_while_unrelated_artifacts_advance() 
                 0,
             )
             .unwrap(),
+            "socket" => socket = Some(std::os::unix::net::UnixListener::bind(&path).unwrap()),
             _ => fs::File::create(&path)
                 .unwrap()
                 .set_len(8 * 1024 * 1024 + 1)
@@ -398,6 +400,90 @@ fn receiver_leaf_type_changes_are_conflicts_while_unrelated_artifacts_advance() 
             fs::symlink_metadata(path).is_ok(),
             "foreign leaf was removed"
         );
+        drop(socket);
+    }
+}
+
+#[test]
+fn escaped_transition_inventory_cannot_exceed_the_encoded_payload_budget() {
+    let target = mirror_dir();
+    let prefix = format!("evidence/{}/", vec!["\u{1}".repeat(255); 4].join("/"));
+    let sha = "a".repeat(64);
+    let batch = Batch {
+        delete: (0..5000)
+            .map(|id| Identity {
+                path: format!("{prefix}{id}/old"),
+                sha256: sha.clone(),
+            })
+            .collect(),
+        prune: (0..5000).map(|id| format!("{prefix}{id}")).collect(),
+        deferred: (0..5000).map(|id| format!("{prefix}{id}")).collect(),
+        ..Batch::default()
+    };
+    let error = apply(target.path(), &[PathBuf::from("evidence")], &batch).unwrap_err();
+    assert!(error.to_string().contains("encoded"), "{error}");
+    assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn directory_retirement_preserves_foreign_content_and_retains_retry_identities() {
+    for foreign in ["file", "empty-directory", "checkout", "nested-checkout"] {
+        let source = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
+        fs::create_dir_all(source.path().join("evidence/a/nested")).unwrap();
+        fs::write(source.path().join("evidence/a/nested/b"), b"old bytes").unwrap();
+        let allowed = vec![PathBuf::from("evidence")];
+        let initial = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let known = apply(target.path(), &allowed, &initial).unwrap().accepted;
+        fs::remove_dir_all(source.path().join("evidence/a")).unwrap();
+        fs::write(source.path().join("evidence/a"), b"new file").unwrap();
+        fs::write(
+            source.path().join("evidence/unrelated"),
+            b"independent progress",
+        )
+        .unwrap();
+        let foreign_path = target
+            .path()
+            .join("evidence/a")
+            .join(if foreign == "checkout" {
+                ".git"
+            } else if foreign == "nested-checkout" {
+                "nested/.git"
+            } else {
+                "foreign"
+            });
+        if foreign == "file" {
+            fs::write(&foreign_path, b"foreign bytes").unwrap();
+        } else {
+            fs::create_dir(&foreign_path).unwrap();
+        }
+        let transition = collect(source.path(), &allowed, &known).unwrap();
+        let receipt = apply(target.path(), &allowed, &transition).unwrap();
+        assert!(receipt.removed.is_empty());
+        assert!(receipt.pruned.is_empty());
+        assert!(receipt.conflicts.contains(&"evidence/a".into()));
+        assert!(receipt.accepted.contains_key("evidence/unrelated"));
+        assert!(foreign_path.exists());
+        if foreign.contains("checkout") {
+            assert_eq!(
+                fs::read(target.path().join("evidence/a/nested/b")).unwrap(),
+                b"old bytes"
+            );
+        }
+        let replay = collect(source.path(), &allowed, &known).unwrap();
+        assert!(replay.files.iter().all(|item| item.path != "evidence/a"));
+        assert_eq!(replay.prune, transition.prune);
+        if foreign == "file" {
+            fs::remove_file(foreign_path).unwrap();
+        } else {
+            fs::remove_dir(foreign_path).unwrap();
+        }
+        let receipt = apply(target.path(), &allowed, &replay).unwrap();
+        assert_eq!(receipt.removed, known);
+        assert_eq!(receipt.pruned, vec!["evidence/a"]);
+        let receipt = apply(target.path(), &allowed, &replay).unwrap();
+        assert_eq!(receipt.removed, known);
+        assert_eq!(receipt.pruned, vec!["evidence/a"]);
     }
 }
 

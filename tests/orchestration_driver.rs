@@ -238,6 +238,55 @@ fn completion_of_an_old_compaction_cannot_release_a_new_physical_context() {
 }
 
 #[test]
+fn old_compaction_at_the_exact_threshold_preserves_a_retained_continuation() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    let body = json!({"id":"msg_retained_input","text":"exact retained continuation","metadata":{"source":"old"}});
+    state["packets"]["1"]["pending"] =
+        json!({"body":body,"version":"old","goalPolicy":"old-goal","preparedAt":"before"});
+    state["packets"]["1"]["pendingCompaction"] = json!({"body":{"id":"msg_old_compaction","delivery":"steer"},"physicalMessageID":"msg_old_physical","preparedAt":"before"});
+    fixture.messages.insert(
+        "msg_old_compaction".into(),
+        json!({"id":"msg_old_compaction","type":"compaction","status":"completed"}),
+    );
+    fixture.recent = vec![assistant("msg_new_physical", 2000, 180_000)];
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(fixture.submissions.is_empty());
+    assert_eq!(state["packets"]["1"]["pending"]["body"], body);
+    cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "next",
+        1,
+        true,
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["pending"]["body"], body);
+    assert_eq!(fixture.submissions.len(), 1);
+    assert!(fixture.submissions[0]["text"].is_null());
+    assert_ne!(
+        state["packets"]["1"]["pendingCompaction"]["body"]["id"],
+        "msg_old_compaction"
+    );
+    assert_eq!(
+        state["packets"]["1"]["pendingCompaction"]["physicalMessageID"],
+        "msg_new_physical"
+    );
+}
+
+#[test]
 fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.ambiguous = true;

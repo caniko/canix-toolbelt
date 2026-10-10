@@ -135,6 +135,10 @@ impl Manifest {
             previous.validate(None)?;
             if self.packets.len() != previous.packets.len()
                 || self.baseline_count != previous.baseline_count
+                || previous
+                    .extra
+                    .iter()
+                    .any(|(key, value)| self.extra.get(key) != Some(value))
             {
                 return Err("existing owner set or baseline scope changed".into());
             }
@@ -147,6 +151,10 @@ impl Manifest {
                 if current.session_id != old.session_id
                     || current.owner_host != old.owner_host
                     || current.title != old.title
+                    || old
+                        .extra
+                        .iter()
+                        .any(|(key, value)| current.extra.get(key) != Some(value))
                     || old
                         .dependencies
                         .iter()
@@ -588,6 +596,9 @@ fn refresh_in_place(
             }
             if pr.get("url").is_none() {
                 pr["url"] = json!(url);
+            }
+            if pr["url"].as_str() != Some(url) {
+                return Err(format!("PR journal identity differs from assignment {url}"));
             }
         }
         let prs: Vec<_> = packet

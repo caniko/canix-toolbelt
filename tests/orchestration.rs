@@ -83,6 +83,73 @@ fn retained_pr_record_urls_must_equal_their_assignment_keys() {
 }
 
 #[test]
+fn additive_extension_keys_become_retained_scope_and_cannot_be_reassigned() {
+    let old = manifest();
+    let mut state = json!({"prs":{},"packets":{}});
+    refresh(
+        &old,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let mut extended = old.clone();
+    extended
+        .extra
+        .insert("launchEvidence".into(), json!({"source":"new"}));
+    extended.packets[0]
+        .extra
+        .insert("ownerEvidence".into(), json!({"identity":"new"}));
+    refresh(
+        &extended,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    for scope in ["manifest", "packet"] {
+        let mut changed = extended.clone();
+        if scope == "manifest" {
+            changed
+                .extra
+                .insert("launchEvidence".into(), json!("changed"));
+        } else {
+            changed.packets[0]
+                .extra
+                .insert("ownerEvidence".into(), json!("changed"));
+        }
+        let before = state.clone();
+        assert!(
+            refresh(
+                &changed,
+                &mut state,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(state, before);
+    }
+    assert!(
+        refresh(
+            &old,
+            &mut state,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn additive_repair_keeps_original_owner_and_baseline() {
     let old = manifest();
     let mut new = old.clone();

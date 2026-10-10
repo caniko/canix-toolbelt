@@ -7,6 +7,37 @@ const INLINE: &str = "id url author{login __typename}body createdAt updatedAt co
 const CHECKS: &str = "totalCount pageInfo{hasNextPage endCursor}nodes{__typename ... on CheckRun{id name status conclusion detailsUrl startedAt completedAt}... on StatusContext{id context state targetUrl createdAt}}";
 const BASIC: &str = "id url title state isDraft updatedAt headRefOid baseRefOid baseRefName baseRef{target{oid}}mergedAt mergeCommit{oid}mergeable mergeStateStatus reviewDecision commits(last:1){nodes{commit{id oid statusCheckRollup{state contexts(first:100){CHECKS}}}}}";
 
+const INLINE_LIMIT: u64 = 2000;
+const REQUEST_LIMIT: usize = 128;
+
+struct BoundedGraph<'a, T> {
+    inner: &'a mut T,
+    remaining: usize,
+}
+impl<T: GraphQl> GraphQl for BoundedGraph<'_, T> {
+    fn query(&mut self, query: &str) -> io::Result<Value> {
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or_else(|| invalid("aggregate GitHub request budget exhausted"))?;
+        self.inner.query(query)
+    }
+}
+
+struct BoundedForge<'a, T> {
+    inner: &'a mut T,
+    remaining: usize,
+}
+impl<T: ForgeRest> ForgeRest for BoundedForge<'_, T> {
+    fn get(&mut self, host: &str, path: &str) -> io::Result<Value> {
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or_else(|| invalid("aggregate Forgejo request budget exhausted"))?;
+        self.inner.get(host, path)
+    }
+}
+
 /// Host-local authenticated GitHub GraphQL calls. Implementations bound time and bytes.
 pub trait GraphQl {
     /// Return the GraphQL `data` object; native errors must be unsuccessful results.
@@ -167,6 +198,11 @@ pub fn github(
     at: &str,
     now: i64,
 ) -> io::Result<Value> {
+    let mut bounded = BoundedGraph {
+        inner: transport,
+        remaining: REQUEST_LIMIT,
+    };
+    let transport = &mut bounded;
     let (_, owner, repo, number) = coordinate(url, true)?;
     let repository = format!("repository(owner:{},name:{})", quote(owner), quote(repo));
     let pull = format!("pullRequest(number:{number})");
@@ -207,6 +243,19 @@ pub fn github(
             ))?;
             Ok(data["repository"]["pullRequest"][name].clone())
         })?;
+    }
+    let mut inline_total = 0_u64;
+    for thread in p["reviewThreads"]["nodes"]
+        .as_array()
+        .expect("validated connection")
+    {
+        let count = thread["comments"]["totalCount"]
+            .as_u64()
+            .ok_or_else(|| invalid("missing or malformed connection total"))?;
+        inline_total = inline_total
+            .checked_add(count)
+            .filter(|total| *total <= INLINE_LIMIT)
+            .ok_or_else(|| invalid("aggregate GitHub inline comment bound exceeded"))?;
     }
     let mut inline_ids = BTreeSet::new();
     for thread in p["reviewThreads"]["nodes"]
@@ -408,10 +457,25 @@ fn forge_checks(
 
 /// Collect Forgejo candidate, checks, reviews, issue and nested inline comments.
 pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Result<Value> {
+    let mut bounded = BoundedForge {
+        inner: transport,
+        remaining: REQUEST_LIMIT,
+    };
+    let transport = &mut bounded;
     let (host, owner, repo, number) = coordinate(url, false)?;
     let stem = format!("repos/{owner}/{repo}");
     let path = format!("{stem}/pulls/{number}");
     let p = transport.get(host, &path)?;
+    if p["number"].as_u64() != Some(number)
+        || p["html_url"]
+            .as_str()
+            .and_then(|url| coordinate(url, false).ok())
+            != Some((host, owner, repo, number))
+    {
+        return Err(invalid(
+            "Forgejo pull identity differs from requested coordinate",
+        ));
+    }
     let updated = p["updated_at"]
         .as_str()
         .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
@@ -430,6 +494,17 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         .ok_or_else(|| invalid("missing forge candidate identity"))?;
     let reviews = forge_pages(transport, host, &format!("{path}/reviews"))?;
     let comments = forge_pages(transport, host, &format!("{stem}/issues/{number}/comments"))?;
+    let mut inline_total = 0_u64;
+    for review in &reviews {
+        let count = review["comments_count"]
+            .as_u64()
+            .filter(|count| *count <= INLINE_LIMIT)
+            .ok_or_else(|| invalid("missing, malformed or oversized review comment count"))?;
+        inline_total = inline_total
+            .checked_add(count)
+            .filter(|total| *total <= INLINE_LIMIT)
+            .ok_or_else(|| invalid("aggregate Forgejo inline comment bound exceeded"))?;
+    }
     let mut inline = Vec::new();
     let mut inline_ids = BTreeSet::new();
     for review in &reviews {
@@ -462,7 +537,15 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
     if fresh["updated_at"].as_str() != Some(updated) {
         return Err(invalid("forge update identity moved during collection"));
     }
-    for key in ["head", "base", "state", "merged", "updated_at"] {
+    for key in [
+        "number",
+        "html_url",
+        "head",
+        "base",
+        "state",
+        "merged",
+        "updated_at",
+    ] {
         if fresh[key] != p[key] {
             return Err(invalid(
                 "forge candidate or feedback moved during collection",

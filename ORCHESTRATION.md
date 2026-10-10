@@ -141,6 +141,10 @@ must remain unique across the combined review history.
 Malformed/truncated pagination, repeated cursors, and comparison movement fail
 collection. Consumers retain the last valid snapshot and record the error. These
 observations provide scheduling evidence, never merge or closure authority.
+Both collectors share a 128-request budget across all nested pagination and
+reject more than 2,000 inline comments across the entire PR. Exhaustion is an
+incomplete observation, never a partial snapshot. Forgejo binds both the returned
+pull number and canonical URL before collecting its history.
 
 `evidence` exchanges bounded byte-exact artifacts under explicitly declared owner
 roots. It excludes symlinks, project checkouts and files over 8 MiB, and records
@@ -167,10 +171,19 @@ path/digest bindings from the sender's `known` map. A source file becoming a
 directory uses two exchanges: defer descendants, remove the acknowledged receiver
 file, retain that removal receipt, then transfer descendants once its old identity
 is removed from `known`. A conflicting receiver file continues to block descendants.
+A source directory becoming a file first defers the replacement and sends the
+acknowledged descendant deletions with `Batch.prune` structural retirement roots.
+Only empty, non-checkout directories are retired. Foreign descendants preserve
+the directory and withhold its removal identities, so the sender retains `known`
+and retries that same phase. Persist `Receipt.pruned` with `Receipt.removed`;
+only after that durable receipt removes the old identities may the replacement
+file be sent. Retrying a completed retirement resynchronizes surviving ancestors.
+Receiver leaf-type changes, including sockets and oversized files, remain
+per-path conflicts; unrelated paths can advance under the same lease.
 Application independently
 enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/deferred
 entries and the
-48 MiB encoded-payload estimate. Receiver reads, directory creation, staging,
+48 MiB encoded-payload bound. Receiver reads, directory creation, staging,
 rename and deletion use pinned no-follow directory handles.
 Allowlist roots must be nonempty scoped relative paths. Ancestor links are
 fsynced before descending or writing, including existing links on a retry after
@@ -181,6 +194,10 @@ cannot acknowledge a previous rename/unlink whose final fsync failed.
 Source enumeration, artifact reads and deletion discovery also use pinned
 no-follow handles; an ancestor replacement cannot redirect collection outside
 the already-open authoritative directory.
+Source traversal also limits the aggregate directory-entry inventory to 20,000
+and path depth to 64 components, including empty directories. Compact JSON
+serialization is counted without buffering before accepting or applying a batch;
+escaped path bytes therefore cannot exceed the 48 MiB encoded bound.
 
 Worker report URLs must be unique across `prs` and `linkedReleasePRs`; duplicate
 entries reject the entire refresh without adopting partial progress or audits.

@@ -49,6 +49,54 @@ fn github_bounds_inline_comments_across_all_threads() {
 }
 
 #[test]
+fn github_request_budget_is_shared_across_nested_connections() {
+    struct ManyThreads {
+        calls: usize,
+        count: usize,
+    }
+    impl GraphQl for ManyThreads {
+        fn query(&mut self, query: &str) -> io::Result<Value> {
+            self.calls += 1;
+            let threads = |start: usize, more: bool| json!({"totalCount":self.count,"nodes":(start..(start+100).min(self.count)).map(|id|json!({"id":format!("thread_{id}"),"comments":{"totalCount":1,"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"inline"}}})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":more,"endCursor":"threads"}});
+            if self.calls == 1 {
+                let mut p = pull();
+                p["reviewThreads"] = threads(0, true);
+                return Ok(json!({"repository":{"pullRequest":p}}));
+            }
+            if query.contains("reviewThreads(first:100,after:") {
+                return Ok(
+                    json!({"repository":{"pullRequest":{"reviewThreads":threads(100,false)}}}),
+                );
+            }
+            if query.contains("node(id:") {
+                Ok(
+                    json!({"node":{"comments":{"totalCount":1,"nodes":[{"id":format!("comment_{}",self.calls)}],"pageInfo":{"hasNextPage":false}}}}),
+                )
+            } else {
+                Ok(json!({"repository":{"pullRequest":pull()}}))
+            }
+        }
+    }
+    for count in [125, 126, 200] {
+        let mut transport = ManyThreads { calls: 0, count };
+        let result = github(
+            &mut transport,
+            "https://github.com/owner/repo/pull/1",
+            &json!({}),
+            "now",
+            0,
+        );
+        if count == 125 {
+            result.unwrap();
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("request budget"), "{error}");
+        }
+        assert_eq!(transport.calls, 128);
+    }
+}
+
+#[test]
 fn github_rejects_another_pull_identity_before_collecting_its_history() {
     for url in [
         Value::Null,
@@ -460,6 +508,96 @@ fn forgejo_bounds_inline_comments_across_all_reviews_before_pagination() {
         transport.calls <= 3,
         "oversized aggregate launched inline pagination"
     );
+}
+
+#[test]
+fn forgejo_request_budget_is_shared_across_nested_reviews() {
+    struct ManyReviews {
+        calls: usize,
+        count: usize,
+    }
+    impl ForgeRest for ManyReviews {
+        fn get(&mut self, _: &str, path: &str) -> io::Result<Value> {
+            self.calls += 1;
+            if path == "repos/owner/repo/pulls/1" {
+                return Ok(forge_pull());
+            }
+            for (page, start) in [(1, 0), (2, 100)] {
+                if path == format!("repos/owner/repo/pulls/1/reviews?limit=100&page={page}") {
+                    return Ok(json!(
+                        (start..(start + 100).min(self.count))
+                            .map(|id| json!({"id":id+1,"comments_count":1}))
+                            .collect::<Vec<_>>()
+                    ));
+                }
+            }
+            if path.contains("/comments?limit=") && path.contains("/reviews/") {
+                return Ok(json!([{"id":self.calls}]));
+            }
+            if path.contains("/status?") {
+                return Ok(forge_status());
+            }
+            Ok(json!([]))
+        }
+    }
+    for count in [121, 122, 123, 200] {
+        let mut transport = ManyReviews { calls: 0, count };
+        let result = forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        );
+        if count == 121 {
+            result.unwrap();
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("request budget"), "{error}");
+        }
+        assert_eq!(transport.calls, 128);
+    }
+}
+
+#[test]
+fn forgejo_rejects_final_identity_substitution_without_other_movement() {
+    for (field, bad) in [
+        ("number", json!(2)),
+        ("html_url", json!("https://codefloe.com/other/repo/pulls/1")),
+    ] {
+        let mut final_pull = forge_pull();
+        final_pull[field] = bad;
+        let mut transport = ForgeScript(vec![
+            ("repos/owner/repo/pulls/1".into(), forge_pull()),
+            (
+                "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+                json!([]),
+            ),
+            (
+                "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
+                json!([]),
+            ),
+            (
+                "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                forge_status(),
+            ),
+            ("repos/owner/repo/pulls/1".into(), final_pull),
+            (
+                "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                forge_status(),
+            ),
+        ]);
+        let error = forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("moved"), "{error}");
+        assert_eq!(
+            transport.0.len(),
+            1,
+            "substituted pull fetched final checks"
+        );
+    }
 }
 
 fn forge_status() -> Value {

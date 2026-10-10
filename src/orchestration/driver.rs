@@ -564,6 +564,9 @@ fn compact(
             ));
         }
         if status == "completed" {
+            let changed_physical = state["packets"][&key]["pendingCompaction"]["physicalMessageID"]
+                .as_str()
+                != Some(observation.physical_message_ids[&packet.number].as_str());
             if !state["packets"][&key]["compactionReceipts"].is_object() {
                 state["packets"][&key]["compactionReceipts"] = json!({});
             }
@@ -571,6 +574,11 @@ fn compact(
                 json!({"status":"completed","at":at});
             state["packets"][&key]["pendingCompaction"] = Value::Null;
             adapter.persist(state)?;
+            // The old receipt proves only its old physical checkpoint. Leave
+            // the new observation blocked; next cycle prepares its own ID.
+            if changed_physical && observation.context_tokens[&packet.number] >= 180_000 {
+                return Ok(true);
+            }
             return Ok(false);
         }
         return Ok(true);
