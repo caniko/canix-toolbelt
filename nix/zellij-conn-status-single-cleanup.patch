@@ -1,0 +1,28 @@
+diff --git a/zellij-server/src/lib.rs b/zellij-server/src/lib.rs
+--- a/zellij-server/src/lib.rs
++++ b/zellij-server/src/lib.rs
+@@ -1615,8 +1615,9 @@
+             },
+             ServerInstruction::ConnStatus(client_id) => {
+                 let _ = os_input.send_to_client(client_id, ServerToClientMsg::Connected);
+-                remove_client!(client_id, os_input, session_state, session_data);
++                // The route thread queues RemoveClient when ConnStatus ends it.
++                // A second removal can target a newly accepted, reused client ID.
+             },
+             ServerInstruction::Log(
+                 lines_to_log,
+                 client_id,
+diff --git a/zellij-server/src/route.rs b/zellij-server/src/route.rs
+--- a/zellij-server/src/route.rs
++++ b/zellij-server/src/route.rs
+@@ -2674,8 +2674,9 @@
+                             }
+                         },
+                         ClientToServerMsg::ClientExited => {
+-                            let _ = to_server.send(ServerInstruction::RemoveClient(client_id));
++                            // The route-loop epilogue owns this removal too.
++                            // Sending it here can remove a later reused client ID.
+                             return Ok(true);
+                         },
+                         ClientToServerMsg::KillSession => {
+                             to_server

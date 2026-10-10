@@ -1,7 +1,16 @@
 {lib}: rec {
+  mkZellij = {pkgs}:
+    assert lib.assertMsg (lib.elem pkgs.zellij.version ["0.45.0" "0.45.1"])
+    "Toolbelt's Zellij cleanup patch requires source review for this version; select an explicitly verified zellij package.";
+      pkgs.zellij.override {
+        zellij-unwrapped = pkgs.zellij-unwrapped.overrideAttrs (old: {
+          patches = (old.patches or []) ++ [../nix/zellij-conn-status-single-cleanup.patch];
+        });
+      };
+
   mkPackages = {
     pkgs,
-    zellij ? pkgs.zellij,
+    zellij ? mkZellij {inherit pkgs;},
     gnupg ? pkgs.gnupg,
     rage ? pkgs.rage,
     tty ? pkgs.pinentry-tty,
@@ -45,7 +54,7 @@
       meta = rage.meta // {outputsToInstall = ["out"];};
     };
   in {
-    inherit router;
+    inherit router zellij;
     gpg = requestGpg;
     rage = requestRage;
   };
