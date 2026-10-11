@@ -14,6 +14,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 AGENT, ZELLIJ, CONNECT, GPGCONF, BASH, GPG, DIRECT, RAGE, XVFB, XDOTOOL = sys.argv[1:11]
 sys.argv[1:11] = []
@@ -223,8 +225,17 @@ class PinentryIntegration(unittest.TestCase):
     @classmethod
     def wait_for(cls, condition):
         deadline = time.monotonic() + 15
+        last_observation_error = None
         while time.monotonic() < deadline:
-            result = condition()
+            # Conditions only inspect fixture state. A Zellij connection read
+            # may fail while simultaneous prompts change panes; retry that
+            # observation, never prompt dispatch or keystrokes, within this
+            # same deadline. Permanent errors remain failed qualification.
+            try:
+                result = condition()
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                last_observation_error = f"{error}; stdout={error.stdout!r}; stderr={error.stderr!r}"
+                result = None
             if result:
                 return result
             time.sleep(0.05)
@@ -239,9 +250,13 @@ class PinentryIntegration(unittest.TestCase):
                     failures[index] = stderr
                 except subprocess.TimeoutExpired:
                     failures[index] = "exited client still has open subprocess streams"
-        panes = cls.panes()
+        try:
+            panes = cls.panes()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            panes = f"observation unavailable: {error}; stdout={error.stdout!r}; stderr={error.stderr!r}"
         raise AssertionError(f"timed out waiting for fixture state; deadline={deadline:.6f}; processes={states}; "
-                             f"age_states={traces}; failed_client_errors={failures}; panes={panes}")
+                             f"age_states={traces}; failed_client_errors={failures}; panes={panes}; "
+                             f"last_observation_error={last_observation_error}")
 
     @classmethod
     def query(cls, context, tty="/dev/pts/99999999", env=None):
@@ -606,6 +621,24 @@ class PinentryIntegration(unittest.TestCase):
             process.wait(timeout=15)
             os.close(master)
         cls.temp.cleanup()
+
+
+class FixtureObservationWait(unittest.TestCase):
+    def test_transient_read_failure_preserves_the_pending_condition(self):
+        context = SimpleNamespace(queries=[], panes=list)
+        observation = Mock(side_effect=[subprocess.CalledProcessError(1, ["zellij", "action", "list-panes"], stderr="fixture connection unavailable"), ["prompt-one", "prompt-two"]])
+        with patch.object(time, "sleep"):
+            result = PinentryIntegration.wait_for.__func__(context, observation)
+        self.assertEqual(result, ["prompt-one", "prompt-two"])
+        self.assertEqual(observation.call_count, 2)
+
+    def test_persistent_read_failure_still_fails_at_the_original_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
+            context = SimpleNamespace(queries=[], root=Path(directory), panes=Mock(side_effect=subprocess.CalledProcessError(1, ["zellij", "action", "list-panes"], stderr="fixture final diagnostic unavailable")))
+            observation = Mock(side_effect=subprocess.TimeoutExpired(["zellij", "action", "list-panes"], 15, stderr="fixture observation timeout"))
+            with patch.object(time, "monotonic", side_effect=[0, 1, 16]), patch.object(time, "sleep"), self.assertRaisesRegex(AssertionError, "fixture observation timeout"):
+                PinentryIntegration.wait_for.__func__(context, observation)
+            self.assertEqual(observation.call_count, 1)
 
 
 if __name__ == "__main__":
