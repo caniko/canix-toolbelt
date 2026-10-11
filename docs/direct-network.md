@@ -11,6 +11,9 @@ member; VLANs require an eligible lower link. The traversal is bounded and
 container-only bridges are omitted. `directInterfaces` explicitly enrolls
 additional uplinks, including fleet WireGuard interfaces. An explicit virtual
 interface can back an eligible bridge or VLAN.
+Same-namespace VLAN parents come from iproute2's named `link` field. A foreign
+namespace's `link_index` cannot establish eligibility through a matching local
+interface index.
 
 Multipath routes retain every eligible nexthop, its weight, order and on-link
 flag. A route containing an ineligible nexthop is omitted as a whole. The daemon

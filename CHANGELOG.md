@@ -36,6 +36,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   and reject container-only implicit uplinks and noncanonical cgroup depths.
 - Retain IPv6 same-prefix, same-metric routes across multiple uplinks without
   replacing foreign routes or blocking the readiness barrier.
+- Discover ordinary VLAN uplinks through iproute2's named parent field; reject
+  foreign-namespace index collisions and retain VLAN route and DNS coverage.
 - Make the unsafe-object preparation fixtures tolerate existing Git object
   fanout directories while preserving rejection and persistent tombstone checks.
 - Authenticate all independent DNS listeners against the native resolver unit,

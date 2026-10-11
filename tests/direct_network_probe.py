@@ -56,6 +56,11 @@ try:
     run("ip", "link", "set", "uplink2", "up")
     run("ip", "-6", "addr", "add", "fe80::1/64", "dev", "uplink", "nodad")
     run("ip", "-6", "addr", "add", "fe80::2/64", "dev", "uplink2", "nodad")
+    run("ip", "link", "add", "link", "uplink", "name", "uplink.37", "type", "vlan", "id", "37")
+    run("ip", "addr", "add", "198.18.37.1/24", "dev", "uplink.37")
+    run("ip", "-6", "addr", "add", "2001:db8:37::1/64", "dev", "uplink.37", "nodad")
+    run("ip", "-6", "addr", "add", "fe80::37/64", "dev", "uplink.37", "nodad")
+    run("ip", "link", "set", "uplink.37", "up")
 
     def remote(*args):
         return run("nsenter", "--net=" + str(pathlib.Path('/proc') / str(server.pid) / 'ns/net'), "ip", *args)
@@ -66,10 +71,16 @@ try:
     remote("-6", "addr", "add", "2001:db8:1::2/64", "dev", "peer", "nodad")
     remote("-6", "addr", "add", "2001:db8:20::20/128", "dev", "lo", "nodad")
     remote("link", "set", "peer", "up")
+    remote("link", "add", "link", "peer", "name", "peer.37", "type", "vlan", "id", "37")
+    remote("addr", "add", "198.18.37.2/24", "dev", "peer.37")
+    remote("-6", "addr", "add", "2001:db8:37::2/64", "dev", "peer.37", "nodad")
+    remote("link", "set", "peer.37", "up")
     remote("route", "add", "default", "via", "198.18.0.1")
     remote("-6", "route", "add", "default", "via", "2001:db8:1::1")
     run("ip", "route", "add", "default", "via", "198.18.0.2", "metric", "100")
     run("ip", "-6", "route", "add", "default", "via", "2001:db8:1::2", "metric", "100")
+    run("ip", "route", "add", "default", "via", "198.18.37.2", "dev", "uplink.37", "metric", "50")
+    run("ip", "-6", "route", "add", "default", "via", "2001:db8:37::2", "dev", "uplink.37", "metric", "50")
     # Strict reverse-path filtering should consult the direct routing mark.
     for option, value in (('rp_filter', '1'), ('src_valid_mark', '1')):
         pathlib.Path(f'/proc/sys/net/ipv4/conf/all/{option}').write_text(value)
@@ -130,7 +141,11 @@ try:
         rules = json.loads(run('ip', '-6', '-j', 'rule', 'show'))
         table = next(str(rule['table']) for rule in rules if rule['priority'] == 50)
         routes = json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', table))
-        assert {route['dev'] for route in routes if route.get('dst') == 'fe80::/64'} == {'uplink', 'uplink2'}, routes
+        assert {route['dev'] for route in routes if route.get('dst') == 'fe80::/64'} == {'uplink', 'uplink2', 'uplink.37'}, routes
+        for family in ['-4', '-6']:
+            table = next(str(rule['table']) for rule in json.loads(run('ip', family, '-j', 'rule', 'show')) if rule['priority'] == 50)
+            routes = json.loads(run('ip', family, '-j', 'route', 'show', 'table', table))
+            assert any(route.get('dst') == 'default' and route.get('dev') == 'uplink.37' and route['metric'] == 50 for route in routes), routes
         with socket.socket(socket.AF_UNIX) as guard:
             guard.settimeout(3)
             guard.connect(str(directory / 'ready.sock'))

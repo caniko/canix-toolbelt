@@ -194,13 +194,12 @@ fn direct_devices(policy: &Policy, links: &Value) -> BTreeSet<String> {
                             || (link["ifindex"].as_u64().is_some()
                                 && member["master"].as_u64() == link["ifindex"].as_u64()))
                 }),
-                Some("vlan") => links.iter().any(|lower| {
-                    lower["ifname"]
-                        .as_str()
-                        .is_some_and(|name| devices.contains(name))
-                        && (link["link_index"].as_u64().is_some()
-                            && link["link_index"].as_u64() == lower["ifindex"].as_u64())
-                }),
+                // iproute2 names a same-namespace VLAN parent in `link`.
+                // `link_index` identifies a foreign-namespace parent and must
+                // not be matched against a coincident local interface index.
+                Some("vlan") => link["link"]
+                    .as_str()
+                    .is_some_and(|lower| devices.contains(lower)),
                 _ => false,
             };
             if backed {

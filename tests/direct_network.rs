@@ -152,8 +152,8 @@ fn container_only_bridges_are_excluded_but_physical_and_explicit_bridges_remain_
         {"ifindex": 3, "ifname": "br-container", "link_type": "ether", "linkinfo": {"info_kind": "bridge"}},
         {"ifindex": 4, "ifname": "veth0", "link_type": "ether", "master": "br-container", "linkinfo": {"info_kind": "veth"}},
         {"ifindex": 5, "ifname": "br-explicit", "link_type": "ether", "linkinfo": {"info_kind": "bridge"}},
-        {"ifindex": 6, "ifname": "vlan-container", "link_type": "ether", "link_index": 3, "linkinfo": {"info_kind": "vlan"}},
-        {"ifindex": 7, "ifname": "vlan-physical", "link_type": "ether", "link_index": 1, "linkinfo": {"info_kind": "vlan"}}
+        {"ifindex": 6, "ifname": "vlan-container", "link_type": "ether", "link": "br-container", "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 7, "ifname": "vlan-physical", "link_type": "ether", "link": "enp1s0", "linkinfo": {"info_kind": "vlan"}}
     ]);
     let routes = serde_json::json!([
         {"dst": "192.0.2.0/24", "dev": "br-uplink"},
@@ -171,6 +171,36 @@ fn container_only_bridges_are_excluded_but_physical_and_explicit_bridges_remain_
             .map(|r| r.device.as_str())
             .collect::<Vec<_>>(),
         ["br-uplink", "br-explicit", "vlan-physical"]
+    );
+}
+
+#[test]
+fn vlan_parent_names_trace_nested_uplinks_but_foreign_indices_and_cycles_do_not() {
+    let links = serde_json::json!([
+        {"ifindex": 1, "ifname": "enp1s0", "link_type": "ether"},
+        {"ifindex": 2, "ifname": "container0", "link_type": "ether", "linkinfo": {"info_kind": "veth"}},
+        {"ifindex": 3, "ifname": "vlan-nested", "link_type": "ether", "link": "vlan-physical", "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 4, "ifname": "vlan-physical", "link_type": "ether", "link": "enp1s0", "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 5, "ifname": "vlan-container", "link_type": "ether", "link": "container0", "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 6, "ifname": "vlan-foreign", "link_type": "ether", "link_index": 1, "link_netnsid": 0, "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 7, "ifname": "vlan-cycle-a", "link_type": "ether", "link": "vlan-cycle-b", "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 8, "ifname": "vlan-cycle-b", "link_type": "ether", "link": "vlan-cycle-a", "linkinfo": {"info_kind": "vlan"}}
+    ]);
+    let routes = serde_json::json!([
+        {"dst": "10.0.1.0/24", "dev": "vlan-nested"},
+        {"dst": "10.0.2.0/24", "dev": "vlan-physical"},
+        {"dst": "10.0.3.0/24", "dev": "vlan-container"},
+        {"dst": "10.0.4.0/24", "dev": "vlan-foreign"},
+        {"dst": "10.0.5.0/24", "dev": "vlan-cycle-a"},
+        {"dst": "10.0.6.0/24", "dev": "vlan-cycle-b"}
+    ]);
+    let selected = select_routes(&policy(), &links, &routes).unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|r| r.device.as_str())
+            .collect::<Vec<_>>(),
+        ["vlan-nested", "vlan-physical"]
     );
 }
 

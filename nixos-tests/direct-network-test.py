@@ -33,6 +33,12 @@ def check_direct() -> None:
     assert result['v4'] == result['v6'] == result['fleet'] == 'direct', result
     assert result['dns'] == ['2001:db8:20::20', '203.0.113.20'], result
     assert result['fleetDns'] == '10.123.0.1', result
+    for family, prefix in [('-4', '198.18.37.0/24'), ('-6', '2001:db8:37::/64')]:
+        rules = json.loads(machine.succeed(f'ip {family} -j rule show'))
+        table = next(str(rule['table']) for rule in rules if rule['priority'] == 50)
+        routes = json.loads(machine.succeed(f'ip {family} -j route show table {table}'))
+        assert any(route.get('dst') == prefix and route.get('dev') == 'uplink.37' for route in routes), routes
+    assert machine.succeed(userrun + '--slice=agent-tools.slice curl --fail --max-time 5 http://198.18.37.2:8080/').strip() == 'direct'
     machine.succeed('curl --fail --max-time 5 http://127.0.0.1:4096/')
     # New external listener connections must pass reverse-path filtering and
     # reply directly while the VPN owns the internet default route.
