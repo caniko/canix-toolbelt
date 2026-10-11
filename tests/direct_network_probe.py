@@ -16,8 +16,8 @@ import time
 binary = str(pathlib.Path(sys.argv[1]).resolve())
 
 
-def run(*args):
-    result = subprocess.run(args, text=True, check=False, capture_output=True, timeout=10)
+def run(*args, timeout=10):
+    result = subprocess.run(args, text=True, check=False, capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f'{args!r}: {result.stderr.strip()}')
     return result.stdout
@@ -114,24 +114,34 @@ try:
                 log.seek(0)
                 raise AssertionError(log.read())
             try:
-                run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only')
+                run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
                 break
             except RuntimeError:
                 time.sleep(0.1)
         else:
             log.seek(0)
             raise AssertionError(log.read())
+        with socket.socket(socket.AF_UNIX) as guard:
+            guard.settimeout(3)
+            guard.connect(str(directory / 'ready.sock'))
+            guard.sendall(b'ready\n')
+            assert guard.recv(32) == b'not-ready\n', 'namespace-only DNS passed the native admission protocol'
         denied = subprocess.run([binary, 'ready', '--socket', str(directory / 'ready.sock')],
                                 check=False, capture_output=True, text=True, timeout=20)
-        assert denied.returncode != 0, 'namespace-only fixture admitted unauthenticated DNS'
+        # Clap rejects malformed invocations with status 2. The native client
+        # returns 1 after its readiness wait; a final bounded transport timeout
+        # can report EAGAIN rather than the previous not-ready response.
+        assert denied.returncode == 1 and denied.stderr.startswith('direct-network: '), denied.stderr
         true = run('which', 'true').strip()
         echo = run('which', 'echo').strip()
         guarded = subprocess.run([binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
                                   '--unit', 'fixture.service', '--', echo, 'must-not-launch'],
                                  check=False, capture_output=True, text=True, timeout=20)
-        assert guarded.returncode != 0 and 'must-not-launch' not in guarded.stdout
-        assert run(binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
-                   '--', echo, 'desktop-only-user') == 'desktop-only-user\n'
+        assert guarded.returncode == 1 and guarded.stderr.startswith('direct-network: ') and 'must-not-launch' not in guarded.stdout, guarded.stderr
+        unanchored = subprocess.run([binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
+                                    '--', echo, 'must-not-launch-unanchored'],
+                                   check=False, capture_output=True, text=True, timeout=20)
+        assert unanchored.returncode == 1 and unanchored.stderr.startswith('direct-network: ') and not unanchored.stdout, unanchored.stderr
         failed_launch = subprocess.run([binary, 'launch', '--socket', str(directory / 'missing.sock'),
                                        '--systemctl', true, '--unit', 'fixture.service', '--',
                                        echo, 'must-not-launch'], check=False, capture_output=True, text=True, timeout=20)
@@ -215,7 +225,7 @@ try:
         daemon = subprocess.Popen([binary, 'daemon', '--policy', str(policy)], stdout=log, stderr=log)
         for _ in range(5):
             try:
-                run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only')
+                run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
                 break
             except RuntimeError:
                 time.sleep(0.1)
@@ -224,6 +234,11 @@ try:
             raise AssertionError(log.read())
         verify('daemon-restarted-existing-connections-survive')
         print('PASS: production daemon; existing/new IPv4/IPv6 TCP, UDP DNS, repeated VPN-shaped transitions and retained protection')
+except Exception:
+    if daemon is not None:
+        log.seek(0)
+        print('Failed probe daemon diagnostics:\n' + log.read(), file=sys.stderr)
+    raise
 finally:
     if daemon is not None:
         daemon.terminate()

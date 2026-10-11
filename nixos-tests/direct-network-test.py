@@ -145,8 +145,10 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
     machine.fail(user + 'timeout 4 canix-toolbelt-direct-network ready --routes-only')
+    machine.succeed(user + '@PYTHON@ -c \'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(8); s.connect("/run/direct-network/ready.sock"); s.sendall(b"ready\\n"); assert s.recv(32) == b"not-ready\\n"\'')
     status, output = machine.execute(user + 'canix-toolbelt-direct-network launch --systemctl /run/current-system/sw/bin/systemctl --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo must-not-launch')
-    assert status != 0 and 'direct-network guard is not ready' in output and 'must-not-launch' not in output, output
+    assert status == 1 and 'direct-network: ' in output and 'direct-network user anchors failed' not in output and 'must-not-launch' not in output, output
+    machine.succeed(userctl + 'is-active direct-network-agent-tools.service')
     machine.succeed('systemctl stop foreign-dns.service')
     machine.succeed('systemctl reset-failed foreign-dns.service')
     assert machine.succeed(userctl + 'show backend.service -p MainPID --value').strip() == pid
