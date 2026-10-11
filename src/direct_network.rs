@@ -22,6 +22,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 /// Reserved packet mark; never matches a whole UID or a desktop application slice.
 pub const MARK: u32 = 0xca010000;
 const TABLES: [u32; 2] = [51821, 51822];
+// This daemon's explicit route namespace, including its unreachable fallback.
+// Untagged routes from older versions are never silently adopted.
+const ROUTE_PROTOCOL: u32 = 186;
 const LOCAL_PRIORITY: u32 = 49;
 const DIRECT_PRIORITY: u32 = 50;
 const NFT_TABLE: &str = "toolbelt_direct_network";
@@ -421,10 +424,10 @@ fn nft_rules(
 }
 
 fn route_batch(routes: &[Route], table: u32) -> String {
-    let mut text = format!("route flush table {table}\n");
+    let mut text = format!("route flush table {table} proto {ROUTE_PROTOCOL}\n");
     for route in routes {
         text.push_str(&format!(
-            "route replace table {table} {}",
+            "route add table {table} {} proto {ROUTE_PROTOCOL}",
             route.destination
         ));
         if let Some(gateway) = &route.gateway {
@@ -455,7 +458,7 @@ fn route_batch(routes: &[Route], table: u32) -> String {
     }
     // Never fall through to the VPN when the direct uplink has no route.
     text.push_str(&format!(
-        "route replace unreachable default table {table} metric 4294967295\n"
+        "route add unreachable default table {table} proto {ROUTE_PROTOCOL} metric 4294967295\n"
     ));
     text
 }
@@ -550,11 +553,33 @@ fn check_reservations(policy: &Policy) -> Result<()> {
                 ));
             }
         }
+        let routes = json(
+            &policy.ip,
+            &[family, "-N", "-j", "route", "show", "table", "all"],
+        )?;
+        for route in routes
+            .as_array()
+            .ok_or_else(|| invalid("ip route did not return an array"))?
+        {
+            let table = numeric_id(&route["table"]);
+            if TABLES.iter().any(|t| table == Some(u64::from(*t)))
+                && numeric_id(&route["protocol"]) != Some(u64::from(ROUTE_PROTOCOL))
+            {
+                return Err(invalid(format!(
+                    "reserved direct-network table contains an unowned route: {route}"
+                )));
+            }
+        }
     }
     Ok(())
 }
 
+fn numeric_id(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str()?.parse().ok())
+}
+
 fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> {
+    check_reservations(policy)?;
     let initial = family_rules(policy, family)?;
     let active = initial
         .as_array()
@@ -577,11 +602,13 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
     {
         delete_rule(policy, family, rule)?;
     }
+    check_reservations(policy)?;
     output(
         &policy.ip,
         &args(&[family, "-batch", "-"]),
         Some(&route_batch(routes, table)),
     )?;
+    check_reservations(policy)?;
     let current = family_rules(policy, family)?;
     // New rules are installed while the previous complete table remains live.
     output(
@@ -701,6 +728,43 @@ struct State {
     cgroups: BTreeMap<String, u64>,
     devices: BTreeSet<String>,
     nft_present: bool,
+    dns_synchronized: bool,
+}
+
+fn sync_dns_servers(policy: &Policy, state: &mut State, servers: &str) -> Result<()> {
+    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(servers) {
+        let temp = format!("{}.new", policy.servers_file);
+        fs::write(&temp, servers)?;
+        fs::rename(temp, &policy.servers_file)?;
+        state.dns_synchronized = false;
+    }
+    let active = Command::new(&policy.systemctl)
+        .args(["is-active", "--quiet", "direct-network-dns.service"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !active.success() {
+        state.dns_synchronized = false;
+        if !matches!(active.code(), Some(3 | 4)) {
+            return Err(invalid("cannot inspect resolver state"));
+        }
+        // An absent resolver is expected before the root routes-only barrier.
+        return Ok(());
+    }
+    if !state.dns_synchronized {
+        output(
+            &policy.systemctl,
+            &args(&[
+                "kill",
+                "--kill-whom=main",
+                "--signal=HUP",
+                "direct-network-dns.service",
+            ]),
+            None,
+        )?;
+        state.dns_synchronized = true;
+    }
+    Ok(())
 }
 
 fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
@@ -756,24 +820,7 @@ fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
         state.nft_present = true;
     }
     let servers = dns_servers(policy, &devices, &links)?;
-    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(&servers) {
-        let temp = format!("{}.new", policy.servers_file);
-        fs::write(&temp, servers)?;
-        fs::rename(temp, &policy.servers_file)?;
-        // An absent DNS unit is normal during initial startup. No service
-        // restart is needed when uplink DNS changes.
-        let _ = Command::new(&policy.systemctl)
-            .args([
-                "kill",
-                "--kill-whom=main",
-                "--signal=HUP",
-                "direct-network-dns.service",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    Ok(())
+    sync_dns_servers(policy, state, &servers)
 }
 
 fn read_authorized_request(
@@ -846,11 +893,12 @@ pub fn daemon(policy_path: &Path) -> Result<()> {
             let current = supported
                 && reconcile(&policy, &mut state).is_ok()
                 && (routes_only
-                    || TcpStream::connect_timeout(
-                        &SocketAddr::from(([127, 0, 0, 54], 5354)),
-                        Duration::from_secs(1),
-                    )
-                    .is_ok());
+                    || (state.dns_synchronized
+                        && TcpStream::connect_timeout(
+                            &SocketAddr::from(([127, 0, 0, 54], 5354)),
+                            Duration::from_secs(1),
+                        )
+                        .is_ok()));
             let message = if current { "ready\n" } else { "not-ready\n" };
             let _ = stream.write_all(message.as_bytes());
         }
@@ -913,6 +961,67 @@ mod tests {
     }
 
     #[test]
+    fn failed_dns_reload_retries_unchanged_files_and_resynchronizes_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let systemctl = root.path().join("systemctl");
+        let count = root.path().join("reload-count");
+        executable(
+            &systemctl,
+            &format!(
+                "case \"$1\" in\n is-active) exit 0;;\n kill) count=0; test ! -f '{0}' || read -r count <'{0}'; count=$((count + 1)); printf '%s\\n' \"$count\" >'{0}'; test \"$count\" -gt 1;;\n *) exit 3;;\nesac",
+                count.display()
+            ),
+        );
+        let mut p = policy();
+        p.systemctl = systemctl.to_str().unwrap().into();
+        p.servers_file = root.path().join("servers").to_str().unwrap().into();
+        let mut state = State::default();
+        let servers = "server=192.0.2.53\n";
+        assert!(
+            sync_dns_servers(&p, &mut state, servers).is_err(),
+            "failed reload was acknowledged"
+        );
+        assert!(!state.dns_synchronized);
+        assert_eq!(fs::read_to_string(&p.servers_file).unwrap(), servers);
+        sync_dns_servers(&p, &mut state, servers).unwrap();
+        assert!(state.dns_synchronized);
+        assert_eq!(fs::read_to_string(&count).unwrap(), "2\n");
+        let mut restarted = State::default();
+        sync_dns_servers(&p, &mut restarted, servers).unwrap();
+        assert!(restarted.dns_synchronized);
+        assert_eq!(fs::read_to_string(&count).unwrap(), "3\n");
+        executable(&systemctl, "test \"$1\" = is-active || exit 90; exit 3");
+        let mut bootstrap = State::default();
+        sync_dns_servers(&p, &mut bootstrap, servers).unwrap();
+        assert!(
+            !bootstrap.dns_synchronized,
+            "absent resolver acknowledged DNS readiness"
+        );
+    }
+
+    #[test]
+    fn reserved_table_contents_are_checked_without_rules_before_any_flush() {
+        let root = tempfile::tempdir().unwrap();
+        let ip = root.path().join("ip");
+        let mut p = policy();
+        p.ip = ip.to_str().unwrap().into();
+        for family in ["-4", "-6"] {
+            for table in TABLES {
+                executable(
+                    &ip,
+                    &format!(
+                        "case \"$*\" in\n *'rule show') printf '[]';;\n '{family} -N -j route show table all') printf '%s' '[{{\"dst\":\"192.0.2.0/24\",\"dev\":\"enp1s0\",\"table\":{table},\"protocol\":\"static\"}}]';;\n *'route show table all') printf '[]';;\n *) exit 91;;\nesac"
+                    ),
+                );
+                assert!(
+                    check_reservations(&p).is_err(),
+                    "foreign {family} table {table} was accepted without a policy rule"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn link_local_dns_servers_keep_distinct_interface_scopes_and_reject_mismatches() {
         let root = tempfile::tempdir().unwrap();
         let nmcli = root.path().join("nmcli");
@@ -955,7 +1064,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(route_batch(&routes, TABLES[0]).contains("default metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+        assert!(route_batch(&routes, TABLES[0]).contains("default proto 186 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
     }
 
     #[test]
