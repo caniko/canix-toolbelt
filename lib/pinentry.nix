@@ -28,7 +28,7 @@
       name = "rage-pinentry-context-${rage.version}";
       inherit (rage) version;
       paths = [rage];
-      nativeBuildInputs = [pkgs.makeWrapper pkgs.python3 pkgs.bash pkgs.xorg.xorgserver pkgs.xdotool];
+      nativeBuildInputs = [pkgs.makeWrapper pkgs.python3 pkgs.bash pkgs.xorg-server pkgs.xdotool];
       postBuild = ''
         wrapProgram "$out/bin/rage" \
           --set PINENTRY_PROGRAM ${lib.getExe router} \
@@ -38,7 +38,7 @@
           ${router}/bin/canix-toolbelt-pinentry-agent ${lib.getExe zellij} \
           ${gnupg}/bin/gpg-connect-agent ${gnupg}/bin/gpgconf ${lib.getExe pkgs.bash} \
           ${gnupg}/bin/gpg ${lib.getExe router} "$out/bin/rage" \
-          ${pkgs.xorg.xorgserver}/bin/Xvfb ${lib.getExe pkgs.xdotool} --wrapped-rage \
+          ${pkgs.xorg-server}/bin/Xvfb ${lib.getExe pkgs.xdotool} --wrapped-rage \
           PinentryIntegration.test_rage_plugin_confirm_and_pin_use_direct_context_with_piped_stdio \
           PinentryIntegration.test_rage_plugin_cancel_does_not_open_a_second_prompt
       '';
