@@ -117,3 +117,29 @@ fn malformed_runtime_tokens_cannot_become_ip_or_nft_commands() {
         .insert("vpn.test\nserver=evil".into(), "10.123.0.1".into());
     assert!(p.validate().is_err());
 }
+
+#[test]
+fn noncanonical_cgroup_separators_cannot_silently_change_socket_depth() {
+    for value in [
+        "system.slice//worker.slice",
+        "system.slice/",
+        "system.slice/./worker.slice",
+    ] {
+        let mut p = policy();
+        p.cgroup_paths = vec![value.into()];
+        assert!(
+            p.validate().is_err(),
+            "accepted noncanonical enrollment path {value}"
+        );
+        let mut p = policy();
+        p.dns_cgroup = Some(value.into());
+        assert!(
+            p.validate().is_err(),
+            "accepted noncanonical resolver path {value}"
+        );
+    }
+    let mut p = policy();
+    p.cgroup_paths = vec!["system.slice/worker.slice".into()];
+    p.dns_cgroup = Some("system.slice/direct-network-dns.service".into());
+    p.validate().unwrap();
+}

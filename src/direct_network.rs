@@ -90,6 +90,9 @@ impl Policy {
         }
         for path in self.cgroup_paths.iter().chain(self.dns_cgroup.iter()) {
             if !token(path)
+                || path
+                    .split('/')
+                    .any(|segment| segment.is_empty() || segment == "." || segment == "..")
                 || Path::new(path)
                     .components()
                     .any(|c| !matches!(c, Component::Normal(_)))
@@ -633,6 +636,20 @@ fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
     Ok(())
 }
 
+fn read_authorized_request(
+    stream: &mut UnixStream,
+    uid: u32,
+    allowed: &[u32],
+) -> Result<Option<Vec<u8>>> {
+    if uid != 0 && !allowed.contains(&uid) {
+        return Ok(None);
+    }
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    let mut request = [0u8; 16];
+    let count = stream.read(&mut request).unwrap_or(0);
+    Ok(Some(request[..count].to_vec()))
+}
+
 /// Run the root daemon. Kernel protection survives daemon failure or normal exit.
 ///
 /// Only policy-selected cgroups are enrolled. Readiness clients cannot supply
@@ -673,18 +690,20 @@ pub fn daemon(policy_path: &Path) -> Result<()> {
                 Err(error) => return Err(error.into()),
             };
             stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
             let credentials = rustix::net::sockopt::socket_peercred(&stream)?;
-            let authorized = credentials.uid.is_root()
-                || policy.allowed_users.contains(&credentials.uid.as_raw());
-            let mut request = [0u8; 16];
-            let count = stream.read(&mut request).unwrap_or(0);
-            let routes_only = &request[..count] == b"routes\n" && credentials.uid.is_root();
-            let supported = routes_only || &request[..count] == b"ready\n";
+            let Some(request) = read_authorized_request(
+                &mut stream,
+                credentials.uid.as_raw(),
+                &policy.allowed_users,
+            )?
+            else {
+                continue;
+            };
+            let routes_only = request == b"routes\n" && credentials.uid.is_root();
+            let supported = routes_only || request == b"ready\n";
             // A slice may have appeared after the periodic snapshot. Enroll it
             // synchronously before acknowledging its anchor's startup barrier.
-            let current = authorized
-                && supported
+            let current = supported
                 && reconcile(&policy, &mut state).is_ok()
                 && (routes_only
                     || TcpStream::connect_timeout(
@@ -732,5 +751,35 @@ fn request_ready(socket: &Path, routes_only: bool, timeout: Duration) -> Result<
         Ok(())
     } else {
         Err(invalid("direct-network guard is not ready"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silent_unauthorized_peers_are_rejected_without_reading_or_delaying_reconciliation() {
+        let (mut server, _silent_peer) = UnixStream::pair().unwrap();
+        let started = Instant::now();
+        assert!(
+            read_authorized_request(&mut server, u32::MAX, &[1000])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "unauthorized peer consumed a blocking read timeout"
+        );
+        for uid in [0, 1000] {
+            let (mut server, mut peer) = UnixStream::pair().unwrap();
+            peer.write_all(b"ready\n").unwrap();
+            assert_eq!(
+                read_authorized_request(&mut server, uid, &[1000])
+                    .unwrap()
+                    .unwrap(),
+                b"ready\n"
+            );
+        }
     }
 }
