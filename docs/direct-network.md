@@ -26,8 +26,11 @@ The module reserves mark `0xca010000`, rule priorities 49/50, routing tables
 owners must not use that namespace. Each table is inspected independently of
 policy-rule presence, for both address families. Untagged or differently tagged
 routes cause reconciliation to fail before any table flush. Flushes select only
-protocol 242; route installation uses `add`, preventing replacement of a
-concurrently inserted foreign route. Observed conflicts also block the switch.
+protocol 242. IPv4 routes use `add`; IPv6 routes use non-replacing `append` to
+retain same-prefix, same-metric siblings on distinct interfaces, including
+link-local routes. Neither operation replaces a concurrently inserted foreign
+route. The unreachable fallback uses `add`, and observed conflicts block the
+switch after installation too.
 The inactive complete snapshot is installed before moving the live rules.
 
 Earlier daemon versions installed untagged routes. They are not adopted or

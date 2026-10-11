@@ -50,6 +50,12 @@ try:
     run("ip", "addr", "add", "198.18.0.1/24", "dev", "uplink")
     run("ip", "-6", "addr", "add", "2001:db8:1::1/64", "dev", "uplink", "nodad")
     run("ip", "link", "set", "uplink", "up")
+    # IPv6 keeps one connected link-local prefix per interface at the same
+    # metric. Copying each with exclusive route-add used to block readiness.
+    run("ip", "link", "add", "uplink2", "type", "veth", "peer", "name", "unused2")
+    run("ip", "link", "set", "uplink2", "up")
+    run("ip", "-6", "addr", "add", "fe80::1/64", "dev", "uplink", "nodad")
+    run("ip", "-6", "addr", "add", "fe80::2/64", "dev", "uplink2", "nodad")
 
     def remote(*args):
         return run("nsenter", "--net=" + str(pathlib.Path('/proc') / str(server.pid) / 'ns/net'), "ip", *args)
@@ -104,7 +110,7 @@ try:
             'socket': str(directory / 'ready.sock'), 'serversFile': str(directory / 'servers'),
             'ip': run('which', 'ip').strip(), 'nft': run('which', 'nft').strip(),
             'nmcli': '/bin/true', 'systemctl': '/bin/true',
-            'cgroupPaths': [cgroup], 'allowedUsers': [0], 'directInterfaces': ['uplink'],
+            'cgroupPaths': [cgroup], 'allowedUsers': [0], 'directInterfaces': ['uplink', 'uplink2'],
             'dnsServers': [], 'dnsZones': {}, 'networkManagerDns': False,
         }))
         log = (directory / 'daemon.log').open('w+')
@@ -121,6 +127,10 @@ try:
         else:
             log.seek(0)
             raise AssertionError(log.read())
+        rules = json.loads(run('ip', '-6', '-j', 'rule', 'show'))
+        table = next(str(rule['table']) for rule in rules if rule['priority'] == 50)
+        routes = json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', table))
+        assert {route['dev'] for route in routes if route.get('dst') == 'fe80::/64'} == {'uplink', 'uplink2'}, routes
         with socket.socket(socket.AF_UNIX) as guard:
             guard.settimeout(3)
             guard.connect(str(directory / 'ready.sock'))
@@ -221,6 +231,16 @@ try:
                 assert run('ip', family, '-j', 'rule', 'show') == with_conflict, conflict
                 run('ip', family, 'rule', 'del', *conflict)
             assert run('ip', family, '-j', 'rule', 'show') == before_rules
+            # Route ownership is independent of policy-rule ownership. A
+            # foreign table entry must reject restart and retain exact bytes.
+            conflict = ['unreachable', 'default', 'table', table, 'proto', '99', 'metric', '123456']
+            run('ip', family, 'route', 'add', *conflict)
+            foreign_routes = run('ip', family, '-N', '-j', 'route', 'show', 'table', table)
+            rejected = subprocess.run([binary, 'daemon', '--policy', str(policy)], capture_output=True, text=True, timeout=5, check=False)
+            assert rejected.returncode == 1 and 'unowned route' in rejected.stderr, rejected.stderr
+            assert run('ip', family, '-N', '-j', 'route', 'show', 'table', table) == foreign_routes
+            assert run('ip', family, '-j', 'rule', 'show') == before_rules
+            run('ip', family, 'route', 'del', *conflict)
         # Restart with the retained tables and sockets: no active-table flush.
         daemon = subprocess.Popen([binary, 'daemon', '--policy', str(policy)], stdout=log, stderr=log)
         for _ in range(5):

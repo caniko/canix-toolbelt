@@ -425,11 +425,16 @@ fn nft_rules(
     text
 }
 
-fn route_batch(routes: &[Route], table: u32) -> String {
+fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
     let mut text = format!("route flush table {table} proto {ROUTE_PROTOCOL}\n");
+    // IPv6 stores same-prefix/metric routes on different interfaces as siblings
+    // (including every interface's fe80::/64). Exclusive add rejects the second
+    // sibling; append adds it without replacing existing routes. Reservations
+    // remain checked before the owned-only flush and after this batch.
+    let operation = if family == "-6" { "append" } else { "add" };
     for route in routes {
         text.push_str(&format!(
-            "route add table {table} {} proto {ROUTE_PROTOCOL}",
+            "route {operation} table {table} {} proto {ROUTE_PROTOCOL}",
             route.destination
         ));
         if let Some(gateway) = &route.gateway {
@@ -608,7 +613,7 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
     output(
         &policy.ip,
         &args(&[family, "-batch", "-"]),
-        Some(&route_batch(routes, table)),
+        Some(&route_batch(routes, table, family)),
     )?;
     check_reservations(policy)?;
     let current = family_rules(policy, family)?;
@@ -1093,7 +1098,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(route_batch(&routes, TABLES[0]).contains("default proto 242 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+        assert!(route_batch(&routes, TABLES[0], "-4").contains("default proto 242 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
     }
 
     #[test]
