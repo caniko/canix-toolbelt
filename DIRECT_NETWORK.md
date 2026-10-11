@@ -71,7 +71,10 @@ inspection. The root
 daemon accepts only fixed readiness requests from configured UIDs; clients
 cannot enroll additional cgroups or supply commands. Root-only `ready
 --routes-only` bootstraps the independent DNS listener. Readiness synchronously
-refreshes current cgroup identities and requires the direct DNS TCP listener.
+refreshes current cgroup identities and authenticates the configured DNS unit's
+MainPID, process/cgroup generation, host network namespace and all four exact
+TCP/UDP IPv4/IPv6 sockets. See [ownership and readiness](docs/direct-network.md)
+for table ownership, untagged upgrades and reload-dispatch semantics.
 Kernel protection is retained if the daemon exits; stopping the unit does not
 delete routing rules or create a fail-open window.
 
@@ -87,7 +90,11 @@ policy data. `tests/direct_network_probe.py` exercises the production daemon in
 disposable rootless network namespaces, including existing/new IPv4/IPv6 TCP,
 UDP DNS redirection, kill-switch-shaped routes and retained kernel protection.
 The probe also checks external IPv4/IPv6 listener handshakes with strict
-reverse-path filtering, retained conntrack routing and guarded client launch.
+reverse-path filtering and retained conntrack routing. Its namespace-only DNS
+fixture cannot establish native unit custody: ordinary readiness and guarded
+launch must reject it, while root's routes-only barrier retains routing coverage.
+Authenticated admission and successful guarded launch are qualified in the
+systemd-backed VM below.
 Run with the project's approved environment:
 
 ```sh

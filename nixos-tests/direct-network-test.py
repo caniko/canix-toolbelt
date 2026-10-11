@@ -42,7 +42,21 @@ def check_direct() -> None:
     assert machine.succeed(userctl + 'show backend.service -p NRestarts --value').strip() == '0'
 
 
+def pause_dns_admission_probes() -> int:
+    counter = json.loads(machine.succeed('cat /home/operator/state.json'))['counter']
+    machine.succeed('touch /run/direct-network-dns-admission-negative')
+    machine.wait_until_succeeds('@PYTHON@ -c \'import json; assert json.load(open("/home/operator/state.json"))["dnsAdmissionNegative"]\'')
+    return counter
+
+
+def resume_dns_admission_probes(counter: int) -> None:
+    machine.succeed('rm /run/direct-network-dns-admission-negative')
+    machine.wait_until_succeeds('@PYTHON@ -c \'import json; s=json.load(open("/home/operator/state.json")); assert not s["dnsAdmissionNegative"] and s["counter"] > ' + str(counter + 2) + "'")
+
+
 check_direct()
+# The systemd-backed harness owns authenticated guarded-launch qualification.
+machine.succeed(user + 'canix-toolbelt-direct-network launch --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo guarded-client | grep guarded-client')
 # Foreign selectors must fail closed even when priority/table/mark resemble a
 # retained guard rule. A second daemon must reject them before touching state.
 # Deliberately invalid rules must not interrupt the live continuity workload.
@@ -71,6 +85,117 @@ for family, source in [('-4', '198.18.0.0/24'), ('-6', '2001:db8:1::/64')]:
         machine.succeed(f'{ip} rule del {conflict}')
     assert machine.succeed(f'{ip} -j rule show') == original_rules
 machine.succeed('ip netns del rule-conflicts')
+check_direct()
+
+# Table ownership is independent of policy rules. Untagged/static leftovers
+# must survive a failed daemon start byte-for-byte, including both families.
+machine.succeed('ip netns add table-conflicts')
+for family, destination in [('-4', '192.0.2.0/24'), ('-6', '2001:db8:99::/64')]:
+    ip = f'ip -n table-conflicts {family}'
+    for table in [51821, 51822]:
+        machine.succeed(f'{ip} route add unreachable {destination} table {table} proto static')
+        before_routes = machine.succeed(f'{ip} -N -j route show table all')
+        status, diagnostics = machine.execute('ip netns exec table-conflicts canix-toolbelt-direct-network daemon --policy /etc/direct-network-policy.json 2>&1')
+        assert status != 0 and 'unowned route' in diagnostics, diagnostics
+        assert machine.succeed(f'{ip} -N -j route show table all') == before_routes
+        machine.succeed(f'{ip} route del unreachable {destination} table {table}')
+machine.succeed('ip netns del table-conflicts')
+
+# A container-only bridge must never create a desktop exemption or background
+# main-table route. The declared virtual uplink may back an eligible bridge.
+machine.succeed('ip link add br-container type bridge')
+machine.succeed('ip link add container-a type veth peer name container-b')
+machine.succeed('ip link set container-a master br-container')
+machine.succeed('ip link set br-container up')
+machine.succeed('ip route add 192.0.2.0/24 dev br-container')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+for table in [51821, 51822]:
+    routes = json.loads(machine.succeed(f'ip -j route show table {table}'))
+    assert not any(route.get('dev') == 'br-container' for route in routes), routes
+machine.succeed('ip link del container-a')
+machine.succeed('ip link del br-container')
+
+# Weighted ECMP must retain the complete eligible path set in each family.
+for family, destination, first, second in [
+    ('-4', '192.0.2.0/24', '198.18.0.2', '10.123.0.1'),
+    ('-6', '2001:db8:99::/64', 'fe80::1', 'fe80::2'),
+]:
+    machine.succeed(f'ip {family} route add {destination} metric 42 nexthop via {first} dev uplink weight 2 onlink nexthop via {second} dev wg-home weight 3 onlink')
+    machine.wait_until_succeeds(f'ip {family} -j route show table all | @PYTHON@ -c \'import json,sys; r=[r for r in json.load(sys.stdin) if str(r.get("table")) in ["51821","51822"] and r.get("dst")=="{destination}"]; assert r and all([(h["dev"],h["weight"]) for h in x["nexthops"]]==[("uplink",2),("wg-home",3)] for x in r)\'')
+    machine.succeed(f'ip {family} route del {destination} metric 42')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+check_direct()
+
+# Silent, unauthorized sockets cannot hold the privileged routing loop hostage.
+machine.succeed('systemd-run --unit=silent-peers --property=User=nobody @PYTHON@ @NEGATIVE@ silent-peers --seconds 30 --marker /tmp/silent-peers-ready')
+machine.wait_for_file('/tmp/silent-peers-ready')
+machine.succeed('timeout 8 canix-toolbelt-direct-network ready')
+machine.succeed('systemctl stop silent-peers.service')
+
+# Authenticate the actual hardened DNS unit, not unrelated TCP reachability.
+# Stopping DNS must preserve the established application process/connections.
+dns_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip()
+machine.succeed(f'grep "^CapEff:[[:space:]]*0000000000000000$" /proc/{dns_pid}/status')
+negative_counter = pause_dns_admission_probes()
+machine.succeed('systemctl stop direct-network-dns.service')
+for mode in ['tcp', 'both', 'missing-ipv6']:
+    marker = f'/run/foreign-{mode}-ready'
+    machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --marker {marker}')
+    machine.wait_for_file(marker)
+    machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
+    machine.fail('timeout 4 canix-toolbelt-direct-network ready')
+    machine.fail(user + 'timeout 4 canix-toolbelt-direct-network ready --routes-only')
+    status, output = machine.execute(user + 'timeout 4 canix-toolbelt-direct-network launch --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo must-not-launch')
+    assert status != 0 and 'must-not-launch' not in output, output
+    machine.succeed('systemctl stop foreign-dns.service')
+    machine.succeed('systemctl reset-failed foreign-dns.service')
+    assert machine.succeed(userctl + 'show backend.service -p MainPID --value').strip() == pid
+machine.succeed('systemctl start direct-network-dns.service')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+resume_dns_admission_probes(negative_counter)
+check_direct()
+
+# Even a fully enrolled live resolver cannot hide a competing connected UDP
+# socket at an exact endpoint. Both address families must deny normal admission.
+for mode in ['connected-v4', 'connected-v6']:
+    marker = f'/run/foreign-{mode}-ready'
+    machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --marker {marker}')
+    machine.wait_for_file(marker)
+    machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
+    machine.fail('timeout 4 canix-toolbelt-direct-network ready')
+    machine.succeed('systemctl stop foreign-dns.service')
+    machine.succeed('systemctl reset-failed foreign-dns.service')
+    machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+    check_direct()
+
+# A failed reload dispatch must be retried despite an unchanged committed file.
+# The fixture denies just one dispatch and delegates subsequent effects natively.
+machine.succeed('@PYTHON@ -c \'import json; p=json.load(open("/etc/direct-network-policy.json")); p.update(systemctl="@SYSTEMCTL_FIXTURE@",nmcli="@NMCLI_FIXTURE@",networkManagerDns=True,dnsServers=[]); json.dump(p,open("/run/direct-network-policy.json","w"))\'')
+machine.succeed('printf "198.18.0.2\\n" >/run/direct-network-dns-upstream')
+machine.succeed('mkdir -p /run/systemd/system/direct-network.service.d')
+machine.succeed('printf "[Service]\\nExecStart=\\nExecStart=$(command -v canix-toolbelt-direct-network) daemon --policy /run/direct-network-policy.json\\n" >/run/systemd/system/direct-network.service.d/test-policy.conf')
+machine.succeed('systemctl daemon-reload')
+negative_counter = pause_dns_admission_probes()
+machine.succeed('systemctl restart direct-network.service direct-network-dns.service')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+machine.wait_until_succeeds('dig +short +time=2 +tries=1 @127.0.0.54 -p 5354 reload.example.test | grep -Fx 192.0.2.10')
+resume_dns_admission_probes(negative_counter)
+reload_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip()
+reload_before = int(machine.succeed('cat /run/direct-network/reload-attempts'))
+machine.succeed('touch /run/direct-network/deny-reload')
+machine.succeed('printf "198.18.0.3\\n" >/run/direct-network-dns-upstream')
+machine.wait_until_succeeds('test "$(cat /run/direct-network/reload-attempts)" -ge ' + str(reload_before + 2))
+machine.wait_until_succeeds('dig +short +time=2 +tries=1 @127.0.0.54 -p 5354 reload.example.test | grep -Fx 192.0.2.11')
+assert machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip() == reload_pid
+machine.succeed('grep -Fx server=198.18.0.3 /run/direct-network/servers')
+check_direct()
+machine.succeed('rm /run/systemd/system/direct-network.service.d/test-policy.conf')
+machine.succeed('systemctl daemon-reload')
+negative_counter = pause_dns_admission_probes()
+machine.succeed('systemctl restart direct-network.service direct-network-dns.service')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+machine.wait_until_succeeds('dig +short +time=2 +tries=1 @127.0.0.54 -p 5354 reload.example.test | grep -Fx 192.0.2.10')
+resume_dns_admission_probes(negative_counter)
 check_direct()
 
 for family in ['-4', '-6']:

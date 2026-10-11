@@ -121,11 +121,15 @@ try:
         else:
             log.seek(0)
             raise AssertionError(log.read())
-        run(binary, 'ready', '--socket', str(directory / 'ready.sock'))
+        denied = subprocess.run([binary, 'ready', '--socket', str(directory / 'ready.sock')],
+                                check=False, capture_output=True, text=True, timeout=20)
+        assert denied.returncode != 0, 'namespace-only fixture admitted unauthenticated DNS'
         true = run('which', 'true').strip()
         echo = run('which', 'echo').strip()
-        assert run(binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
-                   '--unit', 'fixture.service', '--', echo, 'guarded-client') == 'guarded-client\n'
+        guarded = subprocess.run([binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
+                                  '--unit', 'fixture.service', '--', echo, 'must-not-launch'],
+                                 check=False, capture_output=True, text=True, timeout=20)
+        assert guarded.returncode != 0 and 'must-not-launch' not in guarded.stdout
         assert run(binary, 'launch', '--socket', str(directory / 'ready.sock'), '--systemctl', true,
                    '--', echo, 'desktop-only-user') == 'desktop-only-user\n'
         failed_launch = subprocess.run([binary, 'launch', '--socket', str(directory / 'missing.sock'),
@@ -211,7 +215,7 @@ try:
         daemon = subprocess.Popen([binary, 'daemon', '--policy', str(policy)], stdout=log, stderr=log)
         for _ in range(5):
             try:
-                run(binary, 'ready', '--socket', str(directory / 'ready.sock'))
+                run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only')
                 break
             except RuntimeError:
                 time.sleep(0.1)

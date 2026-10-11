@@ -107,21 +107,25 @@ def setup(dnsmasq):
     ip('vpnpeer', 'address', 'add', '198.51.100.20/32', 'dev', 'lo')
     ip('vpnpeer', '-6', 'address', 'add', '2001:db8:30::20/128', 'dev', 'lo', 'nodad')
     for namespace, label, ipv4, ipv6 in (('directpeer', 'direct', '203.0.113.20', '2001:db8:20::20'), ('vpnpeer', 'vpn', '198.51.100.20', '2001:db8:30::20')):
-        subprocess.Popen(['ip', 'netns', 'exec', namespace, dnsmasq, '--keep-in-foreground', '--conf-file=/dev/null', '--no-resolv', '--no-hosts', '--pid-file=', f'--host-record=public.example.test,{ipv4},{ipv6}', '--host-record=fleet.vpn.example.test,10.123.0.1'])
+        addresses = '198.18.0.2,10.123.0.1' if namespace == 'directpeer' else '198.19.0.2,172.31.0.2'
+        subprocess.Popen(['ip', 'netns', 'exec', namespace, dnsmasq, '--keep-in-foreground', '--conf-file=/dev/null', '--no-resolv', '--no-hosts', '--bind-interfaces', f'--listen-address={addresses}', '--pid-file=', f'--host-record=public.example.test,{ipv4},{ipv6}', '--host-record=fleet.vpn.example.test,10.123.0.1', '--host-record=reload.example.test,192.0.2.10'])
         process = subprocess.Popen(['ip', 'netns', 'exec', namespace, sys.executable, '-u', __file__, 'server', label], stdout=subprocess.PIPE, text=True)
         assert process.stdout.readline().strip() == 'ready'
+    ip('directpeer', 'address', 'add', '198.18.0.3/24', 'dev', 'directpeer0')
+    subprocess.Popen(['ip', 'netns', 'exec', 'directpeer', dnsmasq, '--keep-in-foreground', '--conf-file=/dev/null', '--no-resolv', '--no-hosts', '--bind-interfaces', '--listen-address=198.18.0.3', '--pid-file=', '--host-record=public.example.test,203.0.113.20,2001:db8:20::20', '--host-record=fleet.vpn.example.test,10.123.0.1', '--host-record=reload.example.test,192.0.2.11'])
     pathlib.Path('/run/network-fixture-ready').touch()
     while True:
         time.sleep(60)
 
 
-def probe():
+def probe(include_dns=True):
     import urllib.request
     results = {}
     for key, address in (('v4', '203.0.113.20'), ('v6', '[2001:db8:20::20]'), ('fleet', '10.123.0.1')):
         results[key] = urllib.request.urlopen(f'http://{address}:8080', timeout=5).read().decode().strip()
-    results['dns'] = sorted({entry[4][0] for entry in socket.getaddrinfo('public.example.test', 8080, type=socket.SOCK_STREAM)})
-    results['fleetDns'] = socket.gethostbyname('fleet.vpn.example.test')
+    if include_dns:
+        results['dns'] = sorted({entry[4][0] for entry in socket.getaddrinfo('public.example.test', 8080, type=socket.SOCK_STREAM)})
+        results['fleetDns'] = socket.gethostbyname('fleet.vpn.example.test')
     return results
 
 
@@ -134,9 +138,15 @@ def client(state):
             connection.sendall(b'alive')
             assert connection.recv(1024) == b'direct:alive'
         counter += 1
-        results = probe()
+        # Deliberate non-answering DNS admission negatives are orthogonal to
+        # established TCP continuity. Heartbeats and fresh HTTP probes continue;
+        # the VM checks NSS before and after this explicitly bounded fault phase.
+        dns_negative = pathlib.Path('/run/direct-network-dns-admission-negative').exists()
+        results = probe(include_dns=not dns_negative)
         assert results['v4'] == results['v6'] == results['fleet'] == 'direct'
-        assert results['dns'] == ['2001:db8:20::20', '203.0.113.20']
+        if not dns_negative:
+            assert results['dns'] == ['2001:db8:20::20', '203.0.113.20']
+        results['dnsAdmissionNegative'] = dns_negative
         results['counter'] = counter
         temporary = pathlib.Path(state + '.new')
         temporary.write_text(json.dumps(results))

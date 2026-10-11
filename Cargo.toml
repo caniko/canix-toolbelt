@@ -21,6 +21,7 @@ include = [
   "/RUST.md",
   "/BUILD_TRAIN.md",
   "/DIRECT_NETWORK.md",
+  "/docs/direct-network.md",
   "/ORCHESTRATION.md",
   "/CHANGELOG.md",
   "/LICENSE",

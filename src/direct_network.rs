@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::IpAddr;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path};
@@ -24,10 +24,12 @@ pub const MARK: u32 = 0xca010000;
 const TABLES: [u32; 2] = [51821, 51822];
 // This daemon's explicit route namespace, including its unreachable fallback.
 // Untagged routes from older versions are never silently adopted.
-const ROUTE_PROTOCOL: u32 = 186;
+const ROUTE_PROTOCOL: u32 = 242;
 const LOCAL_PRIORITY: u32 = 49;
 const DIRECT_PRIORITY: u32 = 50;
 const NFT_TABLE: &str = "toolbelt_direct_network";
+
+mod dns;
 
 /// Root-owned policy. Executables and destinations are explicit, never supplied by clients.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -728,30 +730,38 @@ struct State {
     cgroups: BTreeMap<String, u64>,
     devices: BTreeSet<String>,
     nft_present: bool,
-    dns_synchronized: bool,
+    // HUP dispatch is process/socket-generation-bound, not a claim that
+    // dnsmasq has completed applying the file. DNS answers are runtime gates.
+    dns_dispatch: Option<(String, dns::Observation)>,
 }
 
 fn sync_dns_servers(policy: &Policy, state: &mut State, servers: &str) -> Result<()> {
+    sync_dns_servers_with(policy, state, servers, dns::observe)
+}
+
+fn sync_dns_servers_with(
+    policy: &Policy,
+    state: &mut State,
+    servers: &str,
+    observe: impl Fn(&Policy, &BTreeMap<String, u64>) -> Result<dns::Observation>,
+) -> Result<()> {
     if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(servers) {
+        state.dns_dispatch = None;
         let temp = format!("{}.new", policy.servers_file);
         fs::write(&temp, servers)?;
         fs::rename(temp, &policy.servers_file)?;
-        state.dns_synchronized = false;
     }
-    let active = Command::new(&policy.systemctl)
-        .args(["is-active", "--quiet", "direct-network-dns.service"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !active.success() {
-        state.dns_synchronized = false;
-        if !matches!(active.code(), Some(3 | 4)) {
-            return Err(invalid("cannot inspect resolver state"));
+    let resolver = match observe(policy, &state.cgroups) {
+        Ok(resolver) => resolver,
+        Err(_) => {
+            // Missing/starting DNS must not deadlock its root routes barrier.
+            // Ordinary readiness still requires an authenticated observation.
+            state.dns_dispatch = None;
+            return Ok(());
         }
-        // An absent resolver is expected before the root routes-only barrier.
-        return Ok(());
-    }
-    if !state.dns_synchronized {
+    };
+    if state.dns_dispatch.as_ref() != Some(&(servers.to_owned(), resolver.clone())) {
+        state.dns_dispatch = None;
         output(
             &policy.systemctl,
             &args(&[
@@ -762,7 +772,10 @@ fn sync_dns_servers(policy: &Policy, state: &mut State, servers: &str) -> Result
             ]),
             None,
         )?;
-        state.dns_synchronized = true;
+        if observe(policy, &state.cgroups)? != resolver {
+            return Err(invalid("resolver changed during reload dispatch"));
+        }
+        state.dns_dispatch = Some((servers.to_owned(), resolver));
     }
     Ok(())
 }
@@ -893,12 +906,15 @@ pub fn daemon(policy_path: &Path) -> Result<()> {
             let current = supported
                 && reconcile(&policy, &mut state).is_ok()
                 && (routes_only
-                    || (state.dns_synchronized
-                        && TcpStream::connect_timeout(
-                            &SocketAddr::from(([127, 0, 0, 54], 5354)),
-                            Duration::from_secs(1),
-                        )
-                        .is_ok()));
+                    || state
+                        .dns_dispatch
+                        .as_ref()
+                        .is_some_and(|(servers, resolver)| {
+                            fs::read_to_string(&policy.servers_file).ok().as_deref()
+                                == Some(servers.as_str())
+                                && dns::observe(&policy, &state.cgroups)
+                                    .is_ok_and(|current| &current == resolver)
+                        }));
             let message = if current { "ready\n" } else { "not-ready\n" };
             let _ = stream.write_all(message.as_bytes());
         }
@@ -946,7 +962,7 @@ fn request_ready(socket: &Path, routes_only: bool, timeout: Duration) -> Result<
 mod tests {
     use super::*;
 
-    fn policy() -> Policy {
+    pub(super) fn policy() -> Policy {
         serde_json::from_value(serde_json::json!({
             "socket": "/run/direct-network/ready.sock", "serversFile": "/run/direct-network/servers",
             "ip": "/usr/bin/ip", "nft": "/usr/bin/nft", "nmcli": "/usr/bin/nmcli", "systemctl": "/usr/bin/systemctl",
@@ -968,7 +984,7 @@ mod tests {
         executable(
             &systemctl,
             &format!(
-                "case \"$1\" in\n is-active) exit 0;;\n kill) count=0; test ! -f '{0}' || read -r count <'{0}'; count=$((count + 1)); printf '%s\\n' \"$count\" >'{0}'; test \"$count\" -gt 1;;\n *) exit 3;;\nesac",
+                "case \"$1\" in\n kill) count=0; test ! -f '{0}' || read -r count <'{0}'; count=$((count + 1)); printf '%s\\n' \"$count\" >'{0}'; test \"$count\" -gt 1;;\n *) exit 3;;\nesac",
                 count.display()
             ),
         );
@@ -977,25 +993,38 @@ mod tests {
         p.servers_file = root.path().join("servers").to_str().unwrap().into();
         let mut state = State::default();
         let servers = "server=192.0.2.53\n";
+        let observe = |_: &Policy, _: &BTreeMap<String, u64>| Ok(dns::test_observation(42));
         assert!(
-            sync_dns_servers(&p, &mut state, servers).is_err(),
+            sync_dns_servers_with(&p, &mut state, servers, observe).is_err(),
             "failed reload was acknowledged"
         );
-        assert!(!state.dns_synchronized);
+        assert!(state.dns_dispatch.is_none());
         assert_eq!(fs::read_to_string(&p.servers_file).unwrap(), servers);
-        sync_dns_servers(&p, &mut state, servers).unwrap();
-        assert!(state.dns_synchronized);
+        sync_dns_servers_with(&p, &mut state, servers, observe).unwrap();
+        assert!(state.dns_dispatch.is_some());
         assert_eq!(fs::read_to_string(&count).unwrap(), "2\n");
-        let mut restarted = State::default();
-        sync_dns_servers(&p, &mut restarted, servers).unwrap();
-        assert!(restarted.dns_synchronized);
+        // A DNS restart must invalidate a receipt while the daemon survives.
+        sync_dns_servers_with(&p, &mut state, servers, |_, _| {
+            Ok(dns::test_observation(43))
+        })
+        .unwrap();
+        assert!(state.dns_dispatch.is_some());
         assert_eq!(fs::read_to_string(&count).unwrap(), "3\n");
-        executable(&systemctl, "test \"$1\" = is-active || exit 90; exit 3");
         let mut bootstrap = State::default();
-        sync_dns_servers(&p, &mut bootstrap, servers).unwrap();
+        sync_dns_servers_with(&p, &mut bootstrap, servers, |_, _| {
+            Err(invalid("absent resolver"))
+        })
+        .unwrap();
         assert!(
-            !bootstrap.dns_synchronized,
+            bootstrap.dns_dispatch.is_none(),
             "absent resolver acknowledged DNS readiness"
+        );
+        fs::remove_file(&p.servers_file).unwrap();
+        fs::create_dir(format!("{}.new", p.servers_file)).unwrap();
+        assert!(sync_dns_servers_with(&p, &mut state, servers, observe).is_err());
+        assert!(
+            state.dns_dispatch.is_none(),
+            "failed file installation retained reload admission"
         );
     }
 
@@ -1064,7 +1093,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(route_batch(&routes, TABLES[0]).contains("default proto 186 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+        assert!(route_batch(&routes, TABLES[0]).contains("default proto 242 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
     }
 
     #[test]

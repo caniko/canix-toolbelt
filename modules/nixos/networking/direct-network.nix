@@ -209,7 +209,7 @@ in {
             after = ["direct-network.service"];
             serviceConfig = {
               ExecStartPre = "${ready} --routes-only";
-              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
+              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --user=root --group= --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
               Slice = "system-direct.slice";
               Restart = "on-failure";
               RestartSec = "2s";
@@ -217,12 +217,16 @@ in {
               ProtectHome = true;
               PrivateTmp = true;
               NoNewPrivileges = true;
+              # DNS-only unprivileged port needs no capabilities. Same-root UID
+              # with empty target capabilities permits MainPID FD authentication
+              # without granting the routing daemon CAP_SYS_PTRACE.
+              CapabilityBoundingSet = [];
             };
           };
         }
         (lib.genAttrs (map anchor rootSlices) (name: {
           description = "Keep the direct background resource slice enrolled";
-          requires = ["direct-network-dns.service"];
+          wants = ["direct-network-dns.service"];
           after = ["direct-network-dns.service"];
           wantedBy = ["multi-user.target"];
           serviceConfig = {

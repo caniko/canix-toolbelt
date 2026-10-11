@@ -4,6 +4,9 @@
 }: let
   fixture = ./direct-network-fixture.py;
   python = "${pkgs.python3}/bin/python3";
+  negative = ./direct-network-negative.py;
+  systemctlFixture = pkgs.writeScript "direct-network-systemctl-fixture" ("#!${python}\n" + builtins.replaceStrings ["@SYSTEMCTL@"] ["${pkgs.systemd}/bin/systemctl"] (builtins.readFile ./direct-network-systemctl.py));
+  nmcliFixture = pkgs.writeScript "direct-network-nmcli-fixture" ("#!${python}\n" + builtins.readFile ./direct-network-nmcli.py);
   package = pkgs.callPackage ../nix/package.nix {directNetwork = true;};
 in
   pkgs.testers.runNixOSTest {
@@ -79,5 +82,5 @@ in
       home-manager.users.operator.systemd.user.services.listener.Service.ExecStart = "${python} ${fixture} server listener 4096";
       canix-toolbelt.networking.directNetwork.users.operator.services.listener = "app.slice";
     };
-    testScript = builtins.replaceStrings ["@PYTHON@" "@FIXTURE@"] [python "${fixture}"] (builtins.readFile ./direct-network-test.py);
+    testScript = builtins.replaceStrings ["@PYTHON@" "@FIXTURE@" "@NEGATIVE@" "@SYSTEMCTL_FIXTURE@" "@NMCLI_FIXTURE@"] [python "${fixture}" "${negative}" "${systemctlFixture}" "${nmcliFixture}"] (builtins.readFile ./direct-network-test.py);
   }
