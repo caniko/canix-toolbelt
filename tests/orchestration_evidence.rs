@@ -111,7 +111,18 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
     batch.files = collect(source.path(), &allowed, &BTreeMap::new())
         .unwrap()
         .files;
-    assert!(apply(target.path(), &allowed, &batch).is_err());
+    let receipt = apply(target.path(), &allowed, &batch).unwrap();
+    assert_eq!(receipt.conflicts, vec!["evidence/good"]);
+    assert!(receipt.accepted.is_empty());
+    assert!(
+        target
+            .path()
+            .join("evidence")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]
@@ -218,22 +229,21 @@ fn overlapping_roots_have_the_same_unique_budget_as_one_root() {
         .unwrap();
     }
     fs::write(source.path().join("evidence/z-last"), b"last").unwrap();
-    let one = collect(
-        source.path(),
-        &[PathBuf::from("evidence")],
-        &BTreeMap::new(),
-    )
-    .unwrap();
-    let overlap = collect(
-        source.path(),
-        &[
-            PathBuf::from("evidence/reports"),
-            PathBuf::from("evidence"),
-            PathBuf::from("evidence/reports"),
-        ],
-        &BTreeMap::new(),
-    )
-    .unwrap();
+    let one = Exchange::default()
+        .prepare(source.path(), &[PathBuf::from("evidence")])
+        .unwrap()
+        .clone();
+    let overlap = Exchange::default()
+        .prepare(
+            source.path(),
+            &[
+                PathBuf::from("evidence/reports"),
+                PathBuf::from("evidence"),
+                PathBuf::from("evidence/reports"),
+            ],
+        )
+        .unwrap()
+        .clone();
     assert_eq!(
         one.files
             .iter()
@@ -550,43 +560,44 @@ fn blocked_receiver_ancestors_are_conflicts_for_writes_verifies_and_deletions() 
 fn oversized_directory_transitions_drain_acknowledged_descendants_in_bounded_exchanges() {
     let source = tempfile::tempdir().unwrap();
     let target = mirror_dir();
-    fs::create_dir_all(source.path().join("evidence/a/nested")).unwrap();
     for id in 0..15000 {
-        fs::write(
-            source.path().join(format!("evidence/a/nested/{id:05}")),
-            b"old",
-        )
-        .unwrap();
+        let directory = source
+            .path()
+            .join(format!("evidence/a/branch-{}", id / 5000));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(format!("{id:05}")), b"old").unwrap();
     }
     let allowed = vec![PathBuf::from("evidence")];
-    let mut known = BTreeMap::new();
+    let mut exchange = Exchange::default();
     for _ in 0..2 {
-        let batch = collect(source.path(), &allowed, &known).unwrap();
-        known.extend(apply(target.path(), &allowed, &batch).unwrap().accepted);
+        let batch = exchange.prepare(source.path(), &allowed).unwrap();
+        let receipt = apply(target.path(), &allowed, batch).unwrap();
+        exchange.acknowledge(&receipt).unwrap();
     }
-    assert_eq!(known.len(), 15000);
+    assert_eq!(exchange.known().len(), 15000);
     fs::remove_dir_all(source.path().join("evidence/a")).unwrap();
     fs::write(source.path().join("evidence/a"), b"new file").unwrap();
     for count in [5000, 0] {
-        let batch = collect(source.path(), &allowed, &known).unwrap();
+        let batch = exchange.prepare(source.path(), &allowed).unwrap();
         assert!(batch.files.is_empty());
         assert!(batch.delete.len() <= 10000);
-        let receipt = apply(target.path(), &allowed, &batch).unwrap();
+        let receipt = apply(target.path(), &allowed, batch).unwrap();
         assert!(receipt.conflicts.is_empty());
-        for (path, sha) in receipt.removed {
-            assert_eq!(known.remove(&path).as_deref(), Some(sha.as_str()));
-        }
-        assert_eq!(known.len(), count);
+        exchange.acknowledge(&receipt).unwrap();
+        assert_eq!(exchange.known().len(), count);
         if count > 0 {
-            assert!(receipt.pruned.is_empty());
+            assert_eq!(
+                receipt.pruned,
+                vec!["evidence/a/branch-0", "evidence/a/branch-1"]
+            );
             assert!(target.path().join("evidence/a").is_dir());
         } else {
             assert_eq!(receipt.pruned, vec!["evidence/a"]);
         }
     }
-    let batch = collect(source.path(), &allowed, &known).unwrap();
+    let batch = exchange.prepare(source.path(), &allowed).unwrap();
     assert_eq!(
-        apply(target.path(), &allowed, &batch)
+        apply(target.path(), &allowed, batch)
             .unwrap()
             .accepted
             .len(),
@@ -624,6 +635,188 @@ fn source_inventory_is_bounded_across_directories_and_in_depth() {
     assert!(
         collect(broad.path(), &[PathBuf::from("evidence")], &BTreeMap::new()).is_err(),
         "per-directory limits allowed an oversized aggregate walk"
+    );
+}
+
+#[test]
+fn conflicted_first_retirement_cannot_starve_a_later_clean_scope() {
+    for sibling in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
+        for (name, count) in [("a", 10000), ("b", 5000)] {
+            let directory = source.path().join(if sibling {
+                format!("evidence/transition/{name}")
+            } else {
+                format!("evidence/{name}")
+            });
+            fs::create_dir_all(&directory).unwrap();
+            for id in 0..count {
+                fs::write(directory.join(format!("{id:05}")), b"old").unwrap();
+            }
+        }
+        let allowed = vec![PathBuf::from("evidence")];
+        let mut exchange = Exchange::default();
+        for _ in 0..2 {
+            let receipt = apply(
+                target.path(),
+                &allowed,
+                exchange.prepare(source.path(), &allowed).unwrap(),
+            )
+            .unwrap();
+            exchange.acknowledge(&receipt).unwrap();
+        }
+        assert_eq!(exchange.known().len(), 15000);
+        for name in if sibling {
+            vec!["transition"]
+        } else {
+            vec!["a", "b"]
+        } {
+            fs::remove_dir_all(source.path().join(format!("evidence/{name}"))).unwrap();
+            fs::write(
+                source.path().join(format!("evidence/{name}")),
+                b"replacement",
+            )
+            .unwrap();
+        }
+        let foreign = target.path().join(if sibling {
+            "evidence/transition/a/foreign"
+        } else {
+            "evidence/a/foreign"
+        });
+        fs::create_dir(&foreign).unwrap();
+        for _ in 0..3 {
+            let serialized = serde_json::to_vec(&exchange).unwrap();
+            exchange = serde_json::from_slice(&serialized).unwrap();
+            let batch = exchange.prepare(source.path(), &allowed).unwrap();
+            assert!(batch.files.len() + batch.delete.len() <= 10000);
+            let receipt = apply(target.path(), &allowed, batch).unwrap();
+            exchange.acknowledge(&receipt).unwrap();
+        }
+        if sibling {
+            assert!(!target.path().join("evidence/transition/b").exists());
+            assert!(
+                !exchange
+                    .known()
+                    .keys()
+                    .any(|name| name.starts_with("evidence/transition/b/"))
+            );
+        } else {
+            assert_eq!(
+                fs::read(target.path().join("evidence/b")).unwrap(),
+                b"replacement"
+            );
+        }
+        assert!(foreign.is_dir());
+        assert!(exchange.known().keys().any(|name| name.contains("/a/")));
+    }
+}
+
+#[test]
+fn exchange_cursor_advances_only_with_a_complete_exact_batch_receipt() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    let allowed = vec![PathBuf::from("evidence")];
+    fs::create_dir(source.path().join("evidence")).unwrap();
+    fs::write(source.path().join("evidence/a"), b"first").unwrap();
+    let mut exchange = Exchange::default();
+    let batch = exchange.prepare(source.path(), &allowed).unwrap().clone();
+    let pending = serde_json::to_vec(&exchange).unwrap();
+    let body = serde_json::to_vec(&batch).unwrap();
+    fs::write(source.path().join("evidence/a"), b"next").unwrap();
+    exchange = serde_json::from_slice(&pending).unwrap();
+    assert_eq!(
+        serde_json::to_vec(exchange.prepare(source.path(), &allowed).unwrap()).unwrap(),
+        body
+    );
+    let receipt = apply(target.path(), &allowed, &batch).unwrap();
+    for change in ["hash", "missing", "foreign"] {
+        let mut bad = receipt.clone();
+        match change {
+            "hash" => bad.batch_sha256 = "0".repeat(64),
+            "missing" => bad.accepted.clear(),
+            _ => {
+                bad.accepted
+                    .insert("evidence/foreign".into(), "0".repeat(64));
+            }
+        }
+        assert!(exchange.acknowledge(&bad).is_err());
+        assert_eq!(serde_json::to_vec(&exchange).unwrap(), pending);
+    }
+    exchange.acknowledge(&receipt).unwrap();
+    assert_eq!(exchange.known()["evidence/a"], batch.files[0].sha256);
+    assert!(exchange.acknowledge(&receipt).is_err());
+    assert_eq!(
+        exchange.prepare(source.path(), &allowed).unwrap().files[0].bytes,
+        b"next"
+    );
+    let receipt = apply(
+        target.path(),
+        &allowed,
+        exchange.prepare(source.path(), &allowed).unwrap(),
+    )
+    .unwrap();
+    exchange.acknowledge(&receipt).unwrap();
+    let next = exchange.prepare(source.path(), &allowed).unwrap().clone();
+    let verify_receipt = apply(target.path(), &allowed, &next).unwrap();
+    exchange.acknowledge(&verify_receipt).unwrap();
+    let repeated = exchange.prepare(source.path(), &allowed).unwrap();
+    assert_ne!(repeated.exchange_id, next.exchange_id);
+    fs::write(target.path().join("evidence/a"), b"independent edit").unwrap();
+    let checkpoint = serde_json::to_vec(&exchange).unwrap();
+    assert!(exchange.acknowledge(&verify_receipt).is_err());
+    assert_eq!(serde_json::to_vec(&exchange).unwrap(), checkpoint);
+}
+
+#[test]
+fn legacy_collector_refuses_uncheckpointed_multi_exchange_work() {
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir(source.path().join("evidence")).unwrap();
+    for id in 0..10001 {
+        fs::write(source.path().join(format!("evidence/{id:05}")), b"source").unwrap();
+    }
+    let error = collect(
+        source.path(),
+        &[PathBuf::from("evidence")],
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("durable Exchange"));
+}
+
+#[test]
+fn exchange_reserves_identity_capacity_when_conditional_deletions_conflict() {
+    use sha2::{Digest, Sha256};
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    let allowed = vec![PathBuf::from("evidence")];
+    fs::create_dir(source.path().join("evidence")).unwrap();
+    fs::create_dir(target.path().join("evidence")).unwrap();
+    let sha = format!("{:x}", Sha256::digest(b"previously acknowledged"));
+    let known = (0..19998)
+        .map(|id| (format!("evidence/retired/{id:05}"), sha.clone()))
+        .collect();
+    fs::write(
+        target.path().join("evidence/retired"),
+        b"independent foreign ancestor",
+    )
+    .unwrap();
+    for name in ["a", "b", "c"] {
+        fs::write(
+            source.path().join(format!("evidence/new-{name}")),
+            b"new bytes",
+        )
+        .unwrap();
+    }
+    let mut exchange = Exchange::from_known(known);
+    let batch = exchange.prepare(source.path(), &allowed).unwrap().clone();
+    let receipt = apply(target.path(), &allowed, &batch).unwrap();
+    exchange.acknowledge(&receipt).unwrap();
+    assert!(exchange.known().len() <= 20000);
+    assert_eq!(receipt.accepted.len(), 2);
+    assert!(batch.deferred.contains(&"evidence/new-c".into()));
+    assert_eq!(
+        fs::read(target.path().join("evidence/retired")).unwrap(),
+        b"independent foreign ancestor"
     );
 }
 

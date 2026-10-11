@@ -46,6 +46,10 @@ pub struct Identity {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
+    /// Per-exchange nonce retained on retries; distinguishes identical payloads
+    /// collected on separate turns. Absent only for legacy bounded batches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_id: Option<String>,
     /// Changed artifacts eligible for replication.
     pub files: Vec<Artifact>,
     /// Unchanged source identities, checked without retransmitting raw bytes.
@@ -65,8 +69,12 @@ pub struct Batch {
 }
 
 /// Native acknowledgement; only accepted identities may advance the exchange journal.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Receipt {
+    /// SHA-256 of the exact bounded batch; legacy unbound receipts cannot
+    /// advance an exchange checkpoint.
+    #[serde(default)]
+    pub batch_sha256: String,
     /// Accepted paths and exact digests, including idempotent replays.
     pub accepted: BTreeMap<String, String>,
     /// Removed paths and prior digests. Remove these exact bindings from `known`
@@ -80,11 +88,184 @@ pub struct Receipt {
     pub conflicts: Vec<String>,
 }
 
+/// Sender checkpoint for bounded exchanges. Persist after preparing and after
+/// acknowledging; a lost reply retains the exact pending batch across restart.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Exchange {
+    known: BTreeMap<String, String>,
+    #[serde(default)]
+    cursor: Vec<String>,
+    #[serde(default)]
+    pending: Option<Batch>,
+    #[serde(default)]
+    last_receipt: Option<Receipt>,
+}
+
+impl Exchange {
+    /// Import previously retained exact receiver identities.
+    pub fn from_known(known: BTreeMap<String, String>) -> Self {
+        Self {
+            known,
+            ..Self::default()
+        }
+    }
+
+    /// Retained acknowledged identities, including conflicts awaiting retry.
+    pub fn known(&self) -> &BTreeMap<String, String> {
+        &self.known
+    }
+
+    /// Prepare a bounded batch or return its retained byte-identical retry.
+    /// Persist this checkpoint before sending the returned batch.
+    pub fn prepare(&mut self, root: &Path, allowed: &[PathBuf]) -> io::Result<&Batch> {
+        if allowed.len() > INVENTORY_LIMIT
+            || self.known.len() > INVENTORY_LIMIT
+            || self.cursor.len() > INVENTORY_LIMIT
+        {
+            return Err(invalid("exchange checkpoint inventory exceeds its bound"));
+        }
+        for name in &self.cursor {
+            relative(Path::new(name), allowed)?;
+        }
+        if self.pending.is_none() {
+            let mut batch = collect_with(root, allowed, &self.known, &self.cursor, &mut |_| {})?;
+            let mut nonce = [0_u8; 32];
+            File::open("/dev/urandom")?.read_exact(&mut nonce)?;
+            batch.exchange_id = Some(hash(&nonce));
+            bounded_encoding(&batch)?;
+            self.pending = Some(batch);
+        }
+        let batch = self.pending.as_ref().expect("prepared exchange");
+        bounded_encoding(batch)?;
+        Ok(batch)
+    }
+
+    /// Adopt only a complete receipt bound to the pending batch. Cursor, exact
+    /// identities and receipt advance together; persist this checkpoint atomically.
+    pub fn acknowledge(&mut self, receipt: &Receipt) -> io::Result<()> {
+        let batch = self
+            .pending
+            .as_ref()
+            .ok_or_else(|| invalid("no pending evidence exchange"))?;
+        if receipt.batch_sha256 != batch_digest(batch)? {
+            return Err(invalid("receipt differs from pending evidence batch"));
+        }
+        let accepted: BTreeMap<_, _> = batch
+            .files
+            .iter()
+            .map(|item| (&item.path, &item.sha256))
+            .chain(batch.verify.iter().map(|item| (&item.path, &item.sha256)))
+            .collect();
+        let removed: BTreeMap<_, _> = batch
+            .delete
+            .iter()
+            .map(|item| (&item.path, &item.sha256))
+            .collect();
+        let conflicts: std::collections::BTreeSet<_> = receipt.conflicts.iter().collect();
+        let pruned: std::collections::BTreeSet<_> = receipt.pruned.iter().collect();
+        if conflicts.len() != receipt.conflicts.len()
+            || pruned.len() != receipt.pruned.len()
+            || receipt
+                .accepted
+                .iter()
+                .any(|(path, sha)| accepted.get(path) != Some(&sha) || conflicts.contains(path))
+            || receipt
+                .removed
+                .iter()
+                .any(|(path, sha)| removed.get(path) != Some(&sha) || conflicts.contains(path))
+            || receipt
+                .pruned
+                .iter()
+                .any(|path| !batch.prune.contains(path) || conflicts.contains(path))
+            || receipt.conflicts.iter().any(|path| {
+                !accepted.contains_key(path)
+                    && !removed.contains_key(path)
+                    && !batch.prune.contains(path)
+            })
+            || accepted.iter().any(|(path, sha)| {
+                receipt.accepted.get(*path) != Some(*sha) && !conflicts.contains(path)
+            })
+            || removed.iter().any(|(path, sha)| {
+                receipt.removed.get(*path) != Some(*sha)
+                    && !conflicts.contains(path)
+                    && !batch
+                        .prune
+                        .iter()
+                        .any(|root| conflicts.contains(root) && Path::new(path).starts_with(root))
+            })
+            || batch
+                .prune
+                .iter()
+                .any(|path| !pruned.contains(path) && !conflicts.contains(path))
+            || batch.prune.iter().any(|root| {
+                batch
+                    .delete
+                    .iter()
+                    .filter(|item| Path::new(&item.path).starts_with(root))
+                    .any(|item| {
+                        (pruned.contains(root)
+                            && receipt.removed.get(&item.path) != Some(&item.sha256))
+                            || (conflicts.contains(root)
+                                && receipt.removed.contains_key(&item.path))
+                    })
+            })
+        {
+            return Err(invalid("incomplete or inconsistent evidence receipt"));
+        }
+        let mut known = self.known.clone();
+        for (path, sha) in &receipt.removed {
+            if known.get(path) != Some(sha) {
+                return Err(invalid("removal receipt differs from retained identity"));
+            }
+            known.remove(path);
+        }
+        known.extend(receipt.accepted.clone());
+        if known.len() > INVENTORY_LIMIT {
+            return Err(invalid("acknowledged evidence inventory exceeds its bound"));
+        }
+        let mut cursor = Vec::<String>::new();
+        for path in conflicts {
+            if !cursor
+                .iter()
+                .any(|parent| Path::new(path).starts_with(parent))
+            {
+                cursor.push(path.clone());
+            }
+        }
+        if cursor.len() > INVENTORY_LIMIT {
+            return Err(invalid("conflict cursor exceeds its bound"));
+        }
+        self.known = known;
+        self.cursor = cursor;
+        self.last_receipt = Some(receipt.clone());
+        self.pending = None;
+        Ok(())
+    }
+}
+
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn batch_digest(batch: &Batch) -> io::Result<String> {
+    bounded_encoding(batch)?;
+    struct HashWriter(Sha256);
+    impl Write for HashWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut writer, batch).map_err(|error| invalid(error.to_string()))?;
+    Ok(format!("{:x}", writer.0.finalize()))
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -159,22 +340,36 @@ pub fn collect(
             "evidence root/acknowledgement inventory exceeds its bound",
         ));
     }
-    collect_with(root, allowed, known, &mut |_| {})
+    let batch = collect_with(root, allowed, known, &[], &mut |_| {})?;
+    if batch.deferred.iter().any(|name| {
+        !batch.prune.contains(name) && !batch.delete.iter().any(|item| &item.path == name)
+    }) {
+        return Err(invalid(
+            "multi-exchange evidence collection requires a durable Exchange checkpoint",
+        ));
+    }
+    Ok(batch)
 }
 
 fn collect_with(
     root: &Path,
     allowed: &[PathBuf],
     known: &BTreeMap<String, String>,
+    cursor: &[String],
     directory_observed: &mut impl FnMut(&Path),
 ) -> io::Result<Batch> {
     for path in allowed {
         relative(path, std::slice::from_ref(path))?;
     }
+    struct Selection<'a> {
+        known: &'a BTreeMap<String, String>,
+        cursor: &'a [String],
+        new_remaining: std::cell::Cell<usize>,
+    }
     fn walk(
         parent: &File,
         path: &Path,
-        known: &BTreeMap<String, String>,
+        selection: &Selection<'_>,
         batch: &mut Batch,
         size: &mut usize,
         entries: &mut usize,
@@ -195,6 +390,11 @@ fn collect_with(
             .to_str()
             .ok_or_else(|| invalid("artifact path must be UTF-8"))?
             .to_owned();
+        if selection.cursor.iter().any(|root| path.starts_with(root)) {
+            batch.deferred.push(name);
+            return Ok(());
+        }
+        let known = selection.known;
         let kind = FileType::from_raw_mode(meta.st_mode);
         if path
             .components()
@@ -239,7 +439,7 @@ fn collect_with(
                     walk(
                         &directory,
                         &path.join(child),
-                        known,
+                        selection,
                         batch,
                         size,
                         entries,
@@ -282,10 +482,17 @@ fn collect_with(
                 .len()
                 .saturating_mul(4)
                 .saturating_add(name.len() + 1024);
-            if size.saturating_add(encoded) > PAYLOAD_LIMIT || batch.files.len() >= FILE_COUNT_LIMIT
+            if size.saturating_add(encoded) > PAYLOAD_LIMIT
+                || batch.files.len() >= FILE_COUNT_LIMIT
+                || (!known.contains_key(&name) && selection.new_remaining.get() == 0)
             {
                 batch.deferred.push(name);
             } else {
+                if !known.contains_key(&name) {
+                    selection
+                        .new_remaining
+                        .set(selection.new_remaining.get() - 1);
+                }
                 *size += encoded;
                 batch.files.push(Artifact {
                     expected: known.get(&name).cloned(),
@@ -313,6 +520,11 @@ fn collect_with(
             unique.push(path);
         }
     }
+    let selection = Selection {
+        known,
+        cursor,
+        new_remaining: std::cell::Cell::new(INVENTORY_LIMIT.saturating_sub(known.len())),
+    };
     for path in &unique {
         entries += 1;
         if entries > INVENTORY_LIMIT {
@@ -323,7 +535,7 @@ fn collect_with(
             walk(
                 &parent,
                 path,
-                known,
+                &selection,
                 &mut batch,
                 &mut size,
                 &mut entries,
@@ -331,12 +543,23 @@ fn collect_with(
             )?;
         }
     }
+    let deferred_roots: std::collections::BTreeSet<_> =
+        batch.deferred.iter().map(PathBuf::from).collect();
     for (name, sha) in known {
         let path = Path::new(name);
         if !unique.iter().any(|root| path.starts_with(root)) {
             continue;
         }
         relative(path, &unique)?;
+        if cursor.iter().any(|root| path.starts_with(root)) {
+            if !path
+                .ancestors()
+                .any(|parent| deferred_roots.contains(parent))
+            {
+                batch.deferred.push(name.clone());
+            }
+            continue;
+        }
         // Resolve deletion discovery through pinned ancestors too. A replaced
         // symlink or checkout never supplies authority to delete receiver bytes.
         let transition_descendant = batch
@@ -401,22 +624,55 @@ fn collect_with(
             }
         }
     }
+    if batch.omitted.len() + batch.deferred.len() > INVENTORY_LIMIT {
+        return Err(invalid("evidence inventory exceeds its bound"));
+    }
     batch.files.sort_by(|a, b| a.path.cmp(&b.path));
     batch.files.dedup_by(|a, b| a.path == b.path);
-    for name in &batch.prune {
-        let path = Path::new(name);
-        if known.iter().any(|(name, sha)| {
-            Path::new(name).starts_with(path)
-                && !batch
-                    .delete
-                    .iter()
-                    .any(|item| &item.path == name && &item.sha256 == sha)
-        }) {
-            return Err(invalid(
-                "directory transition descendant removals exceed one-exchange budget",
-            ));
+    let removals: BTreeMap<_, _> = batch
+        .delete
+        .iter()
+        .map(|item| (&item.path, &item.sha256))
+        .collect();
+    let mut counts = BTreeMap::<PathBuf, (usize, usize)>::new();
+    for transition in std::mem::take(&mut batch.prune) {
+        let root = Path::new(&transition);
+        for (name, sha) in known
+            .iter()
+            .filter(|(name, _)| Path::new(name).starts_with(root))
+        {
+            for directory in Path::new(name)
+                .ancestors()
+                .skip(1)
+                .take_while(|path| path.starts_with(root))
+            {
+                if !counts.contains_key(directory) && counts.len() >= INVENTORY_LIMIT {
+                    return Err(invalid("directory retirement inventory exceeds its bound"));
+                }
+                let (total, removed) = counts.entry(directory.to_path_buf()).or_default();
+                *total += 1;
+                *removed += usize::from(removals.get(name) == Some(&sha));
+            }
         }
     }
+    // Retire only the outermost fully drained subtrees this exchange. Empty
+    // branches from earlier drains therefore never lose their cleanup identity,
+    // while partial ancestors remain until their remaining descendants drain.
+    let mut roots = std::collections::BTreeSet::new();
+    for (path, (total, removed)) in counts {
+        if total == removed
+            && !path
+                .ancestors()
+                .skip(1)
+                .any(|parent| roots.contains(parent))
+        {
+            roots.insert(path);
+        }
+    }
+    batch.prune = roots
+        .into_iter()
+        .map(|path| path.to_str().expect("validated UTF-8 path").to_owned())
+        .collect();
     for name in batch
         .omitted
         .iter()
@@ -597,8 +853,11 @@ impl Receiver {
 }
 
 fn receiver_hash(root: &File, path: &Path) -> io::Result<Receiver> {
-    let Some(parent) = receiver_parent(root, path, false)? else {
-        return Ok(Receiver::Missing);
+    let parent = match receiver_parent(root, path, false) {
+        Ok(Some(parent)) => parent,
+        Ok(None) => return Ok(Receiver::Missing),
+        Err(error) if blocked_traversal(&error) => return Ok(Receiver::Foreign),
+        Err(error) => return Err(error),
     };
     let name = path
         .file_name()
@@ -703,6 +962,13 @@ fn apply_locked_with(
     sync: &mut impl FnMut(&File) -> io::Result<()>,
 ) -> io::Result<Receipt> {
     bounded_encoding(batch)?;
+    if batch
+        .exchange_id
+        .as_ref()
+        .is_some_and(|id| !valid_digest(id))
+    {
+        return Err(invalid("malformed evidence exchange nonce"));
+    }
     for path in allowed {
         relative(path, std::slice::from_ref(path))?;
     }
@@ -835,7 +1101,10 @@ fn apply_locked_with(
             return Err(invalid("overlapping directory retirement roots"));
         }
     }
-    let mut receipt = Receipt::default();
+    let mut receipt = Receipt {
+        batch_sha256: batch_digest(batch)?,
+        ..Receipt::default()
+    };
     for item in &batch.verify {
         if receiver_hash(root, Path::new(&item.path))?.matches(&item.sha256) {
             let parent = receiver_parent_with(root, Path::new(&item.path), false, sync)?
@@ -1121,6 +1390,7 @@ mod tests {
             source.path(),
             &[PathBuf::from("evidence")],
             &BTreeMap::new(),
+            &[],
             &mut |path| {
                 if path == Path::new("evidence") && !changed {
                     changed = true;

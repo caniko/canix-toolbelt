@@ -186,6 +186,26 @@ file, retain that removal receipt, then transfer descendants once its old identi
 is removed from `known`. A conflicting receiver file continues to block descendants.
 A source directory becoming a file first defers the replacement and sends the
 acknowledged descendant deletions with `Batch.prune` structural retirement roots.
+Oversized transitions drain in bounded exchanges. Partial drains carry only the
+outermost fully drained subtrees as retirement roots, retaining structural cleanup
+authority until the final drain; the replacement remains deferred throughout.
+`evidence::Exchange` retains `known`, the exact pending batch, its receipt and a
+receipt-bound retry cursor. Conflicted paths and subtrees take one exchange off,
+so an early blocked frontier cannot monopolize retries. This applies equally to
+sibling subtrees, ordinary deletions and conflicting writes. The cursor resets
+from each complete receipt; conflicts remain retained and are retried on later turns.
+Persist the serialized checkpoint before sending and atomically after
+`Exchange::acknowledge`. Lost responses must resend its retained pending batch.
+Acknowledgment rejects unbound, incomplete, foreign or stale receipts without
+changing the checkpoint. `Receipt.batch_sha256` binds the exact encoded batch.
+Each new checkpointed batch has an OS-random `exchange_id`, retained across
+retries, so an old receipt cannot certify an identical payload on a later turn.
+New identities reserve available journal capacity during collection. Conditional
+deletions never supply speculative space; acknowledged removals free capacity
+for the next exchange, so a valid conflicted receipt remains adoptable.
+The legacy stateless `collect` entrypoint rejects budget-deferred work and requires
+the checkpointed API for multi-exchange draining; bounded structural transitions
+retain their previous conditional-removal protocol.
 Only empty, non-checkout directories are retired. Foreign descendants preserve
 the directory and withhold its removal identities, so the sender retains `known`
 and retries that same phase. Persist `Receipt.pruned` with `Receipt.removed`;
@@ -193,6 +213,8 @@ only after that durable receipt removes the old identities may the replacement
 file be sent. Retrying a completed retirement resynchronizes surviving ancestors.
 Receiver leaf-type changes, including sockets and oversized files, remain
 per-path conflicts; unrelated paths can advance under the same lease.
+Blocked receiver ancestors (files, symlinks or checkouts) likewise conflict only
+the affected descendants, for writes, unchanged verification and deletion alike.
 Application independently
 enforces 10,000 file mutations, 20,000 verification entries, 20,000 omitted/deferred
 entries and the
