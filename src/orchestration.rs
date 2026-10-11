@@ -667,12 +667,11 @@ fn refresh_in_place(
                 }
             }
         }
-        if !imported_packets.is_empty()
-            && state["prs"]
-                .as_object()
-                .expect("validated object")
-                .keys()
-                .any(|url| !imported_owners.contains_key(url.as_str()))
+        if state["prs"]
+            .as_object()
+            .expect("validated object")
+            .keys()
+            .any(|url| !imported_owners.contains_key(url.as_str()))
         {
             return Err("imported journal lacks complete retained assignment ownership".into());
         }

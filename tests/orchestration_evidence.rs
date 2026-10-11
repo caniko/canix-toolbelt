@@ -1009,6 +1009,124 @@ fn mirror_rejects_checkout_roots_before_leasing_or_applying() {
 }
 
 #[test]
+fn source_checkout_roots_cannot_publish_allowlisted_child_artifacts() {
+    use std::os::unix::fs::symlink;
+    for marker in ["directory", "file", "symlink"] {
+        let source = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        fs::write(source.path().join("evidence/report"), b"owner-local").unwrap();
+        let git = source.path().join(".git");
+        match marker {
+            "directory" => fs::create_dir(&git).unwrap(),
+            "file" => fs::write(&git, b"gitdir: elsewhere").unwrap(),
+            _ => symlink("absent-git-directory", &git).unwrap(),
+        }
+        let mut exchange = Exchange::default();
+        let before = serde_json::to_value(&exchange).unwrap();
+        let allowed = vec![PathBuf::from("evidence/report")];
+        assert!(exchange.prepare(source.path(), &allowed).is_err());
+        assert_eq!(serde_json::to_value(&exchange).unwrap(), before);
+        assert!(collect(source.path(), &allowed, &BTreeMap::new()).is_err());
+        assert_eq!(
+            fs::read(source.path().join("evidence/report")).unwrap(),
+            b"owner-local"
+        );
+    }
+}
+
+#[test]
+fn blocked_non_utf8_allowlists_return_errors_without_panicking() {
+    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    for blocker in ["symlink", "file", "checkout"] {
+        let source = tempfile::tempdir().unwrap();
+        let ancestor = source.path().join("blocked");
+        match blocker {
+            "symlink" => symlink("elsewhere", &ancestor).unwrap(),
+            "file" => fs::write(&ancestor, b"foreign").unwrap(),
+            _ => {
+                fs::create_dir(&ancestor).unwrap();
+                fs::create_dir(ancestor.join(".git")).unwrap();
+            }
+        }
+        let allowed = vec![PathBuf::from(std::ffi::OsString::from_vec(
+            b"blocked/invalid\xff".to_vec(),
+        ))];
+        let result =
+            std::panic::catch_unwind(|| collect(source.path(), &allowed, &BTreeMap::new()));
+        assert!(result.is_ok(), "filesystem input panicked");
+        assert_eq!(
+            result.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+}
+
+#[test]
+fn invalid_retained_batches_reject_before_retry_without_checkpoint_mutation() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("handoff"), b"original").unwrap();
+    let allowed = vec![PathBuf::from("handoff")];
+    let mut prepared = Exchange::default();
+    prepared.prepare(source.path(), &allowed).unwrap();
+    let original = serde_json::to_value(prepared).unwrap();
+    for invalid in ["count", "digest", "path", "ancestor", "prune", "omitted"] {
+        let mut serialized = original.clone();
+        let file = serialized["pending"]["files"][0].clone();
+        match invalid {
+            "count" => serialized["pending"]["files"] = serde_json::json!(vec![file; 10001]),
+            "digest" => {
+                serialized["pending"]["files"][0]["sha256"] = serde_json::json!("0".repeat(64))
+            }
+            "path" => serialized["pending"]["files"][0]["path"] = serde_json::json!("../outside"),
+            "ancestor" => {
+                let mut descendant = file;
+                descendant["path"] = serde_json::json!("handoff/child");
+                serialized["pending"]["files"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(descendant);
+            }
+            "prune" => serialized["pending"]["prune"] = serde_json::json!(["handoff"]),
+            _ => serialized["pending"]["omitted"] = serde_json::json!(["../outside"]),
+        }
+        let mut retained: Exchange = serde_json::from_value(serialized.clone()).unwrap();
+        assert!(
+            retained.prepare(source.path(), &allowed).is_err(),
+            "accepted invalid retained {invalid}"
+        );
+        assert_eq!(serde_json::to_value(retained).unwrap(), serialized);
+    }
+}
+
+#[test]
+fn excluded_worktree_inventory_does_not_block_eligible_sibling_transfers() {
+    let source = tempfile::tempdir().unwrap();
+    let target = mirror_dir();
+    fs::create_dir_all(source.path().join("evidence/worktrees")).unwrap();
+    fs::write(
+        source.path().join("evidence/worktrees/private"),
+        b"owner-local",
+    )
+    .unwrap();
+    fs::write(source.path().join("evidence/good"), b"eligible").unwrap();
+    let allowed = vec![PathBuf::from("evidence")];
+    let mut exchange = Exchange::default();
+    let batch = exchange.prepare(source.path(), &allowed).unwrap().clone();
+    assert_eq!(batch.omitted, vec!["evidence/worktrees"]);
+    let receipt = apply(target.path(), &allowed, &batch).unwrap();
+    exchange.acknowledge(&receipt).unwrap();
+    assert_eq!(
+        fs::read(target.path().join("evidence/good")).unwrap(),
+        b"eligible"
+    );
+    assert!(!target.path().join("evidence/worktrees").exists());
+    assert_eq!(
+        fs::read(source.path().join("evidence/worktrees/private")).unwrap(),
+        b"owner-local"
+    );
+}
+
+#[test]
 fn empty_allowlist_roots_never_grant_receiver_wide_mutation_scope() {
     let source = tempfile::tempdir().unwrap();
     let target = mirror_dir();

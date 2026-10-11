@@ -128,17 +128,18 @@ impl Exchange {
         for name in &self.cursor {
             relative(Path::new(name), allowed)?;
         }
-        if self.pending.is_none() {
+        if let Some(batch) = &self.pending {
+            validate_batch(None, allowed, batch)?;
+        } else {
             let mut batch = collect_with(root, allowed, &self.known, &self.cursor, &mut |_| {})?;
             let mut nonce = [0_u8; 32];
             File::open("/dev/urandom")?.read_exact(&mut nonce)?;
             batch.exchange_id = Some(hash(&nonce));
-            bounded_encoding(&batch)?;
+            validate_batch(None, allowed, &batch)?;
             self.pending = Some(batch);
         }
         let batch = self.pending.as_ref().expect("prepared exchange");
         require_exchange_nonce(batch)?;
-        bounded_encoding(batch)?;
         Ok(batch)
     }
 
@@ -309,14 +310,29 @@ fn bounded_encoding(batch: &Batch) -> io::Result<()> {
 }
 
 fn relative(path: &Path, allowed: &[PathBuf]) -> io::Result<()> {
+    scoped_relative(path, allowed)?;
+    if path
+        .components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "worktrees")))
+    {
+        return Err(invalid(
+            "artifact path is outside declared owner evidence roots",
+        ));
+    }
+    Ok(())
+}
+
+// Excluded inventory names retain their scope without authorizing mutations
+// beneath checkout/worktree markers.
+fn scoped_relative(path: &Path, allowed: &[PathBuf]) -> io::Result<()> {
+    if path.to_str().is_none() {
+        return Err(invalid("artifact path must be UTF-8"));
+    }
     if path.as_os_str().is_empty()
         || path.components().count() > DEPTH_LIMIT
         || path
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
-        || path
-            .components()
-            .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "worktrees")))
         || !allowed.iter().any(|root| path.starts_with(root))
     {
         return Err(invalid(
@@ -524,6 +540,12 @@ fn collect_with(
     }
     let mut batch = Batch::default();
     let root = open_directory(root)?;
+    if checkout(&root)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            CheckoutTraversal,
+        ));
+    }
     let mut size = 0;
     let mut entries = 0;
     let mut roots = allowed.to_vec();
@@ -1001,18 +1023,16 @@ fn apply_locked(root: &File, allowed: &[PathBuf], batch: &Batch) -> io::Result<R
     apply_locked_with(root, allowed, batch, &mut File::sync_all)
 }
 
-fn apply_locked_with(
-    root: &File,
+// Sender retries and receivers share structural validation. A receiver also
+// preflights pinned filesystem ancestors before admitting any mutation.
+fn validate_batch(
+    root: Option<&File>,
     allowed: &[PathBuf],
     batch: &Batch,
-    sync: &mut impl FnMut(&File) -> io::Result<()>,
-) -> io::Result<Receipt> {
-    if checkout(root)? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            CheckoutTraversal,
-        ));
-    }
+) -> io::Result<(
+    std::collections::BTreeSet<PathBuf>,
+    std::collections::BTreeSet<PathBuf>,
+)> {
     bounded_encoding(batch)?;
     if batch
         .exchange_id
@@ -1023,6 +1043,12 @@ fn apply_locked_with(
     }
     for path in allowed {
         relative(path, std::slice::from_ref(path))?;
+    }
+    for name in &batch.omitted {
+        scoped_relative(Path::new(name), allowed)?;
+    }
+    for name in &batch.deferred {
+        relative(Path::new(name), allowed)?;
     }
     if batch.files.len().saturating_add(batch.delete.len()) > FILE_COUNT_LIMIT
         || batch.verify.len() > INVENTORY_LIMIT
@@ -1051,12 +1077,14 @@ fn apply_locked_with(
         retirement_roots.insert(path.to_path_buf());
         // Inspect only pinned ancestors, never contents within a checkout or
         // foreign non-directory root. Such roots block their transition alone.
-        match receiver_parent(root, &path.join("retirement-probe"), false) {
-            Ok(_) => {}
-            Err(error) if blocked_traversal(&error) => {
-                blocked_retirements.insert(path.to_path_buf());
+        if let Some(root) = root {
+            match receiver_parent(root, &path.join("retirement-probe"), false) {
+                Ok(_) => {}
+                Err(error) if blocked_traversal(&error) => {
+                    blocked_retirements.insert(path.to_path_buf());
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
         }
     }
     // Validate every deletion ancestor before any mutation. A checkout may be
@@ -1064,11 +1092,12 @@ fn apply_locked_with(
     for item in &batch.delete {
         let path = Path::new(&item.path);
         relative(path, allowed)?;
-        if let Some(transition) = path
-            .ancestors()
-            .skip(1)
-            .find(|parent| retirement_roots.contains(*parent))
-        {
+        if let (Some(root), Some(transition)) = (
+            root,
+            path.ancestors()
+                .skip(1)
+                .find(|parent| retirement_roots.contains(*parent)),
+        ) {
             match receiver_parent(root, path, false) {
                 Ok(_) => {}
                 Err(error) if blocked_traversal(&error) => {
@@ -1084,7 +1113,9 @@ fn apply_locked_with(
     };
     for item in &batch.files {
         relative(Path::new(&item.path), allowed)?;
-        receiver_hash(root, Path::new(&item.path))?;
+        if let Some(root) = root {
+            receiver_hash(root, Path::new(&item.path))?;
+        }
         size = size.saturating_add(
             item.bytes
                 .len()
@@ -1103,7 +1134,9 @@ fn apply_locked_with(
     for item in batch.verify.iter().chain(&batch.delete) {
         relative(Path::new(&item.path), allowed)?;
         if !retirement_blocked(Path::new(&item.path)) {
-            receiver_hash(root, Path::new(&item.path))?;
+            if let Some(root) = root {
+                receiver_hash(root, Path::new(&item.path))?;
+            }
         }
         size = size.saturating_add(item.path.len().saturating_add(1024));
         if !paths.insert(PathBuf::from(&item.path))
@@ -1153,6 +1186,26 @@ fn apply_locked_with(
             return Err(invalid("overlapping directory retirement roots"));
         }
     }
+    Ok((blocked_retirements, pruning))
+}
+
+fn apply_locked_with(
+    root: &File,
+    allowed: &[PathBuf],
+    batch: &Batch,
+    sync: &mut impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<Receipt> {
+    if checkout(root)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            CheckoutTraversal,
+        ));
+    }
+    let (blocked_retirements, pruning) = validate_batch(Some(root), allowed, batch)?;
+    let retirement_blocked = |path: &Path| {
+        path.ancestors()
+            .any(|ancestor| blocked_retirements.contains(ancestor))
+    };
     let mut receipt = Receipt {
         batch_sha256: batch_digest(batch)?,
         ..Receipt::default()

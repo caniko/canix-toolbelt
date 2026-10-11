@@ -19,6 +19,14 @@ fn policy() -> Policy {
     }
 }
 
+fn registered_state(manifest: &Manifest, prs: Value) -> Value {
+    let packets: serde_json::Map<String, Value> = manifest.packets.iter().map(|packet| (
+        packet.number.to_string(),
+        json!({"sessionID":packet.session_id,"ownerHost":packet.owner_host,"prs":packet.prs}),
+    )).collect();
+    json!({"prs":prs,"packets":packets})
+}
+
 #[test]
 fn retained_manifest_and_packet_extensions_cannot_be_silently_lost() {
     let mut old = manifest();
@@ -64,7 +72,7 @@ fn retained_manifest_and_packet_extensions_cannot_be_silently_lost() {
 #[test]
 fn retained_pr_record_urls_must_equal_their_assignment_keys() {
     for url in [Value::Null, json!("other"), json!("")] {
-        let mut state = json!({"prs":{"one":{"url":url,"state":"CLOSED"}},"packets":{}});
+        let mut state = registered_state(&manifest(), json!({"one":{"url":url,"state":"CLOSED"}}));
         let before = state.clone();
         assert!(
             refresh(
@@ -158,7 +166,10 @@ fn waiting_reports_cannot_finish_audited_terminal_work_or_drop_the_followup() {
         .unwrap()
         .timestamp()
         + 600;
-    let mut state = json!({"prs":{"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}},"packets":{}});
+    let mut state = registered_state(
+        &manifest,
+        json!({"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}}),
+    );
     refresh(
         &manifest,
         &mut state,
@@ -289,7 +300,10 @@ fn unsupported_worker_status_cannot_adopt_terminal_audits() {
     ] {
         let manifest = manifest();
         let policy = policy();
-        let mut state = json!({"prs":{"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}},"packets":{}});
+        let mut state = registered_state(
+            &manifest,
+            json!({"one":{"url":"one","state":"CLOSED","head":"h","base":"b","comments":[]}}),
+        );
         refresh(
             &manifest,
             &mut state,
@@ -447,7 +461,10 @@ fn writer_lease_and_atomic_private_state_preserve_anchors() {
 #[test]
 fn checkpoint_progress_deduplicates_and_stale_merge_claims_are_not_adopted() {
     let manifest = manifest();
-    let mut state = json!({"prs":{"one":{"state":"OPEN","head":"h","base":"b"}},"packets":{}});
+    let mut state = registered_state(
+        &manifest,
+        json!({"one":{"state":"OPEN","head":"h","base":"b"}}),
+    );
     refresh(
         &manifest,
         &mut state,
@@ -925,7 +942,7 @@ fn refresh_retains_scope_across_restart_and_rejects_dropped_owners_or_assignment
 }
 
 fn delivered_state(pr: Value, manifest: &Manifest) -> (Value, Value) {
-    let mut state = json!({"prs":{"one":pr},"packets":{}});
+    let mut state = registered_state(manifest, json!({"one":pr}));
     refresh(
         manifest,
         &mut state,
@@ -1021,8 +1038,10 @@ fn old_progress_never_certifies_new_feedback_checks_or_dependency_evidence() {
 #[test]
 fn fresh_source_bound_audit_replaces_stale_coverage_but_stale_inputs_do_not() {
     let manifest = manifest();
-    let mut state =
-        json!({"prs":{"one":{"url":"one","state":"MERGED","head":"h","comments":[]}},"packets":{}});
+    let mut state = registered_state(
+        &manifest,
+        json!({"one":{"url":"one","state":"MERGED","head":"h","comments":[]}}),
+    );
     let initial = feedback_version(&state["prs"]["one"]);
     let mut audits = BTreeMap::from([(
         1,
@@ -1250,7 +1269,10 @@ fn duplicate_worker_report_urls_cannot_certify_audit_or_progress() {
 fn terminal_audits_expire_when_producer_evidence_changes() {
     let mut manifest = manifest();
     manifest.packets[0].dependencies = vec![2];
-    let mut state = json!({"packets":{},"prs":{"one":{"url":"one","state":"MERGED","head":"h","comments":[]},"two":{"url":"two","state":"OPEN","head":"producer","base":"main"}}});
+    let mut state = registered_state(
+        &manifest,
+        json!({"one":{"url":"one","state":"MERGED","head":"h","comments":[]},"two":{"url":"two","state":"OPEN","head":"producer","base":"main"}}),
+    );
     let mut dependencies = BTreeMap::from([(2, "producer evidence A".to_owned())]);
     refresh(
         &manifest,
@@ -1444,7 +1466,7 @@ fn stale_nonwaiting_reports_cannot_suppress_a_current_waiting_recheck() {
 }
 
 fn fully_audited_state(manifest: &Manifest, dependencies: &BTreeMap<u32, String>) -> Value {
-    let mut state = json!({"prs":{},"packets":{}});
+    let mut state = registered_state(manifest, json!({}));
     for packet in &manifest.packets {
         for url in &packet.prs {
             state["prs"][url] = json!({"url":url,"state":"MERGED","head":"h","comments":[]});
@@ -1693,7 +1715,10 @@ fn malformed_or_exhausted_dependency_generations_reject_transactionally() {
 fn incomplete_producer_evidence_retains_waiting_checkpoint_and_bounded_recheck() {
     let mut manifest = manifest();
     manifest.packets[0].dependencies = vec![2];
-    let mut state = json!({"prs":{"one":{"url":"one","state":"OPEN","head":"h","base":"b","comments":[]},"two":{"url":"two","state":"OPEN","head":"h","comments":[]}},"packets":{}});
+    let mut state = registered_state(
+        &manifest,
+        json!({"one":{"url":"one","state":"OPEN","head":"h","base":"b","comments":[]},"two":{"url":"two","state":"OPEN","head":"h","comments":[]}}),
+    );
     refresh(
         &manifest,
         &mut state,
@@ -1962,6 +1987,37 @@ fn legacy_journal_import_cannot_reassign_retained_prs_between_existing_owners() 
         .is_err()
     );
     assert_eq!(legacy, before);
+}
+
+#[test]
+fn legacy_pr_scope_without_packet_owners_cannot_adopt_new_assignments() {
+    let manifest = manifest();
+    let mut legacy =
+        json!({"prs":{"one":{"url":"one","state":"OPEN"}},"packets":{},"history":{"keep":"exact"}});
+    let before = legacy.clone();
+    assert!(
+        refresh(
+            &manifest,
+            &mut legacy,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+    assert_eq!(legacy, before);
+    legacy["retainedManifest"] = serde_json::to_value(&manifest).unwrap();
+    refresh(
+        &manifest,
+        &mut legacy,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(legacy["history"], before["history"]);
 }
 
 #[test]
