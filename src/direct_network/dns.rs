@@ -179,6 +179,22 @@ fn listener_inode(table: &str, v6: bool, udp: bool, owned: &BTreeSet<u64>) -> Re
             return Err(invalid("truncated proc socket row"));
         }
         let local = endpoint(fields[1], v6)?;
+        // All four tables are observed: an IPv4-mapped socket in udp6 can
+        // compete with the literal IPv4 listener in udp. Wildcards can compete
+        // in either family too. Reject aliases before filtering exact listeners
+        // or MainPID ownership; established TCP connections are not listeners.
+        let normalized_ip = match local.0 {
+            IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(local.0),
+            IpAddr::V4(_) => local.0,
+        };
+        if local.1 == PORT
+            && local.0 != required
+            && (normalized_ip.is_unspecified()
+                || normalized_ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 54)))
+            && (udp || fields[3] == "0A")
+        {
+            return Err(invalid("competing wildcard or mapped resolver socket"));
+        }
         if local != (required, PORT) {
             continue;
         }
@@ -306,14 +322,26 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn row(v6: bool, udp: bool, inode: u64) -> String {
-        let ip = if v6 {
-            Ipv6Addr::LOCALHOST
+        row_at(
+            if v6 {
+                IpAddr::V6(Ipv6Addr::LOCALHOST)
+            } else {
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 54))
+            },
+            udp,
+            inode,
+        )
+    }
+
+    fn row_at(address: IpAddr, udp: bool, inode: u64) -> String {
+        let v6 = address.is_ipv6();
+        let ip = match address {
+            IpAddr::V6(address) => address
                 .octets()
                 .chunks(4)
                 .map(|s| format!("{:08X}", u32::from_ne_bytes(s.try_into().unwrap())))
-                .collect::<String>()
-        } else {
-            format!("{:08X}", u32::from_ne_bytes([127, 0, 0, 54]))
+                .collect::<String>(),
+            IpAddr::V4(address) => format!("{:08X}", u32::from_ne_bytes(address.octets())),
         };
         format!(
             "header\n0: {ip}:14EA {}:0000 {} 00000000:00000000 00:00000000 00000000 0 0 {inode} 0\n",
@@ -443,6 +471,49 @@ mod tests {
             format!("ActiveState=active\nSubState=running\nMainPID=42\nControlGroup=/{cg}\n");
         let valid = capture(&properties, &policy, &enrolled, &proc, &cgroups).unwrap();
         assert_eq!(valid.sockets, [123, 124, 125, 126]);
+        for (v6, address) in [
+            (
+                true,
+                IpAddr::V6(Ipv4Addr::new(127, 0, 0, 54).to_ipv6_mapped()),
+            ),
+            (true, IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
+            (false, IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        ] {
+            for udp in [true, false] {
+                let name = match (v6, udp) {
+                    (true, true) => "udp6",
+                    (true, false) => "tcp6",
+                    (false, true) => "udp",
+                    (false, false) => "tcp",
+                };
+                let path = proc.join("42/net").join(name);
+                let original = fs::read_to_string(&path).unwrap();
+                let foreign = row_at(address, udp, 999);
+                fs::write(
+                    &path,
+                    original.clone() + foreign.lines().nth(1).unwrap() + "\n",
+                )
+                .unwrap();
+                assert!(
+                    capture(&properties, &policy, &enrolled, &proc, &cgroups).is_err(),
+                    "competing alias or wildcard at the DNS port was ignored"
+                );
+                if udp {
+                    fs::write(
+                        &path,
+                        original.clone()
+                            + foreign.replace(" 07 ", " 01 ").lines().nth(1).unwrap()
+                            + "\n",
+                    )
+                    .unwrap();
+                    assert!(
+                        capture(&properties, &policy, &enrolled, &proc, &cgroups).is_err(),
+                        "connected wildcard or mapped alias was ignored"
+                    );
+                }
+                fs::write(&path, original).unwrap();
+            }
+        }
         for name in ["tcp", "tcp6", "udp", "udp6"] {
             let path = proc.join("42/net").join(name);
             let before = fs::read(&path).unwrap();

@@ -50,7 +50,7 @@ socket inodes for all four endpoints:
 | TCP | `[::1]:5354` |
 | UDP | `[::1]:5354` |
 
-Wildcard bindings, foreign or child-only ownership, missing sockets, duplicate
+Wildcard bindings, IPv4-mapped competition, foreign or child-only ownership, missing sockets, duplicate
 listeners and observed identity movement deny admission. Two bracketed
 observations compare the required socket mapping; ordinary upstream socket
 activity does not have to remain static. This is an observation-bound startup

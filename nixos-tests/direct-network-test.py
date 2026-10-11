@@ -56,7 +56,7 @@ def resume_dns_admission_probes(counter: int) -> None:
 
 check_direct()
 # The systemd-backed harness owns authenticated guarded-launch qualification.
-machine.succeed(user + 'canix-toolbelt-direct-network launch --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo guarded-client | grep guarded-client')
+machine.succeed(user + 'canix-toolbelt-direct-network launch --systemctl /run/current-system/sw/bin/systemctl --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo guarded-client | grep guarded-client')
 # Foreign selectors must fail closed even when priority/table/mark resemble a
 # retained guard rule. A second daemon must reject them before touching state.
 # Deliberately invalid rules must not interrupt the live continuity workload.
@@ -145,8 +145,8 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
     machine.fail(user + 'timeout 4 canix-toolbelt-direct-network ready --routes-only')
-    status, output = machine.execute(user + 'timeout 4 canix-toolbelt-direct-network launch --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo must-not-launch')
-    assert status != 0 and 'must-not-launch' not in output, output
+    status, output = machine.execute(user + 'canix-toolbelt-direct-network launch --systemctl /run/current-system/sw/bin/systemctl --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo must-not-launch')
+    assert status != 0 and 'direct-network guard is not ready' in output and 'must-not-launch' not in output, output
     machine.succeed('systemctl stop foreign-dns.service')
     machine.succeed('systemctl reset-failed foreign-dns.service')
     assert machine.succeed(userctl + 'show backend.service -p MainPID --value').strip() == pid
@@ -157,10 +157,16 @@ check_direct()
 
 # Even a fully enrolled live resolver cannot hide a competing connected UDP
 # socket at an exact endpoint. Both address families must deny normal admission.
-for mode in ['connected-v4', 'connected-v6']:
+for mode in ['connected-v4', 'connected-v6', 'mapped-connected']:
     marker = f'/run/foreign-{mode}-ready'
     machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --marker {marker}')
     machine.wait_for_file(marker)
+    if mode == 'mapped-connected':
+        # The connected dual-stack alias must actually receive matching IPv4
+        # datagrams while all four legitimate dnsmasq listeners remain alive.
+        machine.succeed('@PYTHON@ -c \'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(("127.0.0.1",40001)); s.sendto(b"mapped-competition",("127.0.0.54",5354))\'')
+        machine.wait_for_file(marker + '.received')
+        machine.succeed('grep -Fx mapped-competition ' + marker + '.received')
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
     machine.succeed('systemctl stop foreign-dns.service')

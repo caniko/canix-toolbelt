@@ -46,11 +46,17 @@ def foreign_listener(mode: str, marker: pathlib.Path, seconds: float) -> None:
                 continue
             if mode == 'connected-v6' and family != socket.AF_INET6:
                 continue
-            if mode.startswith('connected-'):
+            if mode == 'mapped-connected' and family != socket.AF_INET6:
+                continue
+            if mode.startswith('connected-') or mode == 'mapped-connected':
                 listener = socket.socket(family, socket.SOCK_DGRAM)
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if mode == 'mapped-connected':
+                    address = '::ffff:127.0.0.54'
+                    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                 listener.bind((address, 5354))
-                listener.connect(('::1' if family == socket.AF_INET6 else '127.0.0.1', 40001))
+                peer = '::ffff:127.0.0.1' if mode == 'mapped-connected' else '::1' if family == socket.AF_INET6 else '127.0.0.1'
+                listener.connect((peer, 40001))
                 listeners.append(listener)
                 continue
             protocols = [socket.SOCK_STREAM] if mode == 'tcp' else [socket.SOCK_STREAM, socket.SOCK_DGRAM]
@@ -64,7 +70,18 @@ def foreign_listener(mode: str, marker: pathlib.Path, seconds: float) -> None:
                     listener.listen(128)
                 listeners.append(listener)
         marker.touch()
-        time.sleep(seconds)
+        if mode == 'mapped-connected':
+            listener.settimeout(0.2)
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                try:
+                    data = listener.recv(1024)
+                except TimeoutError:
+                    continue
+                if data == b'mapped-competition':
+                    pathlib.Path(str(marker) + '.received').write_text(data.decode() + '\n')
+        else:
+            time.sleep(seconds)
     finally:
         for listener in listeners:
             listener.close()
@@ -72,7 +89,7 @@ def foreign_listener(mode: str, marker: pathlib.Path, seconds: float) -> None:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['silent-peers', 'tcp', 'both', 'missing-ipv6', 'connected-v4', 'connected-v6'])
+    parser.add_argument('mode', choices=['silent-peers', 'tcp', 'both', 'missing-ipv6', 'connected-v4', 'connected-v6', 'mapped-connected'])
     parser.add_argument('--marker', required=True, type=pathlib.Path)
     parser.add_argument('--socket', default='/run/direct-network/ready.sock')
     parser.add_argument('--seconds', type=float, default=30)
