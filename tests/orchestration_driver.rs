@@ -2,7 +2,29 @@
 
 use canix_toolbelt::orchestration::{Manifest, Policy, driver::*};
 use serde_json::{Value, json};
+use std::{cell::Cell, rc::Rc};
 use std::{collections::BTreeMap, io};
+
+struct FixtureFence {
+    held: Rc<Cell<bool>>,
+    valid: Rc<Cell<bool>>,
+}
+
+impl ObservationFence for FixtureFence {
+    fn verify(&self) -> io::Result<()> {
+        if self.held.get() && self.valid.get() {
+            Ok(())
+        } else {
+            Err(io::Error::other("native fixture fence authority was lost"))
+        }
+    }
+}
+
+impl Drop for FixtureFence {
+    fn drop(&mut self) {
+        self.held.set(false);
+    }
+}
 
 struct Fixture {
     hosts: BTreeMap<String, Value>,
@@ -28,9 +50,31 @@ struct Fixture {
     owner_inbox_calls: usize,
     withdraw_completed_reset: Option<bool>,
     assistant_during_final_inbox: Option<Value>,
+    assistant_during_trailing_activity: Option<Value>,
+    destination_activity_calls: usize,
+    fence_held: Rc<Cell<bool>>,
+    fence_valid: Rc<Cell<bool>>,
+    fenced_turn_attempt: bool,
+    prevented_turn: bool,
+    lose_fence_during_continuation: bool,
+    lose_fence_on_compaction_checkpoint: bool,
 }
 
 impl Adapter for Fixture {
+    fn acquire_observation_fence(
+        &mut self,
+        _: &Manifest,
+        _: &Policy,
+    ) -> io::Result<Box<dyn ObservationFence>> {
+        assert!(
+            !self.fence_held.replace(true),
+            "nested native fence acquisition"
+        );
+        Ok(Box::new(FixtureFence {
+            held: self.fence_held.clone(),
+            valid: self.fence_valid.clone(),
+        }))
+    }
     fn api(
         &mut self,
         host: &str,
@@ -39,7 +83,22 @@ impl Adapter for Fixture {
         body: Option<&Value>,
     ) -> io::Result<Reply> {
         self.requests.push(path.to_owned());
+        assert!(self.fence_held.get(), "provider call escaped native fence");
         if path == "/api/session/active" {
+            if host == "destination" {
+                self.destination_activity_calls += 1;
+                if self.destination_activity_calls == 2 {
+                    if self.fenced_turn_attempt {
+                        self.prevented_turn = true;
+                    }
+                    if let Some(assistant) = self.assistant_during_trailing_activity.take() {
+                        // A completed foreign turn means native authority was
+                        // lost, even though both activity snapshots stay idle.
+                        self.fence_valid.set(false);
+                        self.recent.insert(0, assistant);
+                    }
+                }
+            }
             return Ok(Reply {
                 status: 200,
                 data: self.hosts[host].clone(),
@@ -153,10 +212,16 @@ impl Adapter for Fixture {
         Ok(Reply { status: 200, data })
     }
     fn persist(&mut self, state: &Value) -> io::Result<()> {
+        assert!(self.fence_held.get(), "state write escaped native fence");
         if self.fail_save {
             return Err(io::Error::other("disk unavailable"));
         }
         self.saved = state.clone();
+        if self.lose_fence_on_compaction_checkpoint
+            && state["packets"]["1"]["pendingCompaction"].is_object()
+        {
+            self.fence_valid.set(false);
+        }
         Ok(())
     }
     fn continuation(
@@ -164,6 +229,10 @@ impl Adapter for Fixture {
         _: &canix_toolbelt::orchestration::Packet,
         _: &Value,
     ) -> io::Result<String> {
+        assert!(self.fence_held.get(), "continuation escaped native fence");
+        if self.lose_fence_during_continuation {
+            self.fence_valid.set(false);
+        }
         match self.policy_during_continuation.take().as_deref() {
             Some("model") => self.changed_model = true,
             Some("agent") => self.changed_agent = true,
@@ -219,6 +288,14 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         owner_inbox_calls: 0,
         withdraw_completed_reset: None,
         assistant_during_final_inbox: None,
+        assistant_during_trailing_activity: None,
+        destination_activity_calls: 0,
+        fence_held: Rc::new(Cell::new(false)),
+        fence_valid: Rc::new(Cell::new(true)),
+        fenced_turn_attempt: false,
+        prevented_turn: false,
+        lose_fence_during_continuation: false,
+        lose_fence_on_compaction_checkpoint: false,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -420,6 +497,132 @@ fn completed_owner_turn_cannot_hide_changed_physical_context_during_observation(
         assert_eq!(state, before);
         assert_eq!(fixture.saved, before);
         assert!(fixture.submissions.is_empty());
+    }
+}
+
+#[test]
+fn completed_turn_during_trailing_activity_cannot_use_an_unfenced_context_witness() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    fixture.assistant_during_trailing_activity = Some(assistant("msg_new_context", 2000, 300_000));
+    let before = state.clone();
+    let result = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    );
+    assert!(
+        result.is_err(),
+        "stale 100-token witness bypassed 300k ceiling"
+    );
+    assert_eq!(state, before);
+    assert_eq!(fixture.saved, before);
+    assert!(fixture.submissions.is_empty());
+    assert!(
+        !fixture.fence_held.get(),
+        "failed observation retained the fence"
+    );
+}
+
+#[test]
+fn native_fence_excludes_trailing_turns_and_survives_through_dispatch() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    fixture.fenced_turn_attempt = true;
+    let result = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(result.errors.is_empty());
+    assert!(fixture.prevented_turn);
+    assert_eq!(fixture.submissions.len(), 1);
+    assert!(
+        !fixture.fence_held.get(),
+        "successful cycle retained native authority"
+    );
+}
+
+#[test]
+fn native_fence_loss_before_dispatch_preserves_replay_without_provider_effects() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    fixture.lose_fence_during_continuation = true;
+    let result = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(!result.errors.is_empty());
+    assert!(state["packets"]["1"]["pending"].is_object());
+    assert!(fixture.submissions.is_empty());
+    assert!(!fixture.fence_held.get());
+}
+
+#[test]
+fn native_fence_loss_after_compaction_checkpoint_cannot_submit() {
+    let (manifest, policy, expected, mut state, mut fixture) = setup();
+    fixture.recent = vec![assistant("msg_physical", 1000, 190_000)];
+    fixture.lose_fence_on_compaction_checkpoint = true;
+    let result = cycle(
+        &manifest,
+        &policy,
+        &expected,
+        &mut state,
+        &mut fixture,
+        "now",
+        0,
+        true,
+    )
+    .unwrap();
+    assert!(!result.errors.is_empty());
+    assert!(state["packets"]["1"]["pendingCompaction"].is_object());
+    assert!(fixture.submissions.is_empty());
+    assert!(!fixture.fence_held.get());
+}
+
+#[test]
+fn adapters_without_native_fencing_fail_before_observation_or_dispatch() {
+    struct Unfenced;
+    impl Adapter for Unfenced {
+        fn api(&mut self, _: &str, _: &str, _: &str, _: Option<&Value>) -> io::Result<Reply> {
+            panic!("unfenced provider call");
+        }
+        fn persist(&mut self, _: &Value) -> io::Result<()> {
+            panic!("unfenced state write");
+        }
+        fn continuation(
+            &mut self,
+            _: &canix_toolbelt::orchestration::Packet,
+            _: &Value,
+        ) -> io::Result<String> {
+            panic!("unfenced continuation");
+        }
+    }
+    let (manifest, policy, expected, mut state, _) = setup();
+    assert!(
+        matches!(observe(&manifest, &policy, &expected, &mut Unfenced), Err(error) if error.kind() == io::ErrorKind::Unsupported)
+    );
+    let before = state.clone();
+    for dispatch in [false, true] {
+        assert!(
+            matches!(cycle(&manifest, &policy, &expected, &mut state, &mut Unfenced, "now", 0, dispatch), Err(error) if error.kind() == io::ErrorKind::Unsupported)
+        );
+        assert_eq!(state, before);
     }
 }
 

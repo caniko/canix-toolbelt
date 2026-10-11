@@ -7,6 +7,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Require native owner/host observation fencing through dispatch; unsupported
+  adapters fail before reads or effects, and lost authority invalidates an idle
+  context witness. Reject unbound imported pending evidence exchanges and keep
+  source-disappearance races out of retained contradictory batches.
 - Retain empty provider-log archives from cancelled original producers with
   their terminal status and byte hashes; require actual log files for success
   and reject duplicate archive members for every conclusion.

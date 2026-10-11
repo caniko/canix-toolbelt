@@ -137,6 +137,7 @@ impl Exchange {
             self.pending = Some(batch);
         }
         let batch = self.pending.as_ref().expect("prepared exchange");
+        require_exchange_nonce(batch)?;
         bounded_encoding(batch)?;
         Ok(batch)
     }
@@ -148,6 +149,7 @@ impl Exchange {
             .pending
             .as_ref()
             .ok_or_else(|| invalid("no pending evidence exchange"))?;
+        require_exchange_nonce(batch)?;
         if receipt.batch_sha256 != batch_digest(batch)? {
             return Err(invalid("receipt differs from pending evidence batch"));
         }
@@ -249,6 +251,19 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn require_exchange_nonce(batch: &Batch) -> io::Result<()> {
+    if !batch
+        .exchange_id
+        .as_ref()
+        .is_some_and(|id| valid_digest(id))
+    {
+        return Err(invalid(
+            "pending evidence exchange lacks a valid per-exchange nonce",
+        ));
+    }
+    Ok(())
 }
 
 fn batch_digest(batch: &Batch) -> io::Result<String> {
@@ -555,12 +570,24 @@ fn collect_with(
     }
     let deferred_roots: std::collections::BTreeSet<_> =
         batch.deferred.iter().map(PathBuf::from).collect();
+    let observed_files: std::collections::BTreeSet<_> = batch
+        .files
+        .iter()
+        .map(|item| &item.path)
+        .chain(batch.verify.iter().map(|item| &item.path))
+        .collect();
     for (name, sha) in known {
         let path = Path::new(name);
         if !unique.iter().any(|root| path.starts_with(root)) {
             continue;
         }
         relative(path, &unique)?;
+        // Keep the earlier byte-exact observation for this exchange. A source
+        // disappearance discovered later belongs to the next collection; it
+        // must not checkpoint both verification/upload and deletion of one path.
+        if observed_files.contains(name) {
+            continue;
+        }
         if batch.omitted.iter().any(|root| path.starts_with(root)) {
             continue;
         }
@@ -1265,6 +1292,77 @@ fn prune_empty(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn source_disappearance_after_collection_cannot_checkpoint_duplicate_identities() {
+        for changed in [false, true] {
+            let source = tempfile::tempdir().unwrap();
+            let target = tempfile::tempdir().unwrap();
+            let allowed = vec![PathBuf::from("evidence")];
+            fs::create_dir(source.path().join("evidence")).unwrap();
+            fs::write(source.path().join("evidence/a"), b"acknowledged").unwrap();
+            let root = open_directory(target.path()).unwrap();
+            let initial = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+            let known = apply_locked(&root, &allowed, &initial).unwrap().accepted;
+            if changed {
+                fs::write(source.path().join("evidence/a"), b"new observed bytes").unwrap();
+            }
+            fs::create_dir(source.path().join("evidence/z")).unwrap();
+            let batch = collect_with(source.path(), &allowed, &known, &[], &mut |path| {
+                if path == Path::new("evidence/z") {
+                    fs::remove_file(source.path().join("evidence/a")).unwrap();
+                }
+            })
+            .unwrap();
+            let applied = apply_locked(&root, &allowed, &batch);
+            assert!(
+                applied.is_ok(),
+                "stable observed bytes contradict deletion: {applied:?}"
+            );
+            assert!(!batch.delete.iter().any(|item| item.path == "evidence/a"));
+            let receipt = applied.unwrap();
+            let next = collect(source.path(), &allowed, &receipt.accepted).unwrap();
+            assert_eq!(
+                next.delete.len(),
+                1,
+                "later collection must retire the earlier snapshot"
+            );
+            apply_locked(&root, &allowed, &next).unwrap();
+            assert!(!target.path().join("evidence/a").exists());
+        }
+    }
+
+    #[test]
+    fn imported_pending_exchange_without_nonce_cannot_replay_an_old_receipt() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("handoff"), b"same legacy bytes").unwrap();
+        let allowed = vec![PathBuf::from("handoff")];
+        let legacy = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+        let root = open_directory(target.path()).unwrap();
+        let old_receipt = apply_locked(&root, &allowed, &legacy).unwrap();
+        for nonce in [None, Some("bad".to_string())] {
+            let batch = Batch {
+                exchange_id: nonce,
+                ..legacy.clone()
+            };
+            let mut exchange: Exchange = serde_json::from_value(serde_json::json!({
+                "known":{}, "pending":batch, "last_receipt":null, "cursor":[]
+            }))
+            .unwrap();
+            let before = serde_json::to_value(&exchange).unwrap();
+            assert!(
+                exchange.acknowledge(&old_receipt).is_err(),
+                "unbound historical receipt advanced this occurrence"
+            );
+            assert_eq!(serde_json::to_value(&exchange).unwrap(), before);
+            assert!(
+                exchange.prepare(source.path(), &allowed).is_err(),
+                "imported pending batch escaped nonce validation"
+            );
+            assert_eq!(serde_json::to_value(&exchange).unwrap(), before);
+        }
+    }
 
     #[test]
     fn directory_retirement_fsync_failure_cannot_be_acknowledged_by_an_absent_replay() {

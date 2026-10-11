@@ -145,6 +145,17 @@ the adapter also verifies the effective policy of the selected agent. Prompt
 receipts are checked against exact payloads in both inboxes and transcripts.
 Journal publication precedes submission. Lost responses retain the same pending
 ID and body. Read-only cycles neither publish nor submit.
+Both `observe` and `cycle` require `Adapter::acquire_observation_fence` before
+their first provider read. Its owned `ObservationFence` remains held through the
+entire cycle, including durable admission, compaction and prompt dispatch. All
+clients changing owner/mirror sessions, usage, policy, inboxes, compactions or
+host activity/reservations must honor the same native authority. Acquire scoped
+resources atomically or in a stable order, releasing partial acquisitions on
+failure. `verify` must fail closed on lost authority; `Drop` releases the guard
+on success and every error exit. A coordinator-local mutex or repeated idle
+snapshots cannot satisfy this contract. The default adapter returns `Unsupported`
+before reads, state writes or dispatch. An unfenced V2 transport therefore remains
+inadmissible until its consumer supplies and qualifies genuine native exclusivity.
 Owner and mirror inboxes are revalidated before using a capacity observation;
 duplicate receipt IDs reject observation. Reconciliation validates every pending
 receipt before committing its candidate journal. Session selectors are checked
@@ -179,8 +190,10 @@ history, including older reservations beneath the exposed newest record and the
 completed witnesses used to reset context. A changed set or record invalidates the
 cycle before journal publication or dispatch.
 It also re-fetches the physical assistant usage witness, comparing its exact
-identity and usage before admission. A turn that starts and finishes between
-activity reads cannot hide changed context or bypass compaction/the 300k ceiling.
+identity and usage before admission. This revalidation runs under the native
+observation fence: a turn that starts and finishes between activity reads cannot
+hide changed context or bypass compaction/the 300k ceiling. Losing that authority
+invalidates observation even if both activity snapshots still say idle.
 Every non-null retained compaction must
 have an object body, valid durable message and physical IDs, steer delivery and
 a retained preparation marker before observation, publication or capacity selection.
@@ -276,6 +289,14 @@ Acknowledgment rejects unbound, incomplete, foreign or stale receipts without
 changing the checkpoint. `Receipt.batch_sha256` binds the exact encoded batch.
 Each new checkpointed batch has an OS-random `exchange_id`, retained across
 retries, so an old receipt cannot certify an identical payload on a later turn.
+Imported pending checkpoints lacking a valid per-exchange nonce reject both
+preparation and acknowledgment without changing the checkpoint. Migrate them
+explicitly from independently verified historical custody; never mint a nonce
+onto an unbound pending batch to bless a historical receipt.
+If an acknowledged source path disappears after its bytes were already collected,
+that earlier byte-exact snapshot remains this exchange's sole operation for the
+path. Its later deletion belongs to the next collection, preventing a contradictory
+upload/verification-and-delete batch from becoming a permanently retained retry.
 New identities reserve available journal capacity during collection. Conditional
 deletions never supply speculative space; acknowledged removals free capacity
 for the next exchange, so a valid conflicted receipt remains adoptable.

@@ -43,8 +43,34 @@ pub struct Identity {
 /// One expectation per existing owner.
 pub type Expectations = BTreeMap<u32, Identity>;
 
+/// Consumer-owned native exclusivity over the observed host/session state.
+///
+/// All clients able to change the selected sessions' usage, policy, inboxes or
+/// compactions, and the hosts' activity/admission reservations, must honor this
+/// same fence. A local mutex or two equal idle snapshots is not sufficient.
+/// Keep the owned guard alive through dispatch; `Drop` releases exclusivity.
+pub trait ObservationFence {
+    /// Fail closed if native fencing authority or its lease has been lost.
+    /// Success must guarantee exclusivity remains held until the guard drops.
+    fn verify(&self) -> io::Result<()>;
+}
+
 /// Consumer-owned native transport and private state publication.
 pub trait Adapter {
+    /// Acquire native session/host exclusivity before observing or dispatching.
+    /// Acquire all resources atomically or in a stable order, releasing partial
+    /// acquisition on error. Provider transports without that facility must
+    /// return `Unsupported`; repeated activity/context reads are not a substitute.
+    fn acquire_observation_fence(
+        &mut self,
+        _manifest: &Manifest,
+        _policy: &Policy,
+    ) -> io::Result<Box<dyn ObservationFence>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native owner observation fencing is unavailable",
+        ))
+    }
     /// Call the declared host's existing service without moving credentials.
     fn api(
         &mut self,
@@ -315,6 +341,18 @@ pub fn observe(
     expected: &Expectations,
     adapter: &mut impl Adapter,
 ) -> io::Result<Observation> {
+    let fence = adapter.acquire_observation_fence(manifest, policy)?;
+    observe_fenced(manifest, policy, expected, adapter, fence.as_ref())
+}
+
+fn observe_fenced(
+    manifest: &Manifest,
+    policy: &Policy,
+    expected: &Expectations,
+    adapter: &mut impl Adapter,
+    fence: &dyn ObservationFence,
+) -> io::Result<Observation> {
+    fence.verify()?;
     manifest.validate(None).map_err(invalid)?;
     if expected.len() != manifest.packets.len()
         || manifest
@@ -482,6 +520,7 @@ pub fn observe(
     }
     // Reuse scheduler validation even when no work is currently ready.
     select(manifest, &json!({}), &occupied, policy).map_err(invalid)?;
+    fence.verify()?;
     Ok(Observation {
         active,
         occupied,
@@ -569,6 +608,7 @@ fn compact(
     observation: &Observation,
     adapter: &mut impl Adapter,
     at: &str,
+    fence: &dyn ObservationFence,
 ) -> io::Result<bool> {
     if observation
         .in_progress_compactions
@@ -615,6 +655,7 @@ fn compact(
         }
         return Ok(true);
     }
+    fence.verify()?;
     let reply = adapter.api(
         &packet.owner_host,
         "GET",
@@ -653,6 +694,7 @@ fn compact(
         return Ok(true);
     }
     verify_identity(&request(adapter, packet, "")?, packet, identity)?;
+    fence.verify()?;
     let receipt = adapter
         .api(
             &packet.owner_host,
@@ -734,7 +776,10 @@ pub fn cycle(
             return Err(invalid("malformed retained pending compaction"));
         }
     }
-    let mut observation = observe(manifest, policy, expected, adapter)?;
+    // Hold native authority for the whole cycle, including durable admission,
+    // compaction and prompt dispatch. Public observe obtains its own read fence.
+    let fence = adapter.acquire_observation_fence(manifest, policy)?;
+    let mut observation = observe_fenced(manifest, policy, expected, adapter, fence.as_ref())?;
     if dispatch {
         reconcile(manifest, &mut candidate, &observation, adapter, at)?;
         for packet in &manifest.packets {
@@ -786,6 +831,7 @@ pub fn cycle(
     selected.extend(select(manifest, &candidate["packets"], &reserved, policy).map_err(invalid)?);
     let mut errors = Vec::new();
     if dispatch {
+        fence.verify()?;
         adapter.persist(&candidate)?;
         *state = candidate;
         let mut compacting = BTreeSet::new();
@@ -803,6 +849,7 @@ pub fn cycle(
             if (pending && (admitted || queued))
                 || (admitted && observation.context_tokens[&packet.number] >= 180_000)
             {
+                fence.verify()?;
                 match compact(
                     packet,
                     &expected[&packet.number],
@@ -810,6 +857,7 @@ pub fn cycle(
                     &observation,
                     adapter,
                     at,
+                    fence.as_ref(),
                 ) {
                     Ok(false) => {}
                     outcome => {
@@ -835,6 +883,7 @@ pub fn cycle(
                 continue;
             }
             let result = (|| {
+                fence.verify()?;
                 let text = if state["packets"][packet.number.to_string()]["pending"].is_object() {
                     String::new()
                 } else {
@@ -858,6 +907,7 @@ pub fn cycle(
                 state["packets"][packet.number.to_string()]["pending"]["submissionAttemptAt"] =
                     json!(at);
                 adapter.persist(state)?;
+                fence.verify()?;
                 let receipt = adapter
                     .api(
                         &packet.owner_host,
