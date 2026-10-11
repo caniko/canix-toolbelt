@@ -159,6 +159,230 @@ fn github_revalidates_every_published_status_and_target_field() {
     }
 }
 
+fn complete_pull() -> Value {
+    let mut p = pull();
+    p["mergeable"] = json!("MERGEABLE");
+    p["mergeStateStatus"] = json!("CLEAN");
+    p["reviewDecision"] = Value::Null;
+    p["comments"]["nodes"][0]["url"] = json!("https://github.com/owner/repo/pull/1#issuecomment-1");
+    p["comments"]["nodes"][0]["createdAt"] = json!("2026-10-10T00:00:00Z");
+    p["comments"]["nodes"][0]["updatedAt"] = json!("2026-10-10T00:00:00Z");
+    p["reviews"] = json!({"totalCount":1,"nodes":[{"id":"review","url":"https://github.com/owner/repo/pull/1#pullrequestreview-1","author":{"login":"reviewer","__typename":"User"},"body":"review body","state":"APPROVED","commit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"submittedAt":"2026-10-10T00:00:00Z"}],"pageInfo":{"hasNextPage":false}});
+    let mut inline = p["comments"]["nodes"][0].clone();
+    inline["id"] = json!("inline");
+    inline["commit"] = p["reviews"]["nodes"][0]["commit"].clone();
+    inline["originalCommit"] = inline["commit"].clone();
+    inline["pullRequestReview"] = json!({"url":"https://github.com/owner/repo/pull/1#pullrequestreview-1","commit":inline["commit"]});
+    p["reviewThreads"] = json!({"totalCount":1,"nodes":[{"id":"thread","isResolved":false,"isOutdated":false,"path":"src/lib.rs","comments":{"totalCount":1,"nodes":[inline],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}});
+    p["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = json!({"state":"SUCCESS","contexts":{"totalCount":2,"nodes":[{"id":"check","__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":null,"startedAt":null,"completedAt":null},{"id":"context","__typename":"StatusContext","context":"legacy","state":"SUCCESS","targetUrl":null,"createdAt":"2026-10-10T00:00:00Z"}],"pageInfo":{"hasNextPage":false}}});
+    p
+}
+
+#[test]
+fn github_rejects_missing_and_malformed_required_scheduling_fields() {
+    for field in [
+        "state",
+        "isDraft",
+        "baseRefName",
+        "mergeable",
+        "mergeStateStatus",
+        "reviewDecision",
+    ] {
+        for bad in [
+            None,
+            Some(Value::Null),
+            Some(json!({})),
+            Some(json!("invalid")),
+        ] {
+            if field == "reviewDecision" && bad == Some(Value::Null) {
+                continue;
+            }
+            let mut p = complete_pull();
+            if let Some(bad) = bad {
+                p[field] = bad;
+            } else {
+                p.as_object_mut().unwrap().remove(field);
+            }
+            let mut transport = Graph(vec![
+                json!({"repository":{"pullRequest":p}}),
+                json!({"repository":{"pullRequest":p}}),
+            ]);
+            assert!(
+                github(
+                    &mut transport,
+                    "https://github.com/owner/repo/pull/1",
+                    &json!({}),
+                    "now",
+                    0
+                )
+                .is_err(),
+                "accepted unknown {field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn github_rejects_truncated_history_and_check_nodes() {
+    for (connection, fields) in [
+        (
+            "comment",
+            vec!["url", "body", "author", "createdAt", "updatedAt"],
+        ),
+        (
+            "review",
+            vec!["url", "body", "author", "state", "commit", "submittedAt"],
+        ),
+        ("thread", vec!["isResolved", "isOutdated", "path"]),
+        (
+            "inline",
+            vec![
+                "url",
+                "body",
+                "author",
+                "createdAt",
+                "updatedAt",
+                "commit",
+                "originalCommit",
+                "pullRequestReview",
+            ],
+        ),
+        (
+            "check",
+            vec![
+                "__typename",
+                "name",
+                "status",
+                "conclusion",
+                "detailsUrl",
+                "startedAt",
+                "completedAt",
+            ],
+        ),
+        (
+            "context",
+            vec!["__typename", "context", "state", "targetUrl", "createdAt"],
+        ),
+    ] {
+        for field in fields {
+            let mut p = complete_pull();
+            let node = match connection {
+                "comment" => &mut p["comments"]["nodes"][0],
+                "review" => &mut p["reviews"]["nodes"][0],
+                "thread" => &mut p["reviewThreads"]["nodes"][0],
+                "inline" => &mut p["reviewThreads"]["nodes"][0]["comments"]["nodes"][0],
+                _ => {
+                    &mut p["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+                        [usize::from(connection == "context")]
+                }
+            };
+            node.as_object_mut().unwrap().remove(field);
+            let mut transport = Graph(vec![
+                json!({"repository":{"pullRequest":p}}),
+                json!({"repository":{"pullRequest":p}}),
+            ]);
+            assert!(
+                github(
+                    &mut transport,
+                    "https://github.com/owner/repo/pull/1",
+                    &json!({}),
+                    "now",
+                    0
+                )
+                .is_err(),
+                "accepted truncated {connection}.{field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn forgejo_revalidates_every_published_scheduling_field() {
+    for field in ["mergeable", "draft"] {
+        let mut transport = Forge {
+            calls: vec![],
+            inconsistent: false,
+        };
+        struct Moving<'a> {
+            inner: &'a mut Forge,
+            field: &'a str,
+            reads: usize,
+        }
+        impl ForgeRest for Moving<'_> {
+            fn get(&mut self, host: &str, path: &str) -> io::Result<Value> {
+                let mut value = self.inner.get(host, path)?;
+                if path == "repos/owner/repo/pulls/1" {
+                    self.reads += 1;
+                    value["draft"] = json!(false);
+                    value["mergeable"] = json!(false);
+                    if self.reads > 1 {
+                        value[self.field] = json!(true);
+                    }
+                }
+                Ok(value)
+            }
+        }
+        assert!(
+            forgejo(
+                &mut Moving {
+                    inner: &mut transport,
+                    field,
+                    reads: 0
+                },
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now"
+            )
+            .is_err(),
+            "published stale {field}"
+        );
+    }
+}
+
+#[test]
+fn forgejo_rejects_history_without_declared_transport_totals() {
+    let mut transport = Forge {
+        calls: vec![],
+        inconsistent: false,
+    };
+    assert!(
+        forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now"
+        )
+        .is_err(),
+        "bare short arrays certified complete history without native count metadata"
+    );
+}
+
+#[test]
+fn forgejo_rejects_truncated_history_and_status_rows() {
+    for field in [
+        "body",
+        "user",
+        "state",
+        "submitted_at",
+        "updated_at",
+        "commit_id",
+    ] {
+        let mut review = json!({"id":1,"comments_count":1,"body":"review","user":{"login":"reviewer","id":1},"state":"APPROVED","submitted_at":"2026-10-10T00:00:00Z","updated_at":"2026-10-10T00:00:00Z","commit_id":"abcdef"});
+        review.as_object_mut().unwrap().remove(field);
+        let mut transport = forge_review(
+            review,
+            json!([{"id":10,"body":"inline","user":{"login":"reviewer","id":1},"created_at":"2026-10-10T00:00:00Z","updated_at":"2026-10-10T00:00:00Z","commit_id":"abcdef","original_commit_id":"abcdef","pull_request_review_id":1,"path":"src/lib.rs"}]),
+        );
+        assert!(
+            forgejo(
+                &mut transport,
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now"
+            )
+            .is_err(),
+            "accepted truncated Forgejo review.{field}"
+        );
+    }
+}
+
 #[test]
 fn complete_history_keeps_old_comment_bodies_and_uses_live_target() {
     let p = pull();
