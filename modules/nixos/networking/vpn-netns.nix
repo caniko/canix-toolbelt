@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  utils,
   ...
 }: let
   inherit (lib) mkEnableOption mkIf mkMerge mkOption types;
@@ -378,6 +379,13 @@
         else if instance.socks && label == "socks"
         then instance.socksHostAddress
         else "127.0.0.1";
+      # systemd consumes ExecStart's quoting before socat parses its addresses.
+      # A nested TCP:host:port in EXEC is therefore parsed as extra parameters.
+      # Keep the EXEC address to a single executable path with no nested colons.
+      connect = pkgs.writeShellScript "${names.forward label}-connect" ''
+        exec ${pkgs.util-linux}/bin/nsenter --net=${netnsPath} -- \
+          ${pkgs.socat}/bin/socat STDIO TCP:127.0.0.1:${toString port}
+      '';
     in
       lib.nameValuePair (names.forward label) {
         description = "Forward TCP port ${toString port} from the ${instance.namespace} VPN namespace to the host";
@@ -385,9 +393,11 @@
         bindsTo = [setupUnit];
         after = [setupUnit];
         serviceConfig = {
-          ExecStart = ''
-            ${pkgs.socat}/bin/socat TCP-LISTEN:${toString port}${lib.optionalString (bindAddress != null) ",bind=${bindAddress}"},fork,reuseaddr EXEC:'${pkgs.util-linux}/bin/nsenter --net=${netnsPath} ${pkgs.socat}/bin/socat STDIO TCP:127.0.0.1:${toString port}'
-          '';
+          ExecStart = utils.escapeSystemdExecArgs [
+            "${pkgs.socat}/bin/socat"
+            "TCP-LISTEN:${toString port}${lib.optionalString (bindAddress != null) ",bind=${bindAddress}"},fork,reuseaddr"
+            "EXEC:${connect}"
+          ];
           Restart = "always";
         };
       })
