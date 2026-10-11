@@ -5,20 +5,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
-### Fixed
-
-- Require native owner/host observation fencing through dispatch; unsupported
-  adapters fail before reads or effects, and lost authority invalidates an idle
-  context witness. Reject unbound imported pending evidence exchanges and keep
-  source-disappearance races out of retained contradictory batches.
-- Retain empty provider-log archives from cancelled original producers with
-  their terminal status and byte hashes; require actual log files for success
-  and reject duplicate archive members for every conclusion.
-- Bind hosted required CI gates to the selected source revision before running
-  them, and retain generated README badges alongside the workflow preparation
-  patch for complete declared-generator imports.
-
-## [0.5.0] - 2026-10-08
+## [0.5.0] - 2026-10-11
 
 ### Changed
 
@@ -34,6 +21,28 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 - Match the Claude release manifest to nixpkgs' raw or Zstandard download
   recipe, keeping both the declared checksum and installation format compatible.
+- Require native owner/host observation fencing through dispatch; unsupported
+  adapters fail before reads or effects, and lost authority invalidates an idle
+  context witness. Reject unbound imported pending evidence exchanges and keep
+  source-disappearance races out of retained contradictory batches.
+- Retain empty provider-log archives from cancelled original producers with
+  their terminal status and byte hashes; require actual log files for success
+  and reject duplicate archive members for every conclusion.
+- Bind hosted required CI gates to the selected source revision before running
+  them, and retain generated README badges alongside the workflow preparation
+  patch for complete declared-generator imports.
+- Keep direct-network routing ownership explicit in both reserved tables and
+  address families, preserve foreign routes and complete eligible ECMP paths,
+  and reject container-only implicit uplinks and noncanonical cgroup depths.
+- Authenticate all independent DNS listeners against the native resolver unit,
+  process, network namespace and enrolled cgroup generation. Reject foreign,
+  connected, wildcard and IPv4-mapped competing sockets. Scope NetworkManager
+  link-local DNS and retry failed generation-bound reload dispatches without
+  restarting enrolled workloads.
+- Require authenticated readiness for anchored and unanchored guarded launches;
+  retain routing-only coverage in the disposable namespace probe. Retry transient
+  pinentry fixture observations within the existing deadline while retaining
+  permanent failure diagnostics and separate concurrent prompt assertions.
 
 ### Added
 
