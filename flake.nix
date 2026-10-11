@@ -273,6 +273,7 @@
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
+            vpn-netns-runtime = import ./nixos-tests/vpn-netns-runtime.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
             direnv-runtime = import ./nixos-tests/direnv-runtime.nix {inherit pkgs;};
