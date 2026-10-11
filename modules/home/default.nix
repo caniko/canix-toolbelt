@@ -23,6 +23,7 @@
   pinentry = ./pinentry.nix;
   opencode-environment = ./opencode-environment.nix;
   opencode-jev = ./opencode-jev.nix;
+  headroom = ./headroom.nix;
   opencode-claude = import ./opencode-claude.nix {inherit fleetixLib;};
 
   # GPU — explicit VA-API media-decode route (replaced the retired igpu API)

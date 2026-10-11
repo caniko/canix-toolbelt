@@ -24,6 +24,11 @@ in {
       type = lib.types.attrsOf (lib.types.submodule {
         options = {
           upstream = lib.mkOption {type = lib.types.str;};
+          forwardUrl = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional transport hop after Jev; upstream retains the authenticated client route identity.";
+          };
           port = lib.mkOption {type = lib.types.port;};
           paths = lib.mkOption {type = lib.types.listOf lib.types.str;};
           requires = lib.mkOption {
@@ -69,7 +74,11 @@ in {
           Environment = [
             "HOST=127.0.0.1"
             "PORT=${toString gateway.port}"
-            "UPSTREAM_BASE_URL=${lib.removeSuffix "/" gateway.upstream}"
+            "UPSTREAM_BASE_URL=${lib.removeSuffix "/" (
+              if gateway.forwardUrl != null
+              then gateway.forwardUrl
+              else gateway.upstream
+            )}"
             "JEV_DIRECT_CALLS=false"
             "JEV_CLIENT=opencode-v2"
           ];

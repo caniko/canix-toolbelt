@@ -209,6 +209,7 @@
               node --test ${./runtime/opencode-jev}/server.test.mjs
               touch "$out"
             '';
+            headroom-eval = assert import ./nixos-tests/headroom-eval.nix {inherit pkgs;}; pkgs.runCommand "headroom-eval" {} "touch $out";
             opencode-environment-runtime = pkgs.runCommand "opencode-environment-runtime" {nativeBuildInputs = [pkgs.nodejs];} ''
               node --test ${./runtime/opencode-environment}/server.test.mjs
               touch "$out"
