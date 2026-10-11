@@ -342,6 +342,17 @@ pub fn event_version(pr: &Value) -> String {
 
 /// Full historical feedback identity used by terminal audits.
 pub fn feedback_version(pr: &Value) -> String {
+    let mut feedback = feedback_inputs(pr);
+    if pr["feedbackGeneration"]
+        .as_u64()
+        .is_some_and(|generation| generation > 0)
+    {
+        feedback["feedbackGeneration"] = pr["feedbackGeneration"].clone();
+    }
+    digest(&feedback)
+}
+
+fn feedback_inputs(pr: &Value) -> Value {
     let keys = [
         "url",
         "state",
@@ -353,11 +364,11 @@ pub fn feedback_version(pr: &Value) -> String {
         "threads",
         "inlineComments",
     ];
-    digest(&Value::Object(
+    Value::Object(
         keys.into_iter()
             .map(|key| (key.into(), pr[key].clone()))
             .collect(),
-    ))
+    )
 }
 
 /// Whether an owner has an unadmitted event. Pending inputs require reconciliation.
@@ -490,9 +501,23 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
         "auditedFeedback",
         "auditedCheckpoints",
         "auditedDependencies",
+        "feedbackObservations",
     ] {
         if !entry[key].is_null() && !entry[key].is_object() {
             return Err(format!("invalid {key} journal field for {number}"));
+        }
+    }
+    for observation in entry["feedbackObservations"]
+        .as_object()
+        .into_iter()
+        .flat_map(|map| map.values())
+    {
+        if observation["generation"].as_u64().is_none()
+            || !observation["version"].as_str().is_some_and(|version| {
+                version.len() == 64 && version.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(format!("invalid feedback observation for {number}"));
         }
     }
     if !entry["pending"].is_null()
@@ -655,6 +680,10 @@ fn refresh_in_place(
     for packet in &manifest.packets {
         journal_packet(state, packet.number)?;
         for url in &packet.prs {
+            let prior =
+                state["packets"][packet.number.to_string()]["feedbackObservations"][url].clone();
+            let prior_audit =
+                state["packets"][packet.number.to_string()]["auditedFeedback"][url].clone();
             let pr = state["prs"]
                 .as_object_mut()
                 .expect("validated object")
@@ -669,6 +698,29 @@ fn refresh_in_place(
             if pr["url"].as_str() != Some(url) {
                 return Err(format!("PR journal identity differs from assignment {url}"));
             }
+            let raw_feedback = digest(&feedback_inputs(pr));
+            let previous = prior["version"].as_str().or_else(|| prior_audit.as_str());
+            let mut generation = prior["generation"].as_u64().unwrap_or(0);
+            if previous.is_some_and(|version| version != raw_feedback) {
+                generation = generation
+                    .checked_add(1)
+                    .ok_or("feedback audit generation exhausted")?;
+            }
+            // Collectors replace native PR records; restore only the journal's
+            // retained generation, never an artifact-supplied generation.
+            if generation > 0 {
+                pr["feedbackGeneration"] = json!(generation);
+            } else {
+                pr.as_object_mut()
+                    .expect("validated PR object")
+                    .remove("feedbackGeneration");
+            }
+            let ps = journal_packet(state, packet.number)?;
+            if !ps["feedbackObservations"].is_object() {
+                ps["feedbackObservations"] = json!({});
+            }
+            ps["feedbackObservations"][url] =
+                json!({"version":raw_feedback,"generation":generation});
         }
         let mut assignments = packet.prs.iter().collect::<Vec<_>>();
         assignments.sort();
@@ -752,14 +804,13 @@ fn refresh_in_place(
             ) {
                 return Err(format!("unsupported worker status for {}", packet.number));
             }
-            if dependencies_complete
-                && report["eventVersion"].is_string()
+            if report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
                 && ps["deliveredObservationVersion"] == observation
             {
                 ps["workerStatus"] = report.clone();
                 ps["waitingReportPending"] = json!(report["status"] == "waiting");
-                if report["status"] == "ready_for_work" {
+                if dependencies_complete && report["status"] == "ready_for_work" {
                     ps["progressVersion"] = json!(digest(report));
                 }
                 for pr in &prs {
@@ -774,7 +825,8 @@ fn refresh_in_place(
                         let terminal_claim = pr["state"] == "MERGED"
                             || (pr["state"] == "CLOSED" && present(&item["disposition"]));
                         let url = pr["url"].as_str().ok_or("missing journal URL")?;
-                        if terminal_claim
+                        if dependencies_complete
+                            && terminal_claim
                             && pr["head"].is_string()
                             && item["head"] == pr["head"]
                             && item["auditComplete"] == true
@@ -1213,7 +1265,22 @@ pub fn finished(
                                 .is_some_and(|hash| !hash.trim().is_empty())
                         })
                 });
+            let feedback_current = packet.prs.iter().all(|url| {
+                let pr = &state["prs"][url];
+                match ps.get("feedbackObservations") {
+                    None => true,
+                    Some(observations) => {
+                        let observation = &observations[url];
+                        observation["version"].as_str()
+                            == Some(digest(&feedback_inputs(pr)).as_str())
+                            && observation["generation"].as_u64().is_some()
+                            && observation["generation"].as_u64()
+                                == pr.get("feedbackGeneration").map_or(Some(0), Value::as_u64)
+                    }
+                }
+            });
             ps["terminal"] == true
+                && feedback_current
                 && ps
                     .get("dependencyEvidenceIncomplete")
                     .is_none_or(|value| value == false)

@@ -27,6 +27,7 @@ struct Fixture {
     compaction_during_final_inbox: Option<Value>,
     owner_inbox_calls: usize,
     withdraw_completed_reset: Option<bool>,
+    assistant_during_final_inbox: Option<Value>,
 }
 
 impl Adapter for Fixture {
@@ -58,6 +59,9 @@ impl Adapter for Fixture {
         let data = if path.ends_with("/inbox") {
             self.owner_inbox_calls += 1;
             if self.owner_inbox_calls == 2 {
+                if let Some(assistant) = self.assistant_during_final_inbox.take() {
+                    self.recent.insert(0, assistant);
+                }
                 if let Some(withdraw) = self.withdraw_completed_reset.take() {
                     if withdraw {
                         self.recent.retain(|message| message["id"] != "msg_reset");
@@ -214,6 +218,7 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         compaction_during_final_inbox: None,
         owner_inbox_calls: 0,
         withdraw_completed_reset: None,
+        assistant_during_final_inbox: None,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -390,6 +395,32 @@ fn final_observation_revalidates_completed_context_reset_evidence() {
             .context_tokens[&1],
         0
     );
+}
+
+#[test]
+fn completed_owner_turn_cannot_hide_changed_physical_context_during_observation() {
+    for tokens in [260_000, 300_000] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.assistant_during_final_inbox = Some(assistant("msg_new_context", 2000, tokens));
+        let before = state.clone();
+        let result = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        );
+        assert!(
+            result.is_err(),
+            "admitted a completed turn with {tokens} physical tokens"
+        );
+        assert_eq!(state, before);
+        assert_eq!(fixture.saved, before);
+        assert!(fixture.submissions.is_empty());
+    }
 }
 
 #[test]
@@ -1234,7 +1265,7 @@ fn filtered_context_pagination_retains_the_actual_physical_identity() {
             .iter()
             .filter(|path| path.contains("type=assistant"))
             .count(),
-        2
+        4, // Two bounded pages in both the initial and final observation.
     );
 }
 

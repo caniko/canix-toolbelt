@@ -23,6 +23,9 @@ invalidate dependency-audit coverage until a fresh complete audit is delivered.
 A durable dependency generation advances once on each transition to incomplete
 evidence and enters subsequent event/audit fingerprints. Replaying a pre-loss
 historical audit cannot restore completion when the same producer bytes return.
+Exact waiting reports remain retained while producers are missing, with their
+retry metadata and bounded follow-up obligation. Progress and audit adoption
+remain blocked until all declared producer evidence is complete.
 
 `refresh` works transactionally against the existing JSON journal. It preserves
 pending request IDs/bodies, audit checkpoints, admission history and unknown
@@ -30,6 +33,11 @@ fields. Source/review/CI event hashes exclude poll timestamps and derived
 progress. Terminal comparison hashes ignore unrelated later target/check
 movement; edited historical feedback still invalidates the audit. Fingerprints
 retain sorted ASCII JSON and legacy finite-number spelling.
+Per-PR feedback observations retain a checked monotonic generation across
+feedback/state changes and collector record replacement. Returning to an earlier
+closure after reopening cannot recreate a prior closure-audit fingerprint; a
+fresh generation-bound audit is required. Stable terminal target/check movement
+does not advance this historical-feedback generation.
 The journal retains the validated manifest as `retainedManifest`; refreshes compare
 against it across restarts. Initial imports reject missing already-journaled scope.
 Legacy imports with retained packet entries also require an explicit complete
@@ -170,6 +178,9 @@ The final observation re-collects and compares the complete validated compaction
 history, including older reservations beneath the exposed newest record and the
 completed witnesses used to reset context. A changed set or record invalidates the
 cycle before journal publication or dispatch.
+It also re-fetches the physical assistant usage witness, comparing its exact
+identity and usage before admission. A turn that starts and finishes between
+activity reads cannot hide changed context or bypass compaction/the 300k ceiling.
 Every non-null retained compaction must
 have an object body, valid durable message and physical IDs, steer delivery and
 a retained preparation marker before observation, publication or capacity selection.

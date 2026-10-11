@@ -273,6 +273,26 @@ fn compaction_history(
     Ok(history)
 }
 
+fn physical_context(
+    adapter: &mut impl Adapter,
+    packet: &Packet,
+    ids: &mut BTreeSet<String>,
+) -> io::Result<Value> {
+    context_message(adapter, packet, "assistant", ids, |message| {
+        Ok(if physical_tokens(message)? > 0 {
+            ContextSearch::Found
+        } else {
+            ContextSearch::Continue
+        })
+    })?
+    .ok_or_else(|| {
+        invalid(format!(
+            "owner {} physical context is unknown",
+            packet.number
+        ))
+    })
+}
+
 fn compaction_observations(history: &[Value]) -> BTreeMap<String, Value> {
     history
         .iter()
@@ -328,6 +348,7 @@ pub fn observe(
     let mut physical_message_ids = BTreeMap::new();
     let mut in_progress_compactions = BTreeMap::new();
     let mut histories = BTreeMap::new();
+    let mut physical_contexts = BTreeMap::new();
     for packet in &manifest.packets {
         for (host, data) in &raw {
             if data.get(&packet.session_id).is_some() {
@@ -361,20 +382,8 @@ pub fn observe(
             .cloned()
             .ok_or_else(|| invalid("incomplete context observation"))?;
         let mut context_ids = BTreeSet::new();
-        let physical =
-            context_message(adapter, packet, "assistant", &mut context_ids, |message| {
-                Ok(if physical_tokens(message)? > 0 {
-                    ContextSearch::Found
-                } else {
-                    ContextSearch::Continue
-                })
-            })?
-            .ok_or_else(|| {
-                invalid(format!(
-                    "owner {} physical context is unknown",
-                    packet.number
-                ))
-            })?;
+        let physical = physical_context(adapter, packet, &mut context_ids)?;
+        physical_contexts.insert(packet.number, physical.clone());
         let physical_time = physical["time"]["created"]
             .as_u64()
             .expect("validated time");
@@ -418,7 +427,7 @@ pub fn observe(
         );
     }
     // A queue can change without foreground activity changing. Revalidate both
-    // owner and mirror inboxes and the complete native compaction history, then
+    // owner and mirror inboxes, physical usage and complete compaction history, then
     // bracket the complete pass with activity. The public newest-compaction
     // view alone cannot detect an older reservation or a withdrawn reset witness.
     for packet in &manifest.packets {
@@ -434,7 +443,15 @@ pub fn observe(
                 packet.number
             )));
         }
-        let compactions = compaction_history(adapter, packet, &mut BTreeSet::new())?;
+        let mut context_ids = BTreeSet::new();
+        if physical_context(adapter, packet, &mut context_ids)? != physical_contexts[&packet.number]
+        {
+            return Err(invalid(format!(
+                "owner {} physical context changed during observation",
+                packet.number
+            )));
+        }
+        let compactions = compaction_history(adapter, packet, &mut context_ids)?;
         if compaction_observations(&compactions) != histories[&packet.number] {
             return Err(invalid(format!(
                 "owner {} compaction history changed during observation",

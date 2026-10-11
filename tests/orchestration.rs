@@ -1690,6 +1690,187 @@ fn malformed_or_exhausted_dependency_generations_reject_transactionally() {
 }
 
 #[test]
+fn incomplete_producer_evidence_retains_waiting_checkpoint_and_bounded_recheck() {
+    let mut manifest = manifest();
+    manifest.packets[0].dependencies = vec![2];
+    let mut state = json!({"prs":{"one":{"url":"one","state":"OPEN","head":"h","base":"b","comments":[]},"two":{"url":"two","state":"OPEN","head":"h","comments":[]}},"packets":{}});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "wait for missing producer",
+        "2026-10-11T00:00:00Z",
+    )
+    .unwrap();
+    acknowledge(
+        &mut state,
+        1,
+        body["id"].as_str().unwrap(),
+        "2026-10-11T00:00:01Z",
+    )
+    .unwrap();
+    let report = json!({"schemaVersion":1,"packet":1,"status":"waiting","eventVersion":body["metadata"]["eventVersion"],"retryAfterSeconds":60,"prs":[{"url":"one","head":"h","base":"b","stage":"ready_for_merge","evidence":"partial producer evidence","auditComplete":true}]});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::from([(1, report.clone())]),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["workerStatus"], report);
+    assert_eq!(state["packets"]["1"]["waitingReportPending"], true);
+    assert_ne!(state["prs"]["one"]["progress"]["stage"], "ready_for_merge");
+    assert!(state["packets"]["1"]["auditedDependencies"]["one"].is_null());
+    assert!(!needs_wake(&state["packets"]["1"]));
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-11T00:10:02Z")
+        .unwrap()
+        .timestamp();
+    assert!(schedule_recheck(&mut state["packets"]["1"], &policy(), now));
+    assert!(!schedule_recheck(
+        &mut state["packets"]["1"],
+        &policy(),
+        now + 60
+    ));
+}
+
+#[test]
+fn reopened_then_reclosed_feedback_cannot_replay_the_original_closure_audit() {
+    let manifest = manifest();
+    let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    let mut state = fully_audited_state(&manifest, &BTreeMap::new());
+    state["prs"]["one"]["state"] = json!("CLOSED");
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let old_feedback = feedback_version(&state["prs"]["one"]);
+    let original = BTreeMap::from([(
+        1,
+        json!({"packet":1,"prs":[{"url":"one","feedbackVersion":old_feedback,"evidence":"original closure audit"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &original,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(finished(&manifest, &state, &active, true));
+    state["prs"]["one"]["state"] = json!("OPEN");
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(!finished(&manifest, &state, &active, true));
+    state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    state["prs"]["one"]["state"] = json!("CLOSED");
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &original,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_ne!(state["packets"]["1"]["terminal"], true);
+    assert!(!finished(&manifest, &state, &active, true));
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "fresh closure audit",
+        "2026-10-11T02:00:00Z",
+    )
+    .unwrap();
+    acknowledge(
+        &mut state,
+        1,
+        body["id"].as_str().unwrap(),
+        "2026-10-11T02:00:01Z",
+    )
+    .unwrap();
+    let report = json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":body["metadata"]["eventVersion"],"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"fresh closure audit"}]});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::from([(1, report)]),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(finished(&manifest, &state, &active, true));
+}
+
+#[test]
+fn retained_feedback_generations_reject_malformed_and_exhausted_state() {
+    let manifest = manifest();
+    let original = fully_audited_state(&manifest, &BTreeMap::new());
+    let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    for generation in [Value::Null, json!(true), json!("1"), json!(-1), json!(1.5)] {
+        let mut state = original.clone();
+        state["packets"]["1"]["feedbackObservations"]["one"]["generation"] = generation;
+        let before = state.clone();
+        assert!(
+            refresh(
+                &manifest,
+                &mut state,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(state, before);
+        assert!(!finished(&manifest, &state, &active, true));
+    }
+    let mut state = original.clone();
+    state["packets"]["1"]["feedbackObservations"]["one"]["generation"] = json!(u64::MAX);
+    state["prs"]["one"]["state"] = json!("OPEN");
+    let before = state.clone();
+    assert!(
+        refresh(
+            &manifest,
+            &mut state,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+    assert_eq!(state, before);
+    let mut replaced = original;
+    replaced["packets"]["1"]["feedbackObservations"]["one"]["generation"] = json!(1);
+    assert!(!finished(&manifest, &replaced, &active, true));
+}
+
+#[test]
 fn reordered_manifest_sets_preserve_event_versions_and_terminal_audits() {
     let mut manifest = manifest();
     manifest.packets.push(serde_json::from_value(json!({"number":3,"sessionID":"ses_three","ownerHost":"mobile","title":"Owner 3","prs":["three"]})).unwrap());
