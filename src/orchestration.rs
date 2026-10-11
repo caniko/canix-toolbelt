@@ -475,6 +475,17 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
     if !entry.is_object() {
         return Err(format!("invalid journal packet {number}"));
     }
+    if entry
+        .get("dependencyGeneration")
+        .is_some_and(|value| value.as_u64().is_none())
+        || entry
+            .get("dependencyEvidenceIncomplete")
+            .is_some_and(|value| !value.is_boolean())
+        || (entry["dependencyEvidenceIncomplete"] == true
+            && entry["dependencyGeneration"].as_u64().unwrap_or(0) == 0)
+    {
+        return Err(format!("invalid dependency audit generation for {number}"));
+    }
     for key in [
         "auditedFeedback",
         "auditedCheckpoints",
@@ -527,6 +538,16 @@ fn validate_report_urls(report: &Value, number: u32) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn dependency_fingerprint(producers: &[u32], evidence: &Value, generation: u64) -> String {
+    let mut inputs = json!({"producers":producers,"evidence":evidence});
+    // Preserve exact historical hashes until evidence is revoked. A revoked
+    // audit cannot become current again when the same producer bytes return.
+    if generation > 0 {
+        inputs["generation"] = json!(generation);
+    }
+    digest(&inputs)
 }
 
 /// Refresh observations and audits while retaining every historical journal field.
@@ -660,17 +681,36 @@ fn refresh_in_place(
         let deps: BTreeMap<_, _> = packet
             .dependencies
             .iter()
-            .filter_map(|id| dependencies.get(id).map(|hash| (id.to_string(), hash)))
+            .map(|id| (id.to_string(), dependencies.get(id)))
             .collect();
+        // Unknown producer evidence is a retained event input, never an
+        // omitted obligation that a worker can accidentally certify.
+        let dependencies_complete = deps
+            .values()
+            .all(|hash| hash.is_some_and(|hash| !hash.trim().is_empty()));
+        let mut generation = ps["dependencyGeneration"].as_u64().unwrap_or(0);
+        if !dependencies_complete {
+            if ps["dependencyEvidenceIncomplete"] != true {
+                generation = generation
+                    .checked_add(1)
+                    .ok_or("dependency audit generation exhausted")?;
+                ps["dependencyGeneration"] = json!(generation);
+            }
+            ps["auditedDependencies"] = json!({});
+        }
+        ps["dependencyEvidenceIncomplete"] = json!(!dependencies_complete);
         let mut producer_ids = packet.dependencies.clone();
         producer_ids.sort_unstable();
         producer_ids.dedup();
-        let dependency_version = digest(&json!({"producers":producer_ids,"evidence":deps}));
+        let dependency_version = dependency_fingerprint(&producer_ids, &json!(deps), generation);
         let mut inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
         // A declared producer is useful new input even before its first handoff.
         // Preserve historical fingerprints for packets without dependencies.
         if !packet.dependencies.is_empty() {
             inputs["producers"] = json!(producer_ids);
+        }
+        if generation > 0 {
+            inputs["dependencyGeneration"] = json!(generation);
         }
         let observation = json!(digest(&inputs));
         // Bind an imported delivery only to its retained, unchanged observation.
@@ -712,7 +752,8 @@ fn refresh_in_place(
             ) {
                 return Err(format!("unsupported worker status for {}", packet.number));
             }
-            if report["eventVersion"].is_string()
+            if dependencies_complete
+                && report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
                 && ps["deliveredObservationVersion"] == observation
             {
@@ -767,7 +808,8 @@ fn refresh_in_place(
                 return Err("historical audit identity mismatch".into());
             }
             for item in audit["prs"].as_array().into_iter().flatten() {
-                if present(&item["evidence"])
+                if dependencies_complete
+                    && present(&item["evidence"])
                     && present(&item["feedbackVersion"])
                     && (packet.dependencies.is_empty()
                         || item["dependencyVersion"].as_str() == Some(&dependency_version))
@@ -791,8 +833,9 @@ fn refresh_in_place(
             .iter()
             .filter(|pr| {
                 matches!(pr["state"].as_str(), Some("MERGED" | "CLOSED"))
-                    && (ps["auditedFeedback"][pr["url"].as_str().unwrap_or("")].as_str()
-                        != Some(feedback_version(pr).as_str())
+                    && (!dependencies_complete
+                        || ps["auditedFeedback"][pr["url"].as_str().unwrap_or("")].as_str()
+                            != Some(feedback_version(pr).as_str())
                         || (!packet.dependencies.is_empty()
                             && ps["auditedDependencies"][pr["url"].as_str().unwrap_or("")]
                                 .as_str()
@@ -800,7 +843,8 @@ fn refresh_in_place(
             })
             .count();
         ps["terminal"] = json!(
-            backlog == 0
+            dependencies_complete
+                && backlog == 0
                 && ps["waitingReportPending"] != true
                 && ps["workerStatus"]["status"] != "waiting"
                 && !undelivered_progress(ps)
@@ -809,7 +853,8 @@ fn refresh_in_place(
                     .all(|pr| matches!(pr["state"].as_str(), Some("MERGED" | "CLOSED")))
         );
         ps["auditBacklog"] = json!(backlog);
-        let current_report = ps["workerStatus"]["eventVersion"].is_string()
+        let current_report = dependencies_complete
+            && ps["workerStatus"]["eventVersion"].is_string()
             && ps["workerStatus"]["eventVersion"] == ps["deliveredVersion"]
             && ps["deliveredObservationVersion"] == ps["observationVersion"];
         let reported: Vec<_> = if current_report {
@@ -838,7 +883,8 @@ fn refresh_in_place(
             pr["progress"] = progress(pr, item);
             pr["classification"] = pr["progress"]["stage"].clone();
             pr["progress"]["auditComplete"] = json!(
-                feedback[url].as_str() == Some(feedback_version(pr).as_str())
+                dependencies_complete
+                    && feedback[url].as_str() == Some(feedback_version(pr).as_str())
                     && (packet.dependencies.is_empty()
                         || audited_dependencies[url].as_str() == Some(&dependency_version))
             );
@@ -1145,10 +1191,33 @@ pub fn finished(
             let mut producers = packet.dependencies.clone();
             producers.sort_unstable();
             producers.dedup();
-            let dependency_version = digest(
-                &json!({"producers":producers,"evidence":ps["versionInputs"]["dependencies"]}),
+            let Some(generation) = ps
+                .get("dependencyGeneration")
+                .map_or(Some(0), Value::as_u64)
+            else {
+                return false;
+            };
+            let dependency_version = dependency_fingerprint(
+                &producers,
+                &ps["versionInputs"]["dependencies"],
+                generation,
             );
+            let dependencies_complete = ps["versionInputs"]["dependencies"]
+                .as_object()
+                .is_some_and(|evidence| {
+                    evidence.len() == producers.len()
+                        && producers.iter().all(|id| {
+                            evidence
+                                .get(&id.to_string())
+                                .and_then(Value::as_str)
+                                .is_some_and(|hash| !hash.trim().is_empty())
+                        })
+                });
             ps["terminal"] == true
+                && ps
+                    .get("dependencyEvidenceIncomplete")
+                    .is_none_or(|value| value == false)
+                && (packet.dependencies.is_empty() || dependencies_complete)
                 && ps["waitingReportPending"] != true
                 && ps["workerStatus"]["status"] != "waiting"
                 && !undelivered_progress(ps)

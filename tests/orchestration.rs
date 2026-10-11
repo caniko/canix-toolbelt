@@ -1528,6 +1528,168 @@ fn finished_requires_refreshed_manifest_and_dependency_audit_coverage() {
 }
 
 #[test]
+fn incomplete_producer_evidence_cannot_certify_terminal_or_progress_audits() {
+    let mut manifest = manifest();
+    manifest.packets[0].dependencies = vec![2];
+    let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    for evidence in [
+        BTreeMap::new(),
+        BTreeMap::from([(2, "".into())]),
+        BTreeMap::from([(2, "  ".into())]),
+    ] {
+        let state = fully_audited_state(&manifest, &evidence);
+        assert_ne!(state["packets"]["1"]["terminal"], true);
+        assert!(state["packets"]["1"]["auditedDependencies"]["one"].is_null());
+        assert_ne!(state["prs"]["one"]["progress"]["auditComplete"], true);
+        assert!(!finished(&manifest, &state, &active, true));
+    }
+    let known = BTreeMap::from([(2, "qualified producer".into())]);
+    let mut state = fully_audited_state(&manifest, &known);
+    assert!(finished(&manifest, &state, &active, true));
+    let old_audit = BTreeMap::from([(
+        1,
+        json!({"packet":1,"prs":[{"url":"one","feedbackVersion":feedback_version(&state["prs"]["one"]),"dependencyVersion":state["packets"]["1"]["dependencyVersion"],"evidence":"original source audit"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_ne!(state["packets"]["1"]["terminal"], true);
+    assert!(!finished(&manifest, &state, &active, true));
+    let missing_version = state["packets"]["1"]["version"].clone();
+    let missing_generation = state["packets"]["1"]["dependencyGeneration"].clone();
+    state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["version"], missing_version);
+    assert_eq!(
+        state["packets"]["1"]["dependencyGeneration"],
+        missing_generation
+    );
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &old_audit,
+        &known,
+    )
+    .unwrap();
+    assert_ne!(
+        state["packets"]["1"]["terminal"], true,
+        "returning producer evidence restored an expired audit"
+    );
+    assert!(!finished(&manifest, &state, &active, true));
+    let body = prepare(
+        &mut state,
+        &manifest.packets[0],
+        &policy(),
+        "fresh complete producer audit",
+        "2026-10-11T02:00:00Z",
+    )
+    .unwrap();
+    acknowledge(
+        &mut state,
+        1,
+        body["id"].as_str().unwrap(),
+        "2026-10-11T02:00:01Z",
+    )
+    .unwrap();
+    let fresh = BTreeMap::from([(
+        1,
+        json!({"schemaVersion":1,"packet":1,"status":"complete","eventVersion":body["metadata"]["eventVersion"],"prs":[{"url":"one","head":"h","auditComplete":true,"disposition":"absorbed","evidence":"fresh complete producer audit"}]}),
+    )]);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &fresh,
+        &BTreeMap::new(),
+        &known,
+    )
+    .unwrap();
+    assert!(finished(&manifest, &state, &active, true));
+    // Even a self-consistent retained digest cannot certify an omitted producer.
+    let mut forged = fully_audited_state(&manifest, &known);
+    forged["packets"]["1"]["versionInputs"]["dependencies"] = json!({});
+    let incomplete = digest(&json!({"producers":[2],"evidence":{}}));
+    forged["packets"]["1"]["dependencyVersion"] = json!(incomplete);
+    forged["packets"]["1"]["auditedDependencies"]["one"] = json!(incomplete);
+    assert!(!finished(&manifest, &forged, &active, true));
+    let mut third = manifest.packets[1].clone();
+    third.number = 3;
+    third.session_id = "ses_three".into();
+    third.prs = vec!["three".into()];
+    manifest.packets.push(third);
+    manifest.packets[0].dependencies.push(3);
+    manifest.assignment_count = 3;
+    manifest.baseline_count = Some(3);
+    let partial = fully_audited_state(&manifest, &known);
+    assert_ne!(partial["packets"]["1"]["terminal"], true);
+    assert_eq!(
+        partial["packets"]["1"]["versionInputs"]["dependencies"]["2"],
+        "qualified producer"
+    );
+    assert_eq!(
+        partial["packets"]["1"]["versionInputs"]["dependencies"]["3"],
+        Value::Null
+    );
+    assert!(partial["packets"]["1"]["auditedDependencies"]["one"].is_null());
+}
+
+#[test]
+fn malformed_or_exhausted_dependency_generations_reject_transactionally() {
+    let mut manifest = manifest();
+    manifest.packets[0].dependencies = vec![2];
+    let known = BTreeMap::from([(2, "qualified producer".into())]);
+    let original = fully_audited_state(&manifest, &known);
+    for malformed in [Value::Null, json!(true), json!(1.5), json!(-1), json!("1")] {
+        let mut state = original.clone();
+        state["packets"]["1"]["dependencyGeneration"] = malformed;
+        let before = state.clone();
+        assert!(
+            refresh(
+                &manifest,
+                &mut state,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &known
+            )
+            .is_err()
+        );
+        assert_eq!(state, before);
+    }
+    let mut exhausted = original;
+    exhausted["packets"]["1"]["dependencyGeneration"] = json!(u64::MAX);
+    let before = exhausted.clone();
+    assert!(
+        refresh(
+            &manifest,
+            &mut exhausted,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+    assert_eq!(exhausted, before);
+}
+
+#[test]
 fn reordered_manifest_sets_preserve_event_versions_and_terminal_audits() {
     let mut manifest = manifest();
     manifest.packets.push(serde_json::from_value(json!({"number":3,"sessionID":"ses_three","ownerHost":"mobile","title":"Owner 3","prs":["three"]})).unwrap());

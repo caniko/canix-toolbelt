@@ -259,6 +259,35 @@ fn compaction_status(message: &Value) -> io::Result<&str> {
         .ok_or_else(|| invalid("malformed context compaction status"))
 }
 
+fn compaction_history(
+    adapter: &mut impl Adapter,
+    packet: &Packet,
+    ids: &mut BTreeSet<String>,
+) -> io::Result<Vec<Value>> {
+    let mut history = Vec::new();
+    context_message(adapter, packet, "compaction", ids, |message| {
+        compaction_status(message)?;
+        history.push(message.clone());
+        Ok(ContextSearch::Continue)
+    })?;
+    Ok(history)
+}
+
+fn compaction_observations(history: &[Value]) -> BTreeMap<String, Value> {
+    history
+        .iter()
+        .map(|message| {
+            (
+                message["id"]
+                    .as_str()
+                    .expect("validated compaction ID")
+                    .to_owned(),
+                message.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Validate every host and owner before any new admission. Mirrors cannot execute.
 pub fn observe(
     manifest: &Manifest,
@@ -298,6 +327,7 @@ pub fn observe(
     let mut context_tokens = BTreeMap::new();
     let mut physical_message_ids = BTreeMap::new();
     let mut in_progress_compactions = BTreeMap::new();
+    let mut histories = BTreeMap::new();
     for packet in &manifest.packets {
         for (host, data) in &raw {
             if data.get(&packet.session_id).is_some() {
@@ -352,7 +382,9 @@ pub fn observe(
         // A terminal compaction can reset context, but cannot prove that an
         // older native reservation has finished. Exhaust the bounded filtered
         // history before admitting work; an unknown tail fails closed.
-        context_message(adapter, packet, "compaction", &mut context_ids, |message| {
+        let compactions = compaction_history(adapter, packet, &mut context_ids)?;
+        histories.insert(packet.number, compaction_observations(&compactions));
+        for message in &compactions {
             match compaction_status(message)? {
                 "queued" | "running" => {
                     in_progress_compactions
@@ -365,8 +397,7 @@ pub fn observe(
                 }
                 _ => {}
             }
-            Ok(ContextSearch::Continue)
-        })?;
+        }
         let tokens = if compacted {
             0
         } else {
@@ -387,7 +418,9 @@ pub fn observe(
         );
     }
     // A queue can change without foreground activity changing. Revalidate both
-    // owner and mirror inboxes, then bracket the complete pass with activity.
+    // owner and mirror inboxes and the complete native compaction history, then
+    // bracket the complete pass with activity. The public newest-compaction
+    // view alone cannot detect an older reservation or a withdrawn reset witness.
     for packet in &manifest.packets {
         verify_mirror_inboxes(adapter, packet, raw.keys())?;
         let fresh = request(adapter, packet, "/inbox")?;
@@ -398,6 +431,13 @@ pub fn observe(
         if fresh != &inboxes[&packet.number] {
             return Err(invalid(format!(
                 "owner {} inbox changed during observation",
+                packet.number
+            )));
+        }
+        let compactions = compaction_history(adapter, packet, &mut BTreeSet::new())?;
+        if compaction_observations(&compactions) != histories[&packet.number] {
+            return Err(invalid(format!(
+                "owner {} compaction history changed during observation",
                 packet.number
             )));
         }

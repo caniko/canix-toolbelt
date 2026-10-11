@@ -17,6 +17,12 @@ reports each class's counts and native state totals, including UNKNOWN evidence.
 Unknown manifest fields and journal fields remain available to the consumer.
 Declared producer IDs enter the event fingerprint before their first handoff, so
 an additive producer declaration generates a useful new delivery immediately.
+Every declared producer remains in the evidence map; missing handoffs are explicit
+nulls. Missing or empty producer digests block progress/terminal certification and
+invalidate dependency-audit coverage until a fresh complete audit is delivered.
+A durable dependency generation advances once on each transition to incomplete
+evidence and enters subsequent event/audit fingerprints. Replaying a pre-loss
+historical audit cannot restore completion when the same producer bytes return.
 
 `refresh` works transactionally against the existing JSON journal. It preserves
 pending request IDs/bodies, audit checkpoints, admission history and unknown
@@ -160,6 +166,10 @@ completion releases the reservation without inventing a pending request.
 Reservation discovery exhausts the bounded filtered compaction history independently
 of context reset. Newer completed/failed records cannot hide older queued/running
 work; incomplete pagination or an exhausted search bound rejects observation.
+The final observation re-collects and compares the complete validated compaction
+history, including older reservations beneath the exposed newest record and the
+completed witnesses used to reset context. A changed set or record invalidates the
+cycle before journal publication or dispatch.
 Every non-null retained compaction must
 have an object body, valid durable message and physical IDs, steer delivery and
 a retained preparation marker before observation, publication or capacity selection.
@@ -174,6 +184,7 @@ must match the PR head. Forgejo inline counts and nonempty unique history IDs ar
 validated too. Both forges re-fetch the complete check rollup after collection.
 GitHub also revalidates every published mergeability, review, draft and target
 field; asynchronous changes reject the observation rather than publish stale status.
+Its native deprecated `DRAFT` merge state remains valid alongside `isDraft`.
 Required scheduling enums, booleans and branch names, plus the requested comment,
 review, thread and check-context fields, are validated before publication. A
 missing nullable field is truncated evidence; an explicit native null remains
@@ -189,7 +200,9 @@ observation. Missing/unsupported permissions reject the snapshot; the explicit
 native null returned for GitHub App authentication remains valid and is retained.
 GitHub revisions must be full 40-digit hexadecimal object IDs, and its update
 identity must parse as RFC 3339 before history is fetched. Malformed check rollups
-return errors. `ForgeRest::get` returns `ForgeResponse` with native JSON `body`
+return errors. Forgejo base/head revisions must be complete hexadecimal Git object
+IDs (40-digit SHA-1 or 64-digit SHA-256), validated before history/check reads.
+`ForgeRest::get` returns `ForgeResponse` with native JSON `body`
 and an optional parsed `x-total-count` in `total_count`. Consumers must preserve
 the response header, reject malformed or duplicated metadata and never infer
 counts from returned rows. Every history page requires that authoritative total,

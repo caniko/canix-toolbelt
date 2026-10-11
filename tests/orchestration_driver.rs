@@ -24,6 +24,9 @@ struct Fixture {
     changed_agent: bool,
     changed_permissions: bool,
     reject_prompt: bool,
+    compaction_during_final_inbox: Option<Value>,
+    owner_inbox_calls: usize,
+    withdraw_completed_reset: Option<bool>,
 }
 
 impl Adapter for Fixture {
@@ -53,6 +56,25 @@ impl Adapter for Fixture {
             });
         }
         let data = if path.ends_with("/inbox") {
+            self.owner_inbox_calls += 1;
+            if self.owner_inbox_calls == 2 {
+                if let Some(withdraw) = self.withdraw_completed_reset.take() {
+                    if withdraw {
+                        self.recent.retain(|message| message["id"] != "msg_reset");
+                    } else {
+                        self.recent
+                            .iter_mut()
+                            .find(|message| message["id"] == "msg_reset")
+                            .unwrap()["status"] = json!("failed");
+                    }
+                }
+                if let Some(compaction) = self.compaction_during_final_inbox.take() {
+                    self.recent.push(compaction);
+                    self.recent.sort_by_key(|message| {
+                        std::cmp::Reverse(message["time"]["created"].as_u64().unwrap())
+                    });
+                }
+            }
             if self.start_during_inbox {
                 self.hosts
                     .insert("destination".into(), json!({"ses_original":{}}));
@@ -189,6 +211,9 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
         changed_agent: false,
         changed_permissions: false,
         reject_prompt: false,
+        compaction_during_final_inbox: None,
+        owner_inbox_calls: 0,
+        withdraw_completed_reset: None,
     };
     (manifest, policy, expected, state, fixture)
 }
@@ -292,6 +317,79 @@ fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
             assert!(fresh.in_progress_compactions.is_empty());
         }
     }
+}
+
+#[test]
+fn final_observation_revalidates_every_native_compaction_reservation() {
+    for existing in [false, true] {
+        for status in ["queued", "running"] {
+            let (manifest, policy, expected, mut state, mut fixture) = setup();
+            if existing {
+                fixture.recent.insert(0, json!({"id":"msg_existing","type":"compaction","status":"running","time":{"created":3000}}));
+            }
+            fixture.compaction_during_final_inbox = Some(
+                json!({"id":"msg_late","type":"compaction","status":status,"time":{"created":2000}}),
+            );
+            let before = state.clone();
+            let error = cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("compaction history changed"),
+                "{error}"
+            );
+            assert_eq!(state, before);
+            assert!(fixture.submissions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn final_observation_revalidates_completed_context_reset_evidence() {
+    for withdraw in [true, false] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture.recent = vec![
+            json!({"id":"msg_reset","type":"compaction","status":"completed","time":{"created":2000}}),
+            assistant("msg_physical", 1000, 300_000),
+        ];
+        fixture.withdraw_completed_reset = Some(withdraw);
+        let before = state.clone();
+        assert!(
+            cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(state, before);
+        assert_eq!(fixture.saved, before);
+        assert!(fixture.submissions.is_empty());
+    }
+    let (manifest, policy, expected, _, mut fixture) = setup();
+    fixture.recent = vec![
+        json!({"id":"msg_reset","type":"compaction","status":"completed","time":{"created":2000}}),
+        assistant("msg_physical", 1000, 300_000),
+    ];
+    assert_eq!(
+        observe(&manifest, &policy, &expected, &mut fixture)
+            .unwrap()
+            .context_tokens[&1],
+        0
+    );
 }
 
 #[test]

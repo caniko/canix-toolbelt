@@ -177,6 +177,43 @@ fn github_revalidates_every_published_status_and_target_field() {
     }
 }
 
+#[test]
+fn github_accepts_native_deprecated_draft_merge_state_and_revalidates_it() {
+    let mut p = pull();
+    p["isDraft"] = json!(true);
+    p["mergeStateStatus"] = json!("DRAFT");
+    let mut transport = fixture_graph(vec![
+        json!({"repository":{"pullRequest":p}}),
+        json!({"repository":{"pullRequest":p}}),
+    ]);
+    let result = github(
+        &mut transport,
+        "https://github.com/owner/repo/pull/1",
+        &json!({}),
+        "now",
+        0,
+    )
+    .unwrap();
+    assert_eq!(result["draft"], true);
+    assert_eq!(result["mergeState"], "DRAFT");
+    let mut changed = p.clone();
+    changed["mergeStateStatus"] = json!("BLOCKED");
+    let mut transport = fixture_graph(vec![
+        json!({"repository":{"pullRequest":p}}),
+        json!({"repository":{"pullRequest":changed}}),
+    ]);
+    assert!(
+        github(
+            &mut transport,
+            "https://github.com/owner/repo/pull/1",
+            &json!({}),
+            "now",
+            0
+        )
+        .is_err()
+    );
+}
+
 fn complete_pull() -> Value {
     let mut p = pull();
     p["mergeable"] = json!("MERGEABLE");
@@ -524,9 +561,9 @@ impl ForgeRest for Forge {
         }
         if path.contains("/status?") {
             return Ok(native(if path.ends_with("page=1") {
-                json!({"sha":"abcdef","state":"success","total_count":101,"statuses":(0..100).map(forge_check).collect::<Vec<_>>()})
+                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"success","total_count":101,"statuses":(0..100).map(forge_check).collect::<Vec<_>>()})
             } else {
-                json!({"sha":"abcdef","state":if self.inconsistent { "failure" } else { "success" },"total_count":101,"statuses":[forge_check(100)]})
+                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":if self.inconsistent { "failure" } else { "success" },"total_count":101,"statuses":[forge_check(100)]})
             }));
         }
         Ok(ForgeResponse {
@@ -738,7 +775,85 @@ impl ForgeRest for ForgeScript {
 }
 
 fn forge_pull() -> Value {
-    json!({"number":1,"html_url":"https://codefloe.com/owner/repo/pulls/1","head":{"sha":"abcdef"},"base":{"sha":"123456","ref":"main"},"state":"open","merged":false,"draft":false,"mergeable":true,"updated_at":"2026-10-09T00:00:00Z"})
+    json!({"number":1,"html_url":"https://codefloe.com/owner/repo/pulls/1","head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"base":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ref":"main"},"state":"open","merged":false,"draft":false,"mergeable":true,"updated_at":"2026-10-09T00:00:00Z"})
+}
+
+#[test]
+fn forgejo_requires_complete_object_ids_for_both_sides_before_history() {
+    for side in ["head", "base"] {
+        for bad in [
+            Value::Null,
+            json!(""),
+            json!("unknown"),
+            json!("abcdef"),
+            json!("a".repeat(32)),
+            json!("g".repeat(40)),
+            json!("a".repeat(41)),
+        ] {
+            let mut p = forge_pull();
+            p[side]["sha"] = bad.clone();
+            let mut transport = forge_script(vec![
+                ("repos/owner/repo/pulls/1".into(), p),
+                (
+                    "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+                    json!([]),
+                ),
+            ]);
+            let result = forgejo(
+                &mut transport,
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now",
+            );
+            assert!(result.is_err(), "accepted {side} {bad}");
+            assert_eq!(transport.0.len(), 1, "malformed {side} collected history");
+        }
+    }
+}
+
+#[test]
+fn forgejo_accepts_complete_sha1_and_sha256_comparisons_and_binds_checks() {
+    for length in [40, 64] {
+        let mut p = forge_pull();
+        let head = "a".repeat(length);
+        let base = "b".repeat(length);
+        p["head"]["sha"] = json!(head);
+        p["base"]["sha"] = json!(base);
+        let check_path = format!("repos/owner/repo/commits/{head}/status?limit=100&page=1");
+        let mut checks = forge_status();
+        checks["sha"] = json!(head);
+        let rows = vec![
+            ("repos/owner/repo/pulls/1".into(), p.clone()),
+            (
+                "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
+                json!([]),
+            ),
+            (
+                "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
+                json!([]),
+            ),
+            (check_path.clone(), checks.clone()),
+            ("repos/owner/repo/pulls/1".into(), p),
+            (check_path, checks),
+        ];
+        let result = forgejo(
+            &mut forge_script(rows.clone()),
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        )
+        .unwrap();
+        assert_eq!(result["head"], head);
+        assert_eq!(result["base"], base);
+        let mut mismatch = rows;
+        mismatch[3].1["sha"] = json!(base);
+        assert!(
+            forgejo(
+                &mut forge_script(mismatch),
+                "https://codefloe.com/owner/repo/pulls/1",
+                "now"
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -912,12 +1027,12 @@ fn forgejo_rejects_final_identity_substitution_without_other_movement() {
                 json!([]),
             ),
             (
-                "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
                 forge_status(),
             ),
             ("repos/owner/repo/pulls/1".into(), final_pull),
             (
-                "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
                 forge_status(),
             ),
         ]);
@@ -937,7 +1052,7 @@ fn forgejo_rejects_final_identity_substitution_without_other_movement() {
 }
 
 fn forge_status() -> Value {
-    json!({"sha":"abcdef","state":"success","total_count":1,"statuses":[forge_check(1)]})
+    json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"success","total_count":1,"statuses":[forge_check(1)]})
 }
 
 fn forge_check(id: u64) -> Value {
@@ -968,12 +1083,12 @@ fn forge_review(review: Value, inline: Value) -> ForgeScript {
             inline,
         ),
         (
-            "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+            "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
             forge_status(),
         ),
         ("repos/owner/repo/pulls/1".into(), forge_pull()),
         (
-            "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+            "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
             forge_status(),
         ),
     ])
@@ -1325,12 +1440,12 @@ fn forgejo_accepts_exactly_2000_history_rows_with_an_empty_sentinel_page() {
         if count <= 2000 {
             script.extend([
                 (
-                    "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                    "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
                     forge_status(),
                 ),
                 ("repos/owner/repo/pulls/1".into(), forge_pull()),
                 (
-                    "repos/owner/repo/commits/abcdef/status?limit=100&page=1".into(),
+                    "repos/owner/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?limit=100&page=1".into(),
                     forge_status(),
                 ),
             ]);

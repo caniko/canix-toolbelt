@@ -177,6 +177,7 @@ fn github_status(value: &Value) -> io::Result<()> {
             "UNKNOWN",
             "BLOCKED",
             "BEHIND",
+            "DRAFT",
             "UNSTABLE",
             "HAS_HOOKS",
             "CLEAN",
@@ -690,6 +691,12 @@ fn forge_status(value: &Value) -> io::Result<()> {
     Ok(())
 }
 
+fn forge_revision(value: &Value) -> bool {
+    value.as_str().is_some_and(|oid| {
+        matches!(oid.len(), 40 | 64) && oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
 fn forge_checks(
     transport: &mut impl ForgeRest,
     host: &str,
@@ -776,16 +783,16 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         .ok_or_else(|| invalid("missing or malformed forge update identity"))?;
     let base = p["base"]["sha"]
         .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| invalid("missing forge base identity"))?;
+        .filter(|_| forge_revision(&p["base"]["sha"]))
+        .ok_or_else(|| invalid("missing or malformed forge base identity"))?;
     let branch = p["base"]["ref"]
         .as_str()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| invalid("missing forge base identity"))?;
     let head = p["head"]["sha"]
         .as_str()
-        .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()) && !s.is_empty())
-        .ok_or_else(|| invalid("missing forge candidate identity"))?;
+        .filter(|_| forge_revision(&p["head"]["sha"]))
+        .ok_or_else(|| invalid("missing or malformed forge candidate identity"))?;
     forge_status(&p)?;
     let reviews = forge_pages(transport, host, &format!("{path}/reviews"))?;
     let comments = forge_pages(transport, host, &format!("{stem}/issues/{number}/comments"))?;
