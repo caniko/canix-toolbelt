@@ -1361,3 +1361,198 @@ fn adding_a_declared_producer_without_a_handoff_is_a_new_deliverable_event() {
     .unwrap();
     assert_ne!(body["metadata"]["eventVersion"], version);
 }
+
+#[test]
+fn waiting_recheck_without_report_time_starts_at_actual_delivery() {
+    let prepared = chrono::DateTime::parse_from_rfc3339("2026-10-11T00:00:00Z")
+        .unwrap()
+        .timestamp();
+    let delivered = prepared + 3600;
+    let mut state = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-11T00:00:00Z","deliveredAt":"2026-10-11T01:00:00Z","observationVersion":"source","workerStatus":{"eventVersion":"v","status":"waiting","retryAfterSeconds":600}});
+    let original = state.clone();
+    assert!(!schedule_recheck(&mut state, &policy(), delivered + 599));
+    assert_eq!(state, original);
+    assert!(schedule_recheck(&mut state, &policy(), delivered + 600));
+}
+
+#[test]
+fn stale_nonwaiting_reports_cannot_suppress_a_current_waiting_recheck() {
+    let manifest = manifest();
+    let policy = policy();
+    let (mut state, event) = delivered_state(
+        json!({"url":"one","state":"OPEN","head":"h","comments":[]}),
+        &manifest,
+    );
+    let waiting = json!({"schemaVersion":1,"packet":1,"eventVersion":event,"status":"waiting","updatedAt":"2026-10-09T00:00:01Z","retryAfterSeconds":600,"nextAction":"await exact CI"});
+    refresh(
+        &manifest,
+        &mut state,
+        &policy,
+        &BTreeMap::from([(1, waiting.clone())]),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["waitingReportPending"], true);
+    for status in ["complete", "ready_for_work", "blocked"] {
+        let stale = json!({"schemaVersion":1,"packet":1,"eventVersion":"older","status":status,"nextAction":"obsolete"});
+        refresh(
+            &manifest,
+            &mut state,
+            &policy,
+            &BTreeMap::from([(1, stale)]),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(state["packets"]["1"]["workerStatus"], waiting);
+        assert_eq!(state["packets"]["1"]["waitingReportPending"], true);
+    }
+    let due = chrono::DateTime::parse_from_rfc3339("2026-10-09T00:10:01Z")
+        .unwrap()
+        .timestamp();
+    assert!(schedule_recheck(&mut state["packets"]["1"], &policy, due));
+}
+
+fn fully_audited_state(manifest: &Manifest, dependencies: &BTreeMap<u32, String>) -> Value {
+    let mut state = json!({"prs":{},"packets":{}});
+    for packet in &manifest.packets {
+        for url in &packet.prs {
+            state["prs"][url] = json!({"url":url,"state":"MERGED","head":"h","comments":[]});
+        }
+    }
+    refresh(
+        manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        dependencies,
+    )
+    .unwrap();
+    let mut reports = BTreeMap::new();
+    for packet in &manifest.packets {
+        let body = prepare(
+            &mut state,
+            packet,
+            &policy(),
+            "audit exact event",
+            "2026-10-11T00:00:00Z",
+        )
+        .unwrap();
+        acknowledge(
+            &mut state,
+            packet.number,
+            body["id"].as_str().unwrap(),
+            "2026-10-11T00:00:01Z",
+        )
+        .unwrap();
+        reports.insert(packet.number, json!({"schemaVersion":1,"packet":packet.number,"status":"complete","eventVersion":body["metadata"]["eventVersion"],"prs":packet.prs.iter().map(|url|json!({"url":url,"head":"h","auditComplete":true,"disposition":"absorbed","evidence":"exact current source audit"})).collect::<Vec<_>>()}));
+    }
+    refresh(
+        manifest,
+        &mut state,
+        &policy(),
+        &reports,
+        &BTreeMap::new(),
+        dependencies,
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn finished_requires_refreshed_manifest_and_dependency_audit_coverage() {
+    let original = manifest();
+    let state = fully_audited_state(&original, &BTreeMap::new());
+    let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    assert!(finished(&original, &state, &active, true));
+    let mut changed = original.clone();
+    changed.packets[0].dependencies = vec![2];
+    changed.validate(Some(&original)).unwrap();
+    assert!(
+        !finished(&changed, &state, &active, true),
+        "pre-refresh journal certified a new producer"
+    );
+    let complete = fully_audited_state(
+        &changed,
+        &BTreeMap::from([(2, "qualified producer".into())]),
+    );
+    assert!(finished(&changed, &complete, &active, true));
+    for malformed in [Value::Null, json!("foreign dependency digest")] {
+        let mut tampered = complete.clone();
+        tampered["packets"]["1"]["auditedDependencies"] = malformed;
+        assert!(!finished(&changed, &tampered, &active, true));
+    }
+}
+
+#[test]
+fn reordered_manifest_sets_preserve_event_versions_and_terminal_audits() {
+    let mut manifest = manifest();
+    manifest.packets.push(serde_json::from_value(json!({"number":3,"sessionID":"ses_three","ownerHost":"mobile","title":"Owner 3","prs":["three"]})).unwrap());
+    manifest.packets[0]
+        .prs
+        .extend(["repair-a".into(), "repair-b".into()]);
+    manifest.packets[0].linked_repairs = vec!["repair-a".into(), "repair-b".into()];
+    manifest.packets[0].dependencies = vec![2, 3];
+    manifest.assignment_count = 5;
+    manifest.baseline_count = Some(3);
+    let dependencies = BTreeMap::from([(2, "producer two".into()), (3, "producer three".into())]);
+    let mut state = fully_audited_state(&manifest, &dependencies);
+    let original = state["packets"].clone();
+    manifest.packets.reverse();
+    let packet = manifest
+        .packets
+        .iter_mut()
+        .find(|packet| packet.number == 1)
+        .unwrap();
+    packet.prs.reverse();
+    packet.linked_repairs.reverse();
+    packet.dependencies.reverse();
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &dependencies,
+    )
+    .unwrap();
+    for number in ["1", "2", "3"] {
+        for field in [
+            "version",
+            "observationVersion",
+            "dependencyVersion",
+            "auditedDependencies",
+            "terminal",
+        ] {
+            assert_eq!(
+                state["packets"][number][field], original[number][field],
+                "changed {number}.{field}"
+            );
+        }
+        assert!(!needs_wake(&state["packets"][number]));
+    }
+}
+
+#[test]
+fn legacy_journal_import_cannot_reassign_retained_prs_between_existing_owners() {
+    let original = manifest();
+    let mut legacy = json!({"prs":{"one":{"url":"one","state":"OPEN"},"two":{"url":"two","state":"OPEN"}},"packets":{"1":{"sessionID":"ses_one","ownerHost":"builder","prs":["one"]},"2":{"sessionID":"ses_two","ownerHost":"mobile","prs":["two"]}}});
+    let before = legacy.clone();
+    let mut reassigned = original.clone();
+    reassigned.packets[0].prs = vec!["two".into()];
+    reassigned.packets[1].prs = vec!["one".into()];
+    assert!(
+        refresh(
+            &reassigned,
+            &mut legacy,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new()
+        )
+        .is_err()
+    );
+    assert_eq!(legacy, before);
+}

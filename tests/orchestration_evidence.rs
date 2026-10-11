@@ -126,6 +126,87 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
 }
 
 #[test]
+fn acknowledged_source_symlinks_remain_omitted_without_blocking_other_evidence() {
+    acknowledged_source_exclusion_keeps_receiver_and_other_artifacts("symlink");
+}
+
+#[test]
+fn acknowledged_source_checkouts_remain_omitted_without_blocking_other_evidence() {
+    acknowledged_source_exclusion_keeps_receiver_and_other_artifacts("checkout");
+}
+
+fn acknowledged_source_exclusion_keeps_receiver_and_other_artifacts(kind: &str) {
+    for ancestor in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        let target = mirror_dir();
+        fs::create_dir(source.path().join("evidence")).unwrap();
+        let path = if ancestor {
+            fs::create_dir(source.path().join("evidence/owned")).unwrap();
+            "evidence/owned/receipt"
+        } else {
+            "evidence/owned"
+        };
+        fs::write(source.path().join(path), b"retained receiver bytes").unwrap();
+        let allowed = vec![PathBuf::from("evidence")];
+        let mut exchange = Exchange::default();
+        let receipt = apply(
+            target.path(),
+            &allowed,
+            exchange.prepare(source.path(), &allowed).unwrap(),
+        )
+        .unwrap();
+        exchange.acknowledge(&receipt).unwrap();
+        let known = exchange.known().clone();
+        if ancestor {
+            fs::remove_dir_all(source.path().join("evidence/owned")).unwrap();
+        } else {
+            fs::remove_file(source.path().join(path)).unwrap();
+        }
+        if kind == "symlink" {
+            fs::write(source.path().join("outside"), b"outside sentinel").unwrap();
+            std::os::unix::fs::symlink(
+                source.path().join("outside"),
+                source.path().join("evidence/owned"),
+            )
+            .unwrap();
+        } else {
+            fs::create_dir(source.path().join("evidence/owned")).unwrap();
+            fs::create_dir(source.path().join("evidence/owned/.git")).unwrap();
+            fs::write(
+                source.path().join("evidence/owned/checkout"),
+                b"checkout sentinel",
+            )
+            .unwrap();
+        }
+        fs::write(source.path().join("evidence/unrelated"), b"fresh evidence").unwrap();
+        for _ in 0..2 {
+            let batch = exchange.prepare(source.path(), &allowed).unwrap();
+            assert!(batch.omitted.contains(&"evidence/owned".into()));
+            assert!(batch.delete.is_empty());
+            assert!(batch.prune.is_empty());
+            assert!(
+                !batch
+                    .files
+                    .iter()
+                    .any(|item| item.path.starts_with("evidence/owned"))
+            );
+            let receipt = apply(target.path(), &allowed, batch).unwrap();
+            exchange.acknowledge(&receipt).unwrap();
+            assert_eq!(exchange.known().get(path), known.get(path));
+            assert_eq!(
+                fs::read(target.path().join(path)).unwrap(),
+                b"retained receiver bytes"
+            );
+            assert_eq!(
+                fs::read(target.path().join("evidence/unrelated")).unwrap(),
+                b"fresh evidence"
+            );
+            exchange = serde_json::from_slice(&serde_json::to_vec(&exchange).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
 fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
     for delete in [false, true] {
         let source = tempfile::tempdir().unwrap();
