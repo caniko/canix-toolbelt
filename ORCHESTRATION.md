@@ -143,12 +143,27 @@ must match the PR head. Forgejo inline counts and nonempty unique history IDs ar
 validated too. Both forges re-fetch the complete check rollup after collection.
 GitHub also revalidates every published mergeability, review, draft and target
 field; asynchronous changes reject the observation rather than publish stale status.
+Required scheduling enums, booleans and branch names, plus the requested comment,
+review, thread and check-context fields, are validated before publication. A
+missing nullable field is truncated evidence; an explicit native null remains
+valid for deleted authors, review commits/submission times and pending-check
+conclusions, timestamps and URLs.
 GitHub's returned PR URL must match the requested coordinate; its URL and opaque
 ID must remain stable through that final re-fetch.
 GitHub revisions must be full 40-digit hexadecimal object IDs, and its update
 identity must parse as RFC 3339 before history is fetched. Malformed check rollups
-return errors. Forgejo accepts exactly 2,000 rows only after an empty sentinel
-page; a nonempty or malformed sentinel fails the bounded observation.
+return errors. `ForgeRest::get` returns `ForgeResponse` with native JSON `body`
+and an optional parsed `x-total-count` in `total_count`. Consumers must preserve
+the response header, reject malformed or duplicated metadata and never infer
+counts from returned rows. Every history page requires that authoritative total,
+stable across pagination, and the exact expected page length. Forgejo accepts
+exactly 2,000 rows only after an empty, count-bound sentinel page; oversized
+declared totals reject before further requests. Migrating a bare-JSON adapter
+requires retaining this transport metadata; there is no short-page fallback.
+Forgejo validates review, issue/inline-comment and native `CommitStatus` rows
+(the row field is `status`, while the combined rollup uses `state`). Native
+nullable user pointers and empty string fields remain valid. Both published
+draft and mergeability booleans must remain stable through the final observation.
 Forgejo requires a valid retained update timestamp, and inline-comment identities
 must remain unique across the combined review history.
 Malformed/truncated pagination, repeated cursors, and comparison movement fail

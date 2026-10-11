@@ -29,7 +29,7 @@ struct BoundedForge<'a, T> {
     remaining: usize,
 }
 impl<T: ForgeRest> ForgeRest for BoundedForge<'_, T> {
-    fn get(&mut self, host: &str, path: &str) -> io::Result<Value> {
+    fn get(&mut self, host: &str, path: &str) -> io::Result<ForgeResponse> {
         self.remaining = self
             .remaining
             .checked_sub(1)
@@ -46,8 +46,19 @@ pub trait GraphQl {
 
 /// Host-local authenticated Forgejo GET calls, including native expiry-aware auth.
 pub trait ForgeRest {
-    /// Return one bounded decoded response from this declared forge.
-    fn get(&mut self, host: &str, path: &str) -> io::Result<Value>;
+    /// Return one bounded decoded response, preserving native count metadata.
+    /// Missing, duplicated or malformed `x-total-count` must never become a
+    /// count inferred from the returned rows.
+    fn get(&mut self, host: &str, path: &str) -> io::Result<ForgeResponse>;
+}
+
+/// A native Forgejo response and its authoritative pagination metadata.
+#[derive(Clone, Debug)]
+pub struct ForgeResponse {
+    /// Decoded native JSON, without renamed fields or synthesized defaults.
+    pub body: Value,
+    /// Parsed native `x-total-count`; required on history list endpoints.
+    pub total_count: Option<u64>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -60,6 +71,174 @@ fn github_revision(value: &Value) -> bool {
     value
         .as_str()
         .is_some_and(|oid| oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+// Explicit nullable values are native evidence; absent requested fields are not.
+fn field<'a>(value: &'a Value, name: &str) -> io::Result<&'a Value> {
+    value
+        .get(name)
+        .ok_or_else(|| invalid(format!("missing native field {name}")))
+}
+fn string(value: &Value, name: &str) -> io::Result<()> {
+    if field(value, name)?.is_string() {
+        Ok(())
+    } else {
+        Err(invalid(format!("malformed native string {name}")))
+    }
+}
+fn nonempty(value: &Value, name: &str) -> io::Result<()> {
+    string(value, name)?;
+    if value[name].as_str().is_some_and(|text| !text.is_empty()) {
+        Ok(())
+    } else {
+        Err(invalid(format!("empty native field {name}")))
+    }
+}
+fn boolean(value: &Value, name: &str) -> io::Result<()> {
+    if field(value, name)?.is_boolean() {
+        Ok(())
+    } else {
+        Err(invalid(format!("malformed native boolean {name}")))
+    }
+}
+fn enumeration(value: &Value, name: &str, choices: &[&str]) -> io::Result<()> {
+    if field(value, name)?
+        .as_str()
+        .is_some_and(|s| choices.contains(&s))
+    {
+        Ok(())
+    } else {
+        Err(invalid(format!("unsupported native enum {name}")))
+    }
+}
+fn timestamp(value: &Value, name: &str) -> io::Result<()> {
+    if field(value, name)?
+        .as_str()
+        .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok())
+    {
+        Ok(())
+    } else {
+        Err(invalid(format!("malformed native timestamp {name}")))
+    }
+}
+fn nullable(
+    value: &Value,
+    name: &str,
+    validate: impl FnOnce(&Value, &str) -> io::Result<()>,
+) -> io::Result<()> {
+    if field(value, name)?.is_null() {
+        Ok(())
+    } else {
+        validate(value, name)
+    }
+}
+fn github_commit(value: &Value, name: &str) -> io::Result<()> {
+    nullable(value, name, |value, name| {
+        if github_revision(&value[name]["oid"]) {
+            Ok(())
+        } else {
+            Err(invalid(format!("malformed native commit {name}")))
+        }
+    })
+}
+fn github_author(value: &Value) -> io::Result<()> {
+    nullable(value, "author", |value, name| {
+        nonempty(&value[name], "login")?;
+        nonempty(&value[name], "__typename")
+    })
+}
+fn github_comment(value: &Value, inline: bool) -> io::Result<()> {
+    nonempty(value, "url")?;
+    string(value, "body")?;
+    github_author(value)?;
+    timestamp(value, "createdAt")?;
+    timestamp(value, "updatedAt")?;
+    if inline {
+        github_commit(value, "commit")?;
+        github_commit(value, "originalCommit")?;
+        nullable(value, "pullRequestReview", |value, name| {
+            nonempty(&value[name], "url")?;
+            github_commit(&value[name], "commit")
+        })?;
+    }
+    Ok(())
+}
+fn github_status(value: &Value) -> io::Result<()> {
+    field(value, "baseRef")?;
+    enumeration(value, "state", &["OPEN", "CLOSED", "MERGED"])?;
+    boolean(value, "isDraft")?;
+    nonempty(value, "baseRefName")?;
+    enumeration(value, "mergeable", &["MERGEABLE", "CONFLICTING", "UNKNOWN"])?;
+    enumeration(
+        value,
+        "mergeStateStatus",
+        &[
+            "DIRTY",
+            "UNKNOWN",
+            "BLOCKED",
+            "BEHIND",
+            "UNSTABLE",
+            "HAS_HOOKS",
+            "CLEAN",
+        ],
+    )?;
+    nullable(value, "reviewDecision", |value, name| {
+        enumeration(
+            value,
+            name,
+            &["CHANGES_REQUESTED", "APPROVED", "REVIEW_REQUIRED"],
+        )
+    })?;
+    github_commit(value, "mergeCommit")
+}
+
+const STATUS_STATES: &[&str] = &["EXPECTED", "ERROR", "FAILURE", "PENDING", "SUCCESS"];
+
+fn github_context(value: &Value) -> io::Result<()> {
+    match field(value, "__typename")?.as_str() {
+        Some("CheckRun") => {
+            string(value, "name")?;
+            enumeration(
+                value,
+                "status",
+                &[
+                    "REQUESTED",
+                    "QUEUED",
+                    "IN_PROGRESS",
+                    "COMPLETED",
+                    "WAITING",
+                    "PENDING",
+                ],
+            )?;
+            nullable(value, "conclusion", |value, name| {
+                enumeration(
+                    value,
+                    name,
+                    &[
+                        "ACTION_REQUIRED",
+                        "TIMED_OUT",
+                        "CANCELLED",
+                        "FAILURE",
+                        "SUCCESS",
+                        "NEUTRAL",
+                        "SKIPPED",
+                        "STARTUP_FAILURE",
+                        "STALE",
+                    ],
+                )
+            })?;
+            nullable(value, "detailsUrl", string)?;
+            nullable(value, "startedAt", timestamp)?;
+            nullable(value, "completedAt", timestamp)
+        }
+        Some("StatusContext") => {
+            string(value, "context")?;
+            enumeration(value, "state", STATUS_STATES)?;
+            nullable(value, "targetUrl", string)?;
+            timestamp(value, "createdAt")
+        }
+        _ => Err(invalid("missing or unsupported GitHub check context type")),
+    }
 }
 fn coordinate(url: &str, github: bool) -> io::Result<(&str, &str, &str, u64)> {
     let rest = url
@@ -175,7 +354,7 @@ fn github_checks(transport: &mut impl GraphQl, pull: &Value) -> io::Result<Value
         .as_str()
         .filter(|id| !id.is_empty())
         .ok_or_else(|| invalid("missing checked commit identity"))?;
-    let mut rollup = commit["statusCheckRollup"].clone();
+    let mut rollup = field(commit, "statusCheckRollup")?.clone();
     if !rollup.is_null() {
         let contexts = rollup
             .as_object_mut()
@@ -185,6 +364,10 @@ fn github_checks(transport: &mut impl GraphQl, pull: &Value) -> io::Result<Value
             let data = transport.query(&format!("query{{node(id:{}){{... on Commit{{statusCheckRollup{{contexts(first:100,after:{}){{{CHECKS}}}}}}}}}}}",quote(id),quote(cursor)))?;
             Ok(data["node"]["statusCheckRollup"]["contexts"].clone())
         })?;
+        for context in contexts["nodes"].as_array().expect("validated connection") {
+            github_context(context)?;
+        }
+        enumeration(&rollup, "state", STATUS_STATES)?;
     }
     Ok(rollup)
 }
@@ -231,6 +414,7 @@ pub fn github(
     {
         return Err(invalid("missing GitHub candidate identity"));
     }
+    github_status(&p)?;
     for (name, selection) in [
         ("comments", comment.as_str()),
         ("reviews", reviews),
@@ -243,6 +427,33 @@ pub fn github(
             ))?;
             Ok(data["repository"]["pullRequest"][name].clone())
         })?;
+    }
+    for comment in p["comments"]["nodes"]
+        .as_array()
+        .expect("validated connection")
+    {
+        github_comment(comment, false)?;
+    }
+    for review in p["reviews"]["nodes"]
+        .as_array()
+        .expect("validated connection")
+    {
+        nonempty(review, "url")?;
+        string(review, "body")?;
+        github_author(review)?;
+        enumeration(
+            review,
+            "state",
+            &[
+                "PENDING",
+                "COMMENTED",
+                "APPROVED",
+                "CHANGES_REQUESTED",
+                "DISMISSED",
+            ],
+        )?;
+        github_commit(review, "commit")?;
+        nullable(review, "submittedAt", timestamp)?;
     }
     let mut inline_total = 0_u64;
     for thread in p["reviewThreads"]["nodes"]
@@ -287,9 +498,19 @@ pub fn github(
                 "repeated GitHub inline comment identity across threads",
             ));
         }
+        boolean(thread, "isResolved")?;
+        boolean(thread, "isOutdated")?;
+        nonempty(thread, "path")?;
+        for comment in thread["comments"]["nodes"]
+            .as_array()
+            .expect("validated connection")
+        {
+            github_comment(comment, true)?;
+        }
     }
     let rollup = github_checks(transport, &p)?;
     let fresh = transport.query(&format!("query{{{repository}{{{pull}{{{basic}}}}}}}"))?;
+    github_status(&fresh["repository"]["pullRequest"])?;
     for key in [
         "id",
         "url",
@@ -380,13 +601,25 @@ pub fn github(
 fn forge_pages(transport: &mut impl ForgeRest, host: &str, path: &str) -> io::Result<Vec<Value>> {
     let mut result = Vec::new();
     let mut ids = BTreeSet::new();
-    for page in 1..=20 {
-        let value = transport.get(host, &format!("{path}?limit=100&page={page}"))?;
-        let rows = value
+    let mut declared = None;
+    for page in 1..=21 {
+        let response = transport.get(host, &format!("{path}?limit=100&page={page}"))?;
+        let total = response
+            .total_count
+            .ok_or_else(|| invalid("missing native forge history total"))?;
+        if declared.is_some_and(|previous| previous != total) {
+            return Err(invalid("forge history total moved during collection"));
+        }
+        if total > 2000 {
+            return Err(invalid("forge history exceeds 2000 rows"));
+        }
+        declared = Some(total);
+        let rows = response
+            .body
             .as_array()
             .ok_or_else(|| invalid("missing forge page"))?;
-        if rows.len() > 100 {
-            return Err(invalid("forge page exceeds bound"));
+        if rows.len() != total.saturating_sub(result.len() as u64).min(100) as usize {
+            return Err(invalid("incomplete forge history page"));
         }
         if rows.iter().any(|row| {
             !row["id"]
@@ -396,20 +629,38 @@ fn forge_pages(transport: &mut impl ForgeRest, host: &str, path: &str) -> io::Re
             return Err(invalid("missing or repeated forge history identity"));
         }
         result.extend(rows.iter().cloned());
-        if rows.len() < 100 {
+        if result.len() as u64 == total && (rows.len() < 100 || page == 21) {
             return Ok(result);
         }
     }
-    // A full last page is not proof of overflow. One bounded sentinel establishes
-    // exact completion at the inclusive 2,000-row limit; never append it.
-    let sentinel = transport.get(host, &format!("{path}?limit=100&page=21"))?;
-    if sentinel.as_array().is_some_and(Vec::is_empty) {
-        Ok(result)
-    } else {
-        Err(invalid(
-            "forge pagination exceeds 2000 rows or has a malformed sentinel",
-        ))
+    Err(invalid("forge history exceeds pagination bound"))
+}
+
+const FORGE_STATUS_STATES: &[&str] = &[
+    "pending", "success", "error", "failure", "warning", "skipped",
+];
+
+fn forge_user(value: &Value, name: &str) -> io::Result<()> {
+    nullable(value, name, |value, name| {
+        if !value[name]["id"].as_u64().is_some_and(|id| id > 0) {
+            return Err(invalid("malformed forge user identity"));
+        }
+        nonempty(&value[name], "login")
+    })
+}
+fn forge_comment(value: &Value) -> io::Result<()> {
+    string(value, "body")?;
+    forge_user(value, "user")?;
+    timestamp(value, "created_at")?;
+    timestamp(value, "updated_at")?;
+    string(value, "html_url")
+}
+fn forge_status(value: &Value) -> io::Result<()> {
+    enumeration(value, "state", &["open", "closed"])?;
+    for name in ["merged", "mergeable", "draft"] {
+        boolean(value, name)?;
     }
+    Ok(())
 }
 
 fn forge_checks(
@@ -419,13 +670,14 @@ fn forge_checks(
     head: &str,
 ) -> io::Result<Value> {
     let path = format!("{stem}/commits/{head}/status?limit=100");
-    let mut first = transport.get(host, &format!("{path}&page=1"))?;
+    let mut first = transport.get(host, &format!("{path}&page=1"))?.body;
     let total = first["total_count"]
         .as_u64()
         .ok_or_else(|| invalid("missing forge check total"))?;
     if total > 2000 || first["sha"] != head || !first["state"].is_string() {
         return Err(invalid("invalid or oversized forge check identity"));
     }
+    enumeration(&first, "state", FORGE_STATUS_STATES)?;
     let mut statuses = first["statuses"]
         .as_array()
         .cloned()
@@ -434,7 +686,7 @@ fn forge_checks(
         return Err(invalid("incomplete initial forge check page"));
     }
     for page in 2..=total.div_ceil(100) {
-        let next = transport.get(host, &format!("{path}&page={page}"))?;
+        let next = transport.get(host, &format!("{path}&page={page}"))?.body;
         if next["sha"] != first["sha"]
             || next["state"] != first["state"]
             || next["total_count"] != first["total_count"]
@@ -456,6 +708,15 @@ fn forge_checks(
     {
         return Err(invalid("missing or repeated forge check context"));
     }
+    for status in &statuses {
+        enumeration(status, "status", FORGE_STATUS_STATES)?;
+        for name in ["context", "description", "target_url", "url"] {
+            string(status, name)?;
+        }
+        forge_user(status, "creator")?;
+        timestamp(status, "created_at")?;
+        timestamp(status, "updated_at")?;
+    }
     first["statuses"] = json!(statuses);
     Ok(first)
 }
@@ -470,7 +731,7 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
     let (host, owner, repo, number) = coordinate(url, false)?;
     let stem = format!("repos/{owner}/{repo}");
     let path = format!("{stem}/pulls/{number}");
-    let p = transport.get(host, &path)?;
+    let p = transport.get(host, &path)?.body;
     if p["number"].as_u64() != Some(number)
         || p["html_url"]
             .as_str()
@@ -497,6 +758,7 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         .as_str()
         .filter(|s| s.bytes().all(|b| b.is_ascii_hexdigit()) && !s.is_empty())
         .ok_or_else(|| invalid("missing forge candidate identity"))?;
+    forge_status(&p)?;
     let reviews = forge_pages(transport, host, &format!("{path}/reviews"))?;
     let comments = forge_pages(transport, host, &format!("{stem}/issues/{number}/comments"))?;
     let mut inline_total = 0_u64;
@@ -509,6 +771,34 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
             .checked_add(count)
             .filter(|total| *total <= INLINE_LIMIT)
             .ok_or_else(|| invalid("aggregate Forgejo inline comment bound exceeded"))?;
+    }
+    for review in &reviews {
+        string(review, "body")?;
+        forge_user(review, "user")?;
+        enumeration(
+            review,
+            "state",
+            &[
+                "APPROVED",
+                "PENDING",
+                "COMMENT",
+                "REQUEST_CHANGES",
+                "REQUEST_REVIEW",
+                "",
+            ],
+        )?;
+        timestamp(review, "submitted_at")?;
+        timestamp(review, "updated_at")?;
+        string(review, "commit_id")?;
+        for name in ["html_url", "pull_request_url"] {
+            string(review, name)?;
+        }
+        for name in ["stale", "official", "dismissed"] {
+            boolean(review, name)?;
+        }
+    }
+    for comment in &comments {
+        forge_comment(comment)?;
     }
     let mut inline = Vec::new();
     let mut inline_ids = BTreeSet::new();
@@ -527,6 +817,20 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
                     "forge review comment count does not establish complete history",
                 ));
             }
+            for comment in &comments {
+                forge_comment(comment)?;
+                for name in [
+                    "path",
+                    "commit_id",
+                    "original_commit_id",
+                    "pull_request_url",
+                ] {
+                    string(comment, name)?;
+                }
+                if comment["pull_request_review_id"].as_u64() != Some(id) {
+                    return Err(invalid("forge inline comment differs from parent review"));
+                }
+            }
             if comments.iter().any(|comment| {
                 !inline_ids.insert(comment["id"].as_u64().expect("validated comment ID"))
             }) {
@@ -538,7 +842,7 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         }
     }
     let checks = forge_checks(transport, host, &stem, head)?;
-    let fresh = transport.get(host, &path)?;
+    let fresh = transport.get(host, &path)?.body;
     if fresh["updated_at"].as_str() != Some(updated) {
         return Err(invalid("forge update identity moved during collection"));
     }
@@ -549,6 +853,8 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
         "base",
         "state",
         "merged",
+        "mergeable",
+        "draft",
         "updated_at",
     ] {
         if fresh[key] != p[key] {
