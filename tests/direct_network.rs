@@ -143,3 +143,66 @@ fn noncanonical_cgroup_separators_cannot_silently_change_socket_depth() {
     p.dns_cgroup = Some("system.slice/direct-network-dns.service".into());
     p.validate().unwrap();
 }
+
+#[test]
+fn container_only_bridges_are_excluded_but_physical_and_explicit_bridges_remain_direct() {
+    let links = serde_json::json!([
+        {"ifindex": 1, "ifname": "enp1s0", "link_type": "ether", "master": "br-uplink"},
+        {"ifindex": 2, "ifname": "br-uplink", "link_type": "ether", "linkinfo": {"info_kind": "bridge"}},
+        {"ifindex": 3, "ifname": "br-container", "link_type": "ether", "linkinfo": {"info_kind": "bridge"}},
+        {"ifindex": 4, "ifname": "veth0", "link_type": "ether", "master": "br-container", "linkinfo": {"info_kind": "veth"}},
+        {"ifindex": 5, "ifname": "br-explicit", "link_type": "ether", "linkinfo": {"info_kind": "bridge"}},
+        {"ifindex": 6, "ifname": "vlan-container", "link_type": "ether", "link_index": 3, "linkinfo": {"info_kind": "vlan"}},
+        {"ifindex": 7, "ifname": "vlan-physical", "link_type": "ether", "link_index": 1, "linkinfo": {"info_kind": "vlan"}}
+    ]);
+    let routes = serde_json::json!([
+        {"dst": "192.0.2.0/24", "dev": "br-uplink"},
+        {"dst": "198.51.100.0/24", "dev": "br-container"},
+        {"dst": "203.0.113.0/24", "dev": "br-explicit"},
+        {"dst": "10.0.1.0/24", "dev": "vlan-container"},
+        {"dst": "10.0.2.0/24", "dev": "vlan-physical"}
+    ]);
+    let mut p = policy();
+    p.direct_interfaces.push("br-explicit".into());
+    let selected = select_routes(&p, &links, &routes).unwrap();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|r| r.device.as_str())
+            .collect::<Vec<_>>(),
+        ["br-uplink", "br-explicit", "vlan-physical"]
+    );
+}
+
+#[test]
+fn multipath_routes_retain_every_eligible_weighted_nexthop_and_reject_mixed_vpn_routes() {
+    let links = serde_json::json!([
+        {"ifname": "enp1s0", "link_type": "ether"},
+        {"ifname": "enp2s0", "link_type": "ether"},
+        {"ifname": "wg-proton", "link_type": "none", "linkinfo": {"info_kind": "wireguard"}}
+    ]);
+    let routes = serde_json::json!([
+        {"dst": "default", "metric": 42, "nexthops": [
+            {"dev": "enp1s0", "gateway": "192.0.2.1", "weight": 2, "flags": ["onlink"]},
+            {"dev": "enp2s0", "gateway": "198.51.100.1", "weight": 3}
+        ]},
+        {"dst": "203.0.113.0/24", "nexthops": [
+            {"dev": "enp1s0", "gateway": "192.0.2.1", "weight": 1},
+            {"dev": "wg-proton", "gateway": "172.16.0.1", "weight": 1}
+        ]}
+    ]);
+    let selected = select_routes(&policy(), &links, &routes).unwrap();
+    assert_eq!(
+        selected.len(),
+        1,
+        "eligible multipath default was omitted or mixed VPN route admitted"
+    );
+    let selected = serde_json::to_value(&selected[0]).unwrap();
+    assert_eq!(selected["nexthops"][0]["device"], "enp1s0");
+    assert_eq!(selected["nexthops"][0]["gateway"], "192.0.2.1");
+    assert_eq!(selected["nexthops"][0]["weight"], 2);
+    assert_eq!(selected["nexthops"][0]["onlink"], true);
+    assert_eq!(selected["nexthops"][1]["device"], "enp2s0");
+    assert_eq!(selected["nexthops"][1]["weight"], 3);
+    assert_eq!(selected["metric"], 42);
+}

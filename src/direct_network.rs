@@ -128,7 +128,7 @@ impl Policy {
 pub struct Route {
     /// CIDR or `default`.
     pub destination: String,
-    /// Interface, selected independently of Proton tunnel and dummy devices.
+    /// Interface for a single-path route; empty when `nexthops` is nonempty.
     pub device: String,
     /// Gateway, including scoped IPv6 link-local gateways via `device`.
     pub gateway: Option<String>,
@@ -140,22 +140,73 @@ pub struct Route {
     pub local: bool,
     /// Gateways explicitly declared on-link by the producer.
     pub onlink: bool,
+    /// Complete multipath route. Mixed eligible/ineligible routes are omitted
+    /// rather than rewriting the producer's forwarding policy.
+    pub nexthops: Vec<NextHop>,
+}
+
+/// One validated, weighted direct-route nexthop.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NextHop {
+    /// Eligible interface.
+    pub device: String,
+    /// Gateway, scoped by the interface for IPv6 link-local addresses.
+    pub gateway: Option<String>,
+    /// Kernel multipath weight, in the range 1 through 256.
+    pub weight: u64,
+    /// Producer explicitly declares the gateway on-link.
+    pub onlink: bool,
 }
 
 fn direct_devices(policy: &Policy, links: &Value) -> BTreeSet<String> {
-    links
-        .as_array()
-        .into_iter()
-        .flatten()
+    let Some(links) = links.as_array().filter(|links| links.len() <= 4096) else {
+        return BTreeSet::new();
+    };
+    let mut devices = links
+        .iter()
         .filter_map(|link| {
             let name = link["ifname"].as_str()?;
             let kind = link["linkinfo"]["info_kind"].as_str();
-            let physical = link["link_type"] == "ether"
-                && matches!(kind, None | Some("vlan" | "bridge" | "bond"));
+            let physical = link["link_type"] == "ether" && kind.is_none();
             (token(name) && (physical || policy.direct_interfaces.iter().any(|d| d == name)))
                 .then(|| name.to_owned())
         })
-        .collect()
+        .collect::<BTreeSet<_>>();
+    // Bridge/bond membership and VLAN lower-link evidence must lead to an
+    // eligible uplink. Bounded traversal omits container-only graphs and cycles.
+    for _ in 0..64 {
+        let previous = devices.len();
+        for link in links {
+            let Some(name) = link["ifname"].as_str().filter(|name| token(name)) else {
+                continue;
+            };
+            let backed = match link["linkinfo"]["info_kind"].as_str() {
+                Some("bridge" | "bond") => links.iter().any(|member| {
+                    member["ifname"]
+                        .as_str()
+                        .is_some_and(|name| devices.contains(name))
+                        && (member["master"].as_str() == Some(name)
+                            || (link["ifindex"].as_u64().is_some()
+                                && member["master"].as_u64() == link["ifindex"].as_u64()))
+                }),
+                Some("vlan") => links.iter().any(|lower| {
+                    lower["ifname"]
+                        .as_str()
+                        .is_some_and(|name| devices.contains(name))
+                        && (link["link_index"].as_u64().is_some()
+                            && link["link_index"].as_u64() == lower["ifindex"].as_u64())
+                }),
+                _ => false,
+            };
+            if backed {
+                devices.insert(name.to_owned());
+            }
+        }
+        if previous == devices.len() {
+            break;
+        }
+    }
+    devices
 }
 
 /// Select direct routes, rejecting VPN/dummy/container interfaces and malformed data.
@@ -169,8 +220,62 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route["type"].as_str().is_some_and(|kind| kind != "unicast") {
             continue;
         }
-        let Some(device) = route["dev"].as_str().filter(|d| devices.contains(*d)) else {
-            continue;
+        let nexthops = if let Some(hops) = route.get("nexthops") {
+            let hops = hops
+                .as_array()
+                .filter(|hops| !hops.is_empty() && hops.len() <= 256)
+                .ok_or_else(|| invalid("invalid multipath nexthops"))?;
+            if hops.iter().any(|hop| {
+                !hop["dev"]
+                    .as_str()
+                    .is_some_and(|name| devices.contains(name))
+            }) {
+                continue;
+            }
+            if route.get("dev").is_some() || route.get("gateway").is_some() {
+                return Err(invalid("ambiguous multipath route"));
+            }
+            hops.iter()
+                .map(|hop| {
+                    let gateway = hop["gateway"].as_str();
+                    let weight = hop
+                        .get("weight")
+                        .map_or(Some(1), Value::as_u64)
+                        .filter(|weight| (1..=256).contains(weight))
+                        .ok_or_else(|| invalid("invalid multipath weight"))?;
+                    if gateway.is_some_and(|ip| ip.parse::<IpAddr>().is_err()) {
+                        return Err(invalid("invalid multipath gateway"));
+                    }
+                    if hop.get("flags").is_some_and(|flags| {
+                        !flags
+                            .as_array()
+                            .is_some_and(|flags| flags.iter().all(|flag| flag == "onlink"))
+                    }) {
+                        return Err(invalid("unsupported multipath flags"));
+                    }
+                    Ok(NextHop {
+                        device: hop["dev"]
+                            .as_str()
+                            .ok_or_else(|| invalid("missing multipath interface"))?
+                            .to_owned(),
+                        gateway: gateway.map(str::to_owned),
+                        weight,
+                        onlink: hop["flags"]
+                            .as_array()
+                            .is_some_and(|flags| flags.iter().any(|f| f == "onlink")),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        let device = if nexthops.is_empty() {
+            let Some(device) = route["dev"].as_str().filter(|d| devices.contains(*d)) else {
+                continue;
+            };
+            device
+        } else {
+            ""
         };
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();
@@ -189,15 +294,20 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             gateway: gateway.map(str::to_owned),
             source: source.map(str::to_owned),
             metric: route["metric"].as_u64().unwrap_or(0),
-            local: destination != "default" && gateway.is_none(),
+            local: destination != "default"
+                && gateway.is_none()
+                && nexthops.iter().all(|hop| hop.gateway.is_none()),
             onlink: route["flags"]
                 .as_array()
                 .is_some_and(|flags| flags.iter().any(|f| f == "onlink")),
+            nexthops,
         });
     }
     // Populate connected routes before gateway routes. Sorting is stable for
     // equal preferences, retaining the producer's route ordering.
-    selected.sort_by_key(|route| route.gateway.is_some());
+    selected.sort_by_key(|route| {
+        route.gateway.is_some() || route.nexthops.iter().any(|hop| hop.gateway.is_some())
+    });
     Ok(selected)
 }
 
@@ -320,13 +430,26 @@ fn route_batch(routes: &[Route], table: u32) -> String {
         if let Some(gateway) = &route.gateway {
             text.push_str(&format!(" via {gateway}"));
         }
-        text.push_str(&format!(" dev {}", route.device));
         if let Some(source) = &route.source {
             text.push_str(&format!(" src {source}"));
         }
         text.push_str(&format!(" metric {}", route.metric));
-        if route.onlink {
-            text.push_str(" onlink");
+        if route.nexthops.is_empty() {
+            text.push_str(&format!(" dev {}", route.device));
+            if route.onlink {
+                text.push_str(" onlink");
+            }
+        } else {
+            for hop in &route.nexthops {
+                text.push_str(" nexthop");
+                if let Some(gateway) = &hop.gateway {
+                    text.push_str(&format!(" via {gateway}"));
+                }
+                text.push_str(&format!(" dev {} weight {}", hop.device, hop.weight));
+                if hop.onlink {
+                    text.push_str(" onlink");
+                }
+            }
         }
         text.push('\n');
     }
@@ -509,6 +632,23 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
     Ok(())
 }
 
+fn scoped_nm_dns(address: &str, device: &str) -> Option<String> {
+    let (address, scope) = address
+        .split_once('%')
+        .map_or((address, None), |(ip, scope)| (ip, Some(scope)));
+    let ip = address.parse::<IpAddr>().ok()?;
+    if ip.is_loopback() {
+        return None;
+    }
+    if matches!(ip, IpAddr::V6(ip) if (ip.segments()[0] & 0xffc0) == 0xfe80) {
+        if scope.is_some_and(|scope| scope != device) {
+            return None;
+        }
+        return Some(format!("{ip}%{device}"));
+    }
+    scope.is_none().then(|| ip.to_string())
+}
+
 fn dns_servers(policy: &Policy, devices: &BTreeSet<String>, links: &Value) -> Result<String> {
     let mut servers: BTreeSet<String> = policy.dns_servers.iter().cloned().collect();
     if policy.network_manager_dns {
@@ -539,8 +679,8 @@ fn dns_servers(policy: &Policy, devices: &BTreeSet<String>, links: &Value) -> Re
                 None,
             )?;
             for line in response.lines() {
-                if line.parse::<IpAddr>().is_ok() && !line.starts_with("127.") && line != "::1" {
-                    servers.insert(line.to_owned());
+                if let Some(server) = scoped_nm_dns(line, device) {
+                    servers.insert(server);
                 }
             }
         }
@@ -757,6 +897,66 @@ fn request_ready(socket: &Path, routes_only: bool, timeout: Duration) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn policy() -> Policy {
+        serde_json::from_value(serde_json::json!({
+            "socket": "/run/direct-network/ready.sock", "serversFile": "/run/direct-network/servers",
+            "ip": "/usr/bin/ip", "nft": "/usr/bin/nft", "nmcli": "/usr/bin/nmcli", "systemctl": "/usr/bin/systemctl",
+            "cgroupPaths": ["system.slice/system-direct.slice"], "allowedUsers": [1000],
+            "directInterfaces": [], "dnsServers": [], "dnsZones": {}, "networkManagerDns": true
+        })).unwrap()
+    }
+
+    fn executable(path: &Path, script: &str) {
+        fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn link_local_dns_servers_keep_distinct_interface_scopes_and_reject_mismatches() {
+        let root = tempfile::tempdir().unwrap();
+        let nmcli = root.path().join("nmcli");
+        executable(
+            &nmcli,
+            "case \"$*\" in\n '--wait 2 --escape no --get-values IP4.DNS,IP6.DNS device show wlan0') printf '%s\\n' 'fe80::1' 'fe80::2%wlan0' 'fe80::3%other0' 'fe80::4%' '2001:db8::53' '::1';;\n '--wait 2 --escape no --get-values IP4.DNS,IP6.DNS device show enp1s0') printf '%s\\n' 'fe80::1';;\n *) exit 3;;\nesac",
+        );
+        let mut p = policy();
+        p.nmcli = nmcli.to_str().unwrap().into();
+        let servers = dns_servers(
+            &p,
+            &BTreeSet::from(["wlan0".into(), "enp1s0".into()]),
+            &serde_json::json!([]),
+        )
+        .unwrap();
+        assert!(servers.contains("server=fe80::1%wlan0\n"));
+        assert!(servers.contains("server=fe80::1%enp1s0\n"));
+        assert!(servers.contains("server=fe80::2%wlan0\n"));
+        assert!(servers.contains("server=2001:db8::53\n"));
+        assert!(
+            !servers.contains("fe80::3")
+                && !servers.contains("fe80::4")
+                && !servers.contains("server=::1")
+        );
+        assert_eq!(servers.lines().count(), 4);
+    }
+
+    #[test]
+    fn multipath_batch_preserves_order_weights_and_onlink_flags() {
+        let routes = select_routes(
+            &policy(),
+            &serde_json::json!([
+                {"ifname":"enp1s0","link_type":"ether"}, {"ifname":"enp2s0","link_type":"ether"}
+            ]),
+            &serde_json::json!([
+                {"dst":"default","metric":42,"nexthops":[
+                    {"dev":"enp1s0","gateway":"192.0.2.1","weight":2,"flags":["onlink"]},
+                    {"dev":"enp2s0","gateway":"198.51.100.1","weight":3}
+                ]}
+            ]),
+        )
+        .unwrap();
+        assert!(route_batch(&routes, TABLES[0]).contains("default metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+    }
 
     #[test]
     fn silent_unauthorized_peers_are_rejected_without_reading_or_delaying_reconciliation() {
