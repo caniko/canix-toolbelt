@@ -16,7 +16,20 @@ machine.succeed('getent passwd operator')
 machine.succeed('systemctl start network-fixture.service')
 machine.wait_for_file('/run/network-fixture-ready', timeout=60)
 machine.wait_for_unit('user@1000.service')
-machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+try:
+    machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+except Exception:
+    # Retain causal route and native resolver evidence before the driver tears
+    # down the VM; client transport timeouts alone hide admission failures.
+    for command in [
+        'journalctl -b -u direct-network.service -u direct-network-dns.service --no-pager -n 100',
+        'ip -6 -N -j route show table all',
+        'systemctl show direct-network-dns.service -p ActiveState,SubState,MainPID,ControlGroup',
+        'ss -lnptu',
+    ]:
+        status, output = machine.execute(command)
+        print(command, status, output)
+    raise
 user = 'runuser -u operator -- env XDG_RUNTIME_DIR=/run/user/1000 '
 userctl = user + 'systemctl --user '
 userrun = user + 'systemd-run --user --quiet --wait --pipe '

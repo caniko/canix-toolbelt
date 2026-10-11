@@ -609,11 +609,12 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
         delete_rule(policy, family, rule)?;
     }
     check_reservations(policy)?;
-    output(
-        &policy.ip,
-        &args(&[family, "-batch", "-"]),
-        Some(&route_batch(routes, table, family)),
-    )?;
+    let batch = route_batch(routes, table, family);
+    output(&policy.ip, &args(&[family, "-batch", "-"]), Some(&batch)).map_err(|error| {
+        invalid(format!(
+            "{error}\ndirect-network {family} route batch:\n{batch}"
+        ))
+    })?;
     check_reservations(policy)?;
     let current = family_rules(policy, family)?;
     // New rules are installed while the previous complete table remains live.
@@ -737,6 +738,7 @@ struct State {
     // HUP dispatch is process/socket-generation-bound, not a claim that
     // dnsmasq has completed applying the file. DNS answers are runtime gates.
     dns_dispatch: Option<(String, dns::Observation)>,
+    dns_error: Option<String>,
 }
 
 fn sync_dns_servers(policy: &Policy, state: &mut State, servers: &str) -> Result<()> {
@@ -757,13 +759,19 @@ fn sync_dns_servers_with(
     }
     let resolver = match observe(policy, &state.cgroups) {
         Ok(resolver) => resolver,
-        Err(_) => {
+        Err(error) => {
             // Missing/starting DNS must not deadlock its root routes barrier.
             // Ordinary readiness still requires an authenticated observation.
             state.dns_dispatch = None;
+            let message = error.to_string();
+            if state.dns_error.as_ref() != Some(&message) {
+                eprintln!("direct-network DNS not ready: {message}");
+                state.dns_error = Some(message);
+            }
             return Ok(());
         }
     };
+    state.dns_error = None;
     if state.dns_dispatch.as_ref() != Some(&(servers.to_owned(), resolver.clone())) {
         state.dns_dispatch = None;
         output(
