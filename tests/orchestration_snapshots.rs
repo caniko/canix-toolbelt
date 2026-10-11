@@ -1388,6 +1388,84 @@ fn github_preserves_explicit_native_nulls_and_pending_checks() {
 }
 
 #[test]
+fn github_permission_requires_native_shape_and_final_consistency() {
+    struct NativeGraph(Vec<Value>);
+    impl GraphQl for NativeGraph {
+        fn query(&mut self, _: &str) -> io::Result<Value> {
+            Ok(self.0.remove(0))
+        }
+    }
+    let p = complete_pull();
+    for permission in [
+        None,
+        Some(json!({})),
+        Some(json!("invalid")),
+        Some(json!(false)),
+    ] {
+        let mut response = json!({"repository":{"pullRequest":p}});
+        if let Some(permission) = permission {
+            response["repository"]["viewerPermission"] = permission;
+        }
+        let mut transport = NativeGraph(vec![response.clone(), response]);
+        assert!(
+            github(
+                &mut transport,
+                "https://github.com/owner/repo/pull/1",
+                &json!({}),
+                "now",
+                0
+            )
+            .is_err()
+        );
+    }
+    let mut transport = NativeGraph(vec![
+        json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
+        json!({"repository":{"viewerPermission":"READ","pullRequest":p}}),
+    ]);
+    assert!(
+        github(
+            &mut transport,
+            "https://github.com/owner/repo/pull/1",
+            &json!({}),
+            "now",
+            0
+        )
+        .is_err(),
+        "published stale write permission"
+    );
+}
+
+#[test]
+fn provider_specific_pull_segments_reject_aliases_before_transport() {
+    let mut transport = Graph(vec![
+        json!({"repository":{"pullRequest":complete_pull()}}),
+        json!({"repository":{"pullRequest":complete_pull()}}),
+    ]);
+    assert!(
+        github(
+            &mut transport,
+            "https://github.com/owner/repo/pulls/1",
+            &json!({}),
+            "now",
+            0
+        )
+        .is_err()
+    );
+    assert_eq!(transport.0.len(), 2);
+    let mut transport = forge_review(forge_review_row(1, 1), json!([forge_inline(10, 1)]));
+    let original = transport.0.len();
+    assert!(
+        forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pull/1",
+            "now"
+        )
+        .is_err()
+    );
+    assert_eq!(transport.0.len(), original);
+}
+
+#[test]
 fn github_rejects_malformed_present_history_fields() {
     for pointer in [
         "/comments/nodes/0/author/login",

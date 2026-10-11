@@ -194,6 +194,99 @@ fn setup() -> (Manifest, Policy, Expectations, Value, Fixture) {
 }
 
 #[test]
+fn malformed_pending_prompt_metadata_fails_before_observation_or_reconciliation() {
+    for field in ["version", "goalPolicy", "preparedAt"] {
+        for bad in [None, Some(Value::Null), Some(json!("")), Some(json!({}))] {
+            let (manifest, policy, expected, mut state, mut fixture) = setup();
+            canix_toolbelt::orchestration::prepare(
+                &mut state,
+                &manifest.packets[0],
+                &policy,
+                "exact retained prompt",
+                "2026-10-11T00:00:00Z",
+            )
+            .unwrap();
+            if let Some(bad) = bad {
+                state["packets"]["1"]["pending"][field] = bad;
+            } else {
+                state["packets"]["1"]["pending"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+            }
+            let original = state.clone();
+            assert!(
+                cycle(
+                    &manifest,
+                    &policy,
+                    &expected,
+                    &mut state,
+                    &mut fixture,
+                    "2026-10-11T01:00:00Z",
+                    0,
+                    true
+                )
+                .is_err(),
+                "accepted malformed pending {field}"
+            );
+            assert_eq!(state, original);
+            assert!(fixture.requests.is_empty());
+            assert!(fixture.submissions.is_empty());
+            assert!(
+                canix_toolbelt::orchestration::prepare(
+                    &mut state,
+                    &manifest.packets[0],
+                    &policy,
+                    "replacement",
+                    "later"
+                )
+                .is_err()
+            );
+            let id = original["packets"]["1"]["pending"]["body"]["id"]
+                .as_str()
+                .unwrap();
+            assert!(
+                canix_toolbelt::orchestration::acknowledge(&mut state, 1, id, "later").is_err()
+            );
+            assert_eq!(state, original);
+        }
+    }
+}
+
+#[test]
+fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
+    for status in ["queued", "running"] {
+        for tokens in [100, 200_000] {
+            let (manifest, policy, expected, mut state, mut fixture) = setup();
+            fixture.recent = vec![
+                json!({"id":"msg_external_compaction","type":"compaction","status":status,"time":{"created":2000}}),
+                assistant("msg_physical", 1000, tokens),
+            ];
+            let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
+            assert!(observation.occupied["destination"].contains(&1));
+            assert!(observation.active["destination"].is_empty());
+            let report = cycle(
+                &manifest,
+                &policy,
+                &expected,
+                &mut state,
+                &mut fixture,
+                "now",
+                0,
+                true,
+            )
+            .unwrap();
+            assert!(report.errors.is_empty());
+            assert!(report.selected.is_empty());
+            assert!(report.occupied["destination"].contains(&1));
+            assert!(state["packets"]["1"]["pendingCompaction"].is_null());
+            assert!(state["packets"]["1"]["pending"].is_null());
+            assert!(fixture.submissions.is_empty());
+        }
+    }
+}
+
+#[test]
 fn completion_of_an_old_compaction_cannot_release_a_new_physical_context() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     state["packets"]["1"]["pendingCompaction"] = json!({"body":{"id":"msg_old_compaction","delivery":"steer"},"physicalMessageID":"msg_old_physical","preparedAt":"before"});

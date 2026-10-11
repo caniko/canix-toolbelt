@@ -1376,6 +1376,35 @@ fn waiting_recheck_without_report_time_starts_at_actual_delivery() {
 }
 
 #[test]
+fn unknown_admission_times_sort_after_valid_repeat_times_and_use_valid_delivery_fallback() {
+    let mut manifest = manifest();
+    manifest.packets[1].owner_host = "builder".into();
+    let policy = policy();
+    let activity = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
+    for unknown in [
+        json!({}),
+        json!({"deliveredPreparedAt":"invalid","deliveredAt":"also invalid"}),
+    ] {
+        let mut states = json!({"1":{"version":"new","deliveredVersion":"old","goalAckVersion":"finish-v1"},"2":{"version":"new","deliveredVersion":"old","goalAckVersion":"finish-v1","deliveredAt":"2026-10-11T01:00:00Z"}});
+        states["1"]
+            .as_object_mut()
+            .unwrap()
+            .extend(unknown.as_object().unwrap().clone());
+        assert_eq!(
+            select(&manifest, &states, &activity, &policy).unwrap()[0].number,
+            2
+        );
+        states["1"]["deliveredPreparedAt"] = json!("invalid");
+        states["1"]["deliveredAt"] = json!("2026-10-11T00:00:00Z");
+        assert_eq!(
+            select(&manifest, &states, &activity, &policy).unwrap()[0].number,
+            1,
+            "valid delivery fallback lost"
+        );
+    }
+}
+
+#[test]
 fn stale_nonwaiting_reports_cannot_suppress_a_current_waiting_recheck() {
     let manifest = manifest();
     let policy = policy();
