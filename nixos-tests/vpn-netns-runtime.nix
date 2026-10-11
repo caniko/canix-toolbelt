@@ -16,6 +16,7 @@ in
           enable = true;
           privateKeyFile = "/etc/test-wg-key";
           ips = ["10.14.0.2/16"];
+          dnsServers = ["192.0.2.53"];
           peers = [
             {
               publicKey = keys.peer1.publicKey;
@@ -28,6 +29,7 @@ in
         vpnNamespaces.media = {
           profile = {
             provider = "test";
+            dnsServers = ["192.0.2.53"];
             connection = {
               type = "wireguard";
               addresses = ["10.15.0.2/16"];
