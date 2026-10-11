@@ -30,11 +30,33 @@
       deny = ["demo query --delete *"];
     })
     true);
+
+  disjointStoreCommands = builtins.tryEval (builtins.deepSeq (safety.mergeRules {
+      programs.demo.autoSafe = {commands = ["query *"];};
+      deny = ["/nix/store/*/bin/other delete *"];
+    })
+    true);
+
+  storeConflict = builtins.tryEval (builtins.deepSeq (safety.mergeRules {
+      programs.demo.autoSafe = {commands = ["query *"];};
+      deny = ["/nix/store/*/bin/demo query --delete *"];
+    })
+    true);
 in
   mkEvalCheck {
     name = "agent-safety-eval";
     resultMessage = "autoSafe normalization, wrapper expansion, and deny dominance passed";
     assertions = [
+      {
+        name = "disjoint-store-commands";
+        assertion = disjointStoreCommands.success;
+        message = "the store hash wildcard must not conflate different executable suffixes";
+      }
+      {
+        name = "overlapping-store-commands";
+        assertion = !storeConflict.success;
+        message = "a store-prefixed autoSafe command must still conflict with its destructive form";
+      }
       {
         name = "wildcard-command";
         assertion = wildcard."demo" == "allow" && wildcard."demo *" == "allow";
