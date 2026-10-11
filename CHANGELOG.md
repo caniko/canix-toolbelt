@@ -34,6 +34,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Keep direct-network routing ownership explicit in both reserved tables and
   address families, preserve foreign routes and complete eligible ECMP paths,
   and reject container-only implicit uplinks and noncanonical cgroup depths.
+- Retain IPv6 same-prefix, same-metric routes across multiple uplinks without
+  replacing foreign routes or blocking the readiness barrier.
+- Make the unsafe-object preparation fixtures tolerate existing Git object
+  fanout directories while preserving rejection and persistent tombstone checks.
 - Authenticate all independent DNS listeners against the native resolver unit,
   process, network namespace and enrolled cgroup generation. Reject foreign,
   connected, wildcard and IPv4-mapped competing sockets. Scope NetworkManager
