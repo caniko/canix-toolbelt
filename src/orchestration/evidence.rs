@@ -531,7 +531,17 @@ fn collect_with(
             return Err(invalid("aggregate evidence inventory exceeds its bound"));
         }
         relative(path, allowed)?;
-        if let Some(parent) = receiver_parent(&root, path, false)? {
+        let parent = match receiver_parent(&root, path, false) {
+            Ok(parent) => parent,
+            Err(error) if blocked_traversal(&error) => {
+                batch
+                    .omitted
+                    .push(path.to_str().expect("validated UTF-8 path").to_owned());
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(parent) = parent {
             walk(
                 &parent,
                 path,
@@ -551,6 +561,9 @@ fn collect_with(
             continue;
         }
         relative(path, &unique)?;
+        if batch.omitted.iter().any(|root| path.starts_with(root)) {
+            continue;
+        }
         if cursor.iter().any(|root| path.starts_with(root)) {
             if !path
                 .ancestors()
@@ -576,7 +589,8 @@ fn collect_with(
                     match rustix::fs::statat(&parent, leaf, AtFlags::SYMLINK_NOFOLLOW) {
                         Ok(meta) => match FileType::from_raw_mode(meta.st_mode) {
                             FileType::Symlink => {
-                                return Err(invalid("evidence identity became a symlink"));
+                                batch.omitted.push(name.clone());
+                                continue;
                             }
                             FileType::Directory => {
                                 let directory = File::from(rustix::fs::openat(
@@ -589,9 +603,8 @@ fn collect_with(
                                     Mode::empty(),
                                 )?);
                                 if checkout(&directory)? {
-                                    return Err(invalid(
-                                        "evidence identity became a project checkout",
-                                    ));
+                                    batch.omitted.push(name.clone());
+                                    continue;
                                 }
                                 true
                             }

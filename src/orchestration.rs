@@ -583,6 +583,43 @@ fn refresh_in_place(
     {
         return Err("manifest drops retained journal scope".into());
     }
+    if retained.is_none() {
+        let imported_packets = state["packets"].as_object().expect("validated object");
+        let mut imported_owners = BTreeMap::new();
+        for (number, entry) in imported_packets {
+            let packet = manifest
+                .packets
+                .iter()
+                .find(|packet| packet.number.to_string() == *number)
+                .expect("validated retained owner");
+            if entry["sessionID"].as_str() != Some(packet.session_id.as_str())
+                || entry["ownerHost"].as_str() != Some(packet.owner_host.as_str())
+            {
+                return Err("imported journal lacks matching retained owner identity; retain its historical manifest before migration".into());
+            }
+            let assignments = entry["prs"].as_array().ok_or("imported journal lacks retained assignment ownership; retain its historical manifest before migration")?;
+            for assignment in assignments {
+                let url = assignment
+                    .as_str()
+                    .filter(|url| !url.is_empty())
+                    .ok_or("invalid imported assignment ownership")?;
+                if !packet.prs.iter().any(|assigned| assigned == url)
+                    || imported_owners.insert(url, packet.number).is_some()
+                {
+                    return Err("imported journal assignments changed ownership".into());
+                }
+            }
+        }
+        if !imported_packets.is_empty()
+            && state["prs"]
+                .as_object()
+                .expect("validated object")
+                .keys()
+                .any(|url| !imported_owners.contains_key(url.as_str()))
+        {
+            return Err("imported journal lacks complete retained assignment ownership".into());
+        }
+    }
     for packet in &manifest.packets {
         journal_packet(state, packet.number)?;
         for url in &packet.prs {
@@ -601,9 +638,10 @@ fn refresh_in_place(
                 return Err(format!("PR journal identity differs from assignment {url}"));
             }
         }
-        let prs: Vec<_> = packet
-            .prs
-            .iter()
+        let mut assignments = packet.prs.iter().collect::<Vec<_>>();
+        assignments.sort();
+        let prs: Vec<_> = assignments
+            .into_iter()
             .map(|url| state["prs"][url].clone())
             .collect();
         let ps = journal_packet(state, packet.number)?;
@@ -613,12 +651,15 @@ fn refresh_in_place(
             .iter()
             .filter_map(|id| dependencies.get(id).map(|hash| (id.to_string(), hash)))
             .collect();
-        let dependency_version = digest(&json!({"producers":packet.dependencies,"evidence":deps}));
+        let mut producer_ids = packet.dependencies.clone();
+        producer_ids.sort_unstable();
+        producer_ids.dedup();
+        let dependency_version = digest(&json!({"producers":producer_ids,"evidence":deps}));
         let mut inputs = json!({"prs":prs.iter().map(event_version).collect::<Vec<_>>(), "dependencies":deps, "goalPolicy":policy.goal_policy});
         // A declared producer is useful new input even before its first handoff.
         // Preserve historical fingerprints for packets without dependencies.
         if !packet.dependencies.is_empty() {
-            inputs["producers"] = json!(packet.dependencies);
+            inputs["producers"] = json!(producer_ids);
         }
         let observation = json!(digest(&inputs));
         // Bind an imported delivery only to its retained, unchanged observation.
@@ -660,11 +701,11 @@ fn refresh_in_place(
             ) {
                 return Err(format!("unsupported worker status for {}", packet.number));
             }
-            ps["workerStatus"] = report.clone();
             if report["eventVersion"].is_string()
                 && report["eventVersion"] == ps["deliveredVersion"]
                 && ps["deliveredObservationVersion"] == observation
             {
+                ps["workerStatus"] = report.clone();
                 ps["waitingReportPending"] = json!(report["status"] == "waiting");
                 if report["status"] == "ready_for_work" {
                     ps["progressVersion"] = json!(digest(report));
@@ -700,6 +741,7 @@ fn refresh_in_place(
             }
         }
         ps["observationVersion"] = observation;
+        ps["dependencyVersion"] = json!(dependency_version);
         ps["versionInputs"] = inputs.clone();
         let mut version_inputs = inputs;
         version_inputs["progressVersion"] = ps["progressVersion"].clone();
@@ -820,7 +862,7 @@ pub fn schedule_recheck(ps: &mut Value, policy: &Policy, now: i64) -> bool {
     let checkpoint = digest(report);
     let Some(entered) = timestamp(&report["updatedAt"])
         .or_else(|| timestamp(&report["at"]))
-        .or_else(|| timestamp(&ps["deliveredPreparedAt"]))
+        .or_else(|| timestamp(&ps["deliveredAt"]))
     else {
         return false;
     };
@@ -1051,7 +1093,22 @@ pub fn finished(
     active: &Activity,
     observation_ok: bool,
 ) -> bool {
+    let manifest_current = state.get("retainedManifest").map_or_else(
+        || {
+            manifest
+                .packets
+                .iter()
+                .all(|packet| packet.dependencies.is_empty())
+        },
+        |value| {
+            serde_json::from_value::<Manifest>(value.clone()).is_ok_and(|retained| {
+                manifest.validate(Some(&retained)).is_ok()
+                    && retained.validate(Some(manifest)).is_ok()
+            })
+        },
+    );
     observation_ok
+        && manifest_current
         && manifest.validate(None).is_ok()
         && manifest
             .packets
@@ -1061,6 +1118,12 @@ pub fn finished(
         && active.values().all(BTreeSet::is_empty)
         && manifest.packets.iter().all(|packet| {
             let ps = &state["packets"][packet.number.to_string()];
+            let mut producers = packet.dependencies.clone();
+            producers.sort_unstable();
+            producers.dedup();
+            let dependency_version = digest(
+                &json!({"producers":producers,"evidence":ps["versionInputs"]["dependencies"]}),
+            );
             ps["terminal"] == true
                 && ps["waitingReportPending"] != true
                 && ps["workerStatus"]["status"] != "waiting"
@@ -1073,6 +1136,12 @@ pub fn finished(
                         && pr["lastError"].is_null()
                         && ps["auditedFeedback"][url].as_str()
                             == Some(feedback_version(pr).as_str())
+                        && (packet.dependencies.is_empty()
+                            || (ps["versionInputs"]["dependencies"].is_object()
+                                && ps["dependencyVersion"].as_str()
+                                    == Some(dependency_version.as_str())
+                                && ps["auditedDependencies"][url].as_str()
+                                    == Some(dependency_version.as_str())))
                 })
         })
 }

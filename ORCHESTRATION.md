@@ -26,6 +26,16 @@ movement; edited historical feedback still invalidates the audit. Fingerprints
 retain sorted ASCII JSON and legacy finite-number spelling.
 The journal retains the validated manifest as `retainedManifest`; refreshes compare
 against it across restarts. Initial imports reject missing already-journaled scope.
+Legacy imports with retained packet entries also require an explicit complete
+assignment-to-packet mapping and matching `sessionID` / `ownerHost` in those
+entries. If the legacy journal lacks that evidence, the consumer must retain its
+independently verified historical manifest as `retainedManifest` under the shared
+writer lease before refresh. Never derive historical ownership from the proposed
+replacement manifest. Rejected imports leave every pending body and checkpoint
+unchanged; matching imports preserve unknown fields and exact pending inputs.
+Assignment and producer sets are sorted by stable identity before event hashing;
+reordering the manifest alone does not create a turn or expire dependency audits.
+Previously persisted request IDs and bodies still retain their original hashes.
 Worker progress and terminal audits require the delivered event and its retained
 observation fingerprint to match current source, feedback and dependency evidence.
 Legacy deliveries without an observation binding require a fresh turn before
@@ -37,6 +47,9 @@ source-bound dependency digests and worker reports, and report unsuccessful
 observations independently. Neither an idle session nor a waiting report proves
 completion. `finished` requires complete idle host observations and exact audited
 terminal coverage, including linked work and pending admissions.
+Dependency-bearing completion additionally requires a refreshed matching manifest,
+the current retained dependency fingerprint and per-PR dependency-audit coverage.
+A newly added producer cannot certify completion against a pre-refresh journal.
 An audited terminal PR with a `ready_for_work` checkpoint remains unfinished until
 the resulting progress version has a durable delivery receipt. Pending inputs
 retain `progressVersion`; acknowledgment records `deliveredProgressVersion`.
@@ -46,6 +59,9 @@ only a supported non-waiting report bound to the current delivery and source can
 permit completion. Existing source-bound audits remain retained.
 Unsupported or missing report statuses reject refresh transactionally before
 adopting any terminal audit evidence.
+Stale reports cannot replace the retained current waiting checkpoint. When a
+waiting report omits its own timestamp, its bounded recheck delay starts at the
+delivery receipt, so a long-delayed pending submission does not shorten the wait.
 
 ## Admission and recovery
 
@@ -218,6 +234,9 @@ retries, so an old receipt cannot certify an identical payload on a later turn.
 New identities reserve available journal capacity during collection. Conditional
 deletions never supply speculative space; acknowledged removals free capacity
 for the next exchange, so a valid conflicted receipt remains adoptable.
+Acknowledged files or ancestors that become excluded symlinks or project checkouts
+remain omitted, retaining their receiver identities and bytes. This applies to
+narrow allowlist roots too; unrelated eligible artifacts continue advancing.
 The legacy stateless `collect` entrypoint rejects budget-deferred work and requires
 the checkpointed API for multi-exchange draining; bounded structural transitions
 retain their previous conditional-removal protocol.

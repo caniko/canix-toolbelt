@@ -1394,7 +1394,7 @@ fn stale_nonwaiting_reports_cannot_suppress_a_current_waiting_recheck() {
     )
     .unwrap();
     assert_eq!(state["packets"]["1"]["waitingReportPending"], true);
-    for status in ["complete", "ready_for_work", "blocked"] {
+    for status in ["complete", "ready_for_work", "closed"] {
         let stale = json!({"schemaVersion":1,"packet":1,"eventVersion":"older","status":status,"nextAction":"obsolete"});
         refresh(
             &manifest,
@@ -1481,8 +1481,20 @@ fn finished_requires_refreshed_manifest_and_dependency_audit_coverage() {
     assert!(finished(&changed, &complete, &active, true));
     for malformed in [Value::Null, json!("foreign dependency digest")] {
         let mut tampered = complete.clone();
-        tampered["packets"]["1"]["auditedDependencies"] = malformed;
+        tampered["packets"]["1"]["auditedDependencies"]["one"] = malformed;
         assert!(!finished(&changed, &tampered, &active, true));
+    }
+    for field in ["dependencyVersion", "versionInputs", "retainedManifest"] {
+        let mut incomplete = complete.clone();
+        if field == "retainedManifest" {
+            incomplete.as_object_mut().unwrap().remove(field);
+        } else {
+            incomplete["packets"]["1"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+        }
+        assert!(!finished(&changed, &incomplete, &active, true));
     }
 }
 
@@ -1533,6 +1545,29 @@ fn reordered_manifest_sets_preserve_event_versions_and_terminal_audits() {
         }
         assert!(!needs_wake(&state["packets"][number]));
     }
+    // The schema accepts repeated producer identities; hash their set once.
+    manifest
+        .packets
+        .iter_mut()
+        .find(|packet| packet.number == 1)
+        .unwrap()
+        .dependencies
+        .push(2);
+    refresh(
+        &manifest,
+        &mut state,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &dependencies,
+    )
+    .unwrap();
+    assert_eq!(state["packets"]["1"]["version"], original["1"]["version"]);
+    assert_eq!(
+        state["packets"]["1"]["dependencyVersion"],
+        original["1"]["dependencyVersion"]
+    );
+    assert_eq!(state["packets"]["1"]["terminal"], true);
 }
 
 #[test]
@@ -1555,4 +1590,57 @@ fn legacy_journal_import_cannot_reassign_retained_prs_between_existing_owners() 
         .is_err()
     );
     assert_eq!(legacy, before);
+}
+
+#[test]
+fn legacy_import_requires_complete_owner_bindings_and_retains_exact_pending_work() {
+    let manifest = manifest();
+    let pending = json!({"body":{"id":"msg_original","text":"original pending bytes"},"version":"original","preparedAt":"2026-10-11T00:00:00Z"});
+    let legacy = json!({"prs":{"one":{"url":"one","state":"OPEN"},"two":{"url":"two","state":"OPEN"}},"packets":{"1":{"sessionID":"ses_one","ownerHost":"builder","prs":["one"],"pending":pending,"unrecognizedCheckpoint":{"identity":"retained"}},"2":{"sessionID":"ses_two","ownerHost":"mobile","prs":["two"]}}});
+    let mut accepted = legacy.clone();
+    refresh(
+        &manifest,
+        &mut accepted,
+        &policy(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(accepted["packets"]["1"]["pending"], pending);
+    assert_eq!(
+        accepted["packets"]["1"]["unrecognizedCheckpoint"],
+        legacy["packets"]["1"]["unrecognizedCheckpoint"]
+    );
+    for field in ["sessionID", "ownerHost", "prs"] {
+        let mut unknown = legacy.clone();
+        unknown["packets"]["1"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        let original = unknown.clone();
+        assert!(
+            refresh(
+                &manifest,
+                &mut unknown,
+                &policy(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(unknown, original);
+        unknown["retainedManifest"] = serde_json::to_value(&manifest).unwrap();
+        refresh(
+            &manifest,
+            &mut unknown,
+            &policy(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(unknown["packets"]["1"]["pending"], pending);
+    }
 }

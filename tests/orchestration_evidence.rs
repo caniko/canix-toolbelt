@@ -136,7 +136,7 @@ fn acknowledged_source_checkouts_remain_omitted_without_blocking_other_evidence(
 }
 
 fn acknowledged_source_exclusion_keeps_receiver_and_other_artifacts(kind: &str) {
-    for ancestor in [false, true] {
+    for (ancestor, narrow) in [(false, false), (false, true), (true, false), (true, true)] {
         let source = tempfile::tempdir().unwrap();
         let target = mirror_dir();
         fs::create_dir(source.path().join("evidence")).unwrap();
@@ -147,7 +147,11 @@ fn acknowledged_source_exclusion_keeps_receiver_and_other_artifacts(kind: &str) 
             "evidence/owned"
         };
         fs::write(source.path().join(path), b"retained receiver bytes").unwrap();
-        let allowed = vec![PathBuf::from("evidence")];
+        let allowed = if narrow {
+            vec![PathBuf::from(path), PathBuf::from("evidence/unrelated")]
+        } else {
+            vec![PathBuf::from("evidence")]
+        };
         let mut exchange = Exchange::default();
         let receipt = apply(
             target.path(),
@@ -181,7 +185,12 @@ fn acknowledged_source_exclusion_keeps_receiver_and_other_artifacts(kind: &str) 
         fs::write(source.path().join("evidence/unrelated"), b"fresh evidence").unwrap();
         for _ in 0..2 {
             let batch = exchange.prepare(source.path(), &allowed).unwrap();
-            assert!(batch.omitted.contains(&"evidence/owned".into()));
+            assert!(
+                batch
+                    .omitted
+                    .iter()
+                    .any(|root| std::path::Path::new(path).starts_with(root))
+            );
             assert!(batch.delete.is_empty());
             assert!(batch.prune.is_empty());
             assert!(
