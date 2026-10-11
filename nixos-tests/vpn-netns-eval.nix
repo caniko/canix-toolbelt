@@ -161,9 +161,9 @@ in
       {
         name = "port-forward-unit";
         assertion =
-          lib.hasInfix "/run/netns/vpn" (toString qbitFwd)
+          lib.hasInfix "-netns-vpn-forward-qbittorrent-connect" (toString qbitFwd)
           && lib.hasInfix "8085" (toString qbitFwd);
-        message = "socat forward must target the namespace";
+        message = "socat forward must use the namespace connector executable";
       }
       {
         name = "socks-proxy-unit";
