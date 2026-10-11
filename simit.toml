@@ -26,6 +26,7 @@ nix_builds = [
   ".#opencode-with-claude",
   ".#checks.x86_64-linux.opencode-claude-eval",
   ".#checks.x86_64-linux.opencode-jev-runtime",
+  ".#checks.x86_64-linux.headroom-eval",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
