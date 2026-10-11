@@ -70,10 +70,17 @@ expedites and ordering. `select` rejects incomplete/wrong-host activity and
 chooses only original owners, preferring first current-goal turns before repeat
 turns and oldest admissions within the repeat class, ordered by parsed RFC 3339
 instants rather than their spelling.
+Unknown admission times sort after valid repeat admissions. A malformed preparation
+timestamp does not hide a valid delivery timestamp used as the fallback.
 
 `prepare` retains an existing pending body verbatim. Persist its result through
 `atomic_json` before submitting it. On ambiguity, reconcile the exact ID against
 both inbox and transcript; a transcript 404 can coexist with a queued input.
+Retained pending prompts require nonempty event version, goal-policy and preparation
+metadata before any observation, receipt reconciliation or dispatch. Optional legacy
+observation/progress bindings remain nullable; present event metadata in the body
+must match the retained version. Malformed imports preserve the original journal
+and fail before provider effects rather than losing the event on acknowledgment.
 `acknowledge` requires the exact persisted ID and records delivery, not successful
 execution or acceptance. OpenCode V2 models belong to registered sessions; a
 prompt body cannot override the model. Verify owner identity/model/permissions
@@ -145,7 +152,15 @@ completed compactions are present.
 Assistant and compaction pages share an identity set; a message cannot alias both
 kinds. Unknown pending-compaction statuses report malformed evidence while
 retaining the pending request and preventing dispatch.
-Queued compactions remain healthy waits. Every non-null retained compaction must
+Queued compactions remain healthy waits. Native queued/running compactions observed
+without a journaled request also reserve owner capacity and block prompt or fresh
+compaction dispatch, even when a newer physical assistant message appears. Their
+exact message observations are exposed in `inProgressCompactions` cycle reports;
+completion releases the reservation without inventing a pending request.
+Reservation discovery exhausts the bounded filtered compaction history independently
+of context reset. Newer completed/failed records cannot hide older queued/running
+work; incomplete pagination or an exhausted search bound rejects observation.
+Every non-null retained compaction must
 have an object body, valid durable message and physical IDs, steer delivery and
 a retained preparation marker before observation, publication or capacity selection.
 Use the cycle's `occupied` observation, including all queued inputs, in the final
@@ -166,6 +181,12 @@ valid for deleted authors, review commits/submission times and pending-check
 conclusions, timestamps and URLs.
 GitHub's returned PR URL must match the requested coordinate; its URL and opaque
 ID must remain stable through that final re-fetch.
+Both providers require exact canonical URL identity: GitHub uses `/pull/`, Forgejo
+uses `/pulls/`, and PR numbers use positive canonical decimal spelling. Aliases
+cannot register the same native pull under different assignment URLs.
+GitHub repository `viewerPermission` is validated and compared at the final
+observation. Missing/unsupported permissions reject the snapshot; the explicit
+native null returned for GitHub App authentication remains valid and is retained.
 GitHub revisions must be full 40-digit hexadecimal object IDs, and its update
 identity must parse as RFC 3339 before history is fetched. Malformed check rollups
 return errors. `ForgeRest::get` returns `ForgeResponse` with native JSON `body`

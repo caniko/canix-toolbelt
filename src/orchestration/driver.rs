@@ -73,6 +73,8 @@ pub struct Observation {
     pub context_tokens: BTreeMap<u32, u64>,
     /// Exact assistant supplying physical usage, retained across compaction.
     pub physical_message_ids: BTreeMap<u32, String>,
+    /// Observed native queued/running compactions, including manual or imported work.
+    pub in_progress_compactions: BTreeMap<u32, Value>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -151,7 +153,6 @@ fn verify_mirror_inboxes(
 enum ContextSearch {
     Continue,
     Found,
-    Finished,
 }
 
 // V2 filters message types before pagination. Tool/status traffic therefore
@@ -205,7 +206,6 @@ fn context_message(
             previous_time = time;
             match select(message)? {
                 ContextSearch::Found => return Ok(Some(message.clone())),
-                ContextSearch::Finished => return Ok(None),
                 ContextSearch::Continue => {}
             }
         }
@@ -297,6 +297,7 @@ pub fn observe(
     let mut messages = BTreeMap::new();
     let mut context_tokens = BTreeMap::new();
     let mut physical_message_ids = BTreeMap::new();
+    let mut in_progress_compactions = BTreeMap::new();
     for packet in &manifest.packets {
         for (host, data) in &raw {
             if data.get(&packet.session_id).is_some() {
@@ -347,21 +348,25 @@ pub fn observe(
         let physical_time = physical["time"]["created"]
             .as_u64()
             .expect("validated time");
-        let compacted =
-            context_message(adapter, packet, "compaction", &mut context_ids, |message| {
-                let status = compaction_status(message)?;
-                Ok(
-                    if message["time"]["created"].as_u64().expect("validated time") <= physical_time
-                    {
-                        ContextSearch::Finished
-                    } else if status == "completed" {
-                        ContextSearch::Found
-                    } else {
-                        ContextSearch::Continue
-                    },
-                )
-            })?
-            .is_some();
+        let mut compacted = false;
+        // A terminal compaction can reset context, but cannot prove that an
+        // older native reservation has finished. Exhaust the bounded filtered
+        // history before admitting work; an unknown tail fails closed.
+        context_message(adapter, packet, "compaction", &mut context_ids, |message| {
+            match compaction_status(message)? {
+                "queued" | "running" => {
+                    in_progress_compactions
+                        .entry(packet.number)
+                        .or_insert_with(|| message.clone());
+                }
+                "completed" => {
+                    compacted |= message["time"]["created"].as_u64().expect("validated time")
+                        > physical_time;
+                }
+                _ => {}
+            }
+            Ok(ContextSearch::Continue)
+        })?;
         let tokens = if compacted {
             0
         } else {
@@ -409,7 +414,9 @@ pub fn observe(
     }
     let mut occupied = active.clone();
     for packet in &manifest.packets {
-        if !inboxes[&packet.number].is_empty() {
+        if !inboxes[&packet.number].is_empty()
+            || in_progress_compactions.contains_key(&packet.number)
+        {
             occupied
                 .get_mut(&packet.owner_host)
                 .expect("validated host")
@@ -425,6 +432,7 @@ pub fn observe(
         messages,
         context_tokens,
         physical_message_ids,
+        in_progress_compactions,
     })
 }
 
@@ -505,6 +513,12 @@ fn compact(
     adapter: &mut impl Adapter,
     at: &str,
 ) -> io::Result<bool> {
+    if observation
+        .in_progress_compactions
+        .contains_key(&packet.number)
+    {
+        return Ok(true);
+    }
     let key = packet.number.to_string();
     if state["packets"][&key]["pendingCompaction"].is_null() {
         if observation.inboxes[&packet.number]
@@ -613,6 +627,8 @@ pub struct CycleReport {
     pub errors: Vec<String>,
     /// Last observed context sizes.
     pub context_tokens: BTreeMap<u32, u64>,
+    /// Native compaction observations reserving capacity without fresh dispatch.
+    pub in_progress_compactions: BTreeMap<u32, Value>,
     /// Whether this was an authorized writer cycle.
     pub dispatch_enabled: bool,
 }
@@ -810,6 +826,7 @@ pub fn cycle(
         selected: selected.iter().map(|p| p.number).collect(),
         errors,
         context_tokens: observation.context_tokens,
+        in_progress_compactions: observation.in_progress_compactions,
         dispatch_enabled: dispatch,
     })
 }

@@ -487,6 +487,17 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
     if !entry["pending"].is_null()
         && (!entry["pending"].is_object()
             || !entry["pending"]["body"].is_object()
+            || ["version", "goalPolicy", "preparedAt"].iter().any(|key| {
+                !entry["pending"][key]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            })
+            || ["observationVersion", "progressVersion"]
+                .iter()
+                .any(|key| !entry["pending"][key].is_null() && !entry["pending"][key].is_string())
+            || (!entry["pending"]["body"]["metadata"]["eventVersion"].is_null()
+                && entry["pending"]["body"]["metadata"]["eventVersion"]
+                    != entry["pending"]["version"])
             || !entry["pending"]["body"]["id"].as_str().is_some_and(|id| {
                 !id.is_empty()
                     && id
@@ -997,8 +1008,12 @@ pub fn select<'a>(
         let oldest = if class == 4 {
             state["deliveredPreparedAt"]
                 .as_str()
-                .or_else(|| state["deliveredAt"].as_str())
                 .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .or_else(|| {
+                    state["deliveredAt"]
+                        .as_str()
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                })
                 .map(|time| time.with_timezone(&chrono::Utc))
         } else {
             None
@@ -1006,6 +1021,7 @@ pub fn select<'a>(
         (
             class,
             expedited.unwrap_or(0),
+            oldest.is_none(),
             oldest,
             policy
                 .priority
@@ -1047,6 +1063,14 @@ pub fn prepare(
     }
     if !needs_wake(ps) || text.trim().is_empty() {
         return Err("owner has no unadmitted event or continuation text is empty".into());
+    }
+    if !ps["version"]
+        .as_str()
+        .is_some_and(|version| !version.is_empty())
+        || policy.goal_policy.is_empty()
+        || at.is_empty()
+    {
+        return Err("fresh admission requires durable event, goal and preparation metadata".into());
     }
     let version = ps["version"].clone();
     let generation = match ps.get("admissionGeneration") {

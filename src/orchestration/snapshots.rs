@@ -255,7 +255,7 @@ fn coordinate(url: &str, github: bool) -> io::Result<(&str, &str, &str, u64)> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
         })
-        || !matches!(parts[3], "pull" | "pulls")
+        || parts[3] != if github { "pull" } else { "pulls" }
     {
         return Err(invalid("invalid PR coordinate"));
     }
@@ -263,6 +263,7 @@ fn coordinate(url: &str, github: bool) -> io::Result<(&str, &str, &str, u64)> {
         .parse::<u64>()
         .ok()
         .filter(|n| *n > 0)
+        .filter(|n| n.to_string() == parts[4])
         .ok_or_else(|| invalid("invalid PR number"))?;
     Ok((parts[0], parts[1], parts[2], number))
 }
@@ -400,9 +401,27 @@ pub fn github(
         "query{{{repository}{{viewerPermission {pull}{{{basic} comments(first:100){{{comment}}} reviews(first:100){{{reviews}}} reviewThreads(first:100){{{threads}}}}}}}}}"
     );
     let response = transport.query(&query)?;
+    let permission = |repository: &Value| {
+        nullable(repository, "viewerPermission", |value, name| {
+            enumeration(
+                value,
+                name,
+                &[
+                    "ADMIN",
+                    "MAINTAIN",
+                    "WRITE",
+                    "TRIAGE_PLUS",
+                    "TRIAGE",
+                    "READ",
+                ],
+            )
+        })
+    };
+    permission(&response["repository"])?;
     let mut p = response["repository"]["pullRequest"].clone();
     if !p.is_object()
         || p["id"].as_str().is_none_or(str::is_empty)
+        || p["url"].as_str() != Some(url)
         || p["url"].as_str().and_then(|url| coordinate(url, true).ok())
             != Some(("github.com", owner, repo, number))
         || !github_revision(&p["headRefOid"])
@@ -509,7 +528,15 @@ pub fn github(
         }
     }
     let rollup = github_checks(transport, &p)?;
-    let fresh = transport.query(&format!("query{{{repository}{{{pull}{{{basic}}}}}}}"))?;
+    let fresh = transport.query(&format!(
+        "query{{{repository}{{viewerPermission {pull}{{{basic}}}}}}}"
+    ))?;
+    permission(&fresh["repository"])?;
+    if fresh["repository"]["viewerPermission"] != response["repository"]["viewerPermission"] {
+        return Err(invalid(
+            "GitHub repository permission moved during collection",
+        ));
+    }
     github_status(&fresh["repository"]["pullRequest"])?;
     for key in [
         "id",
@@ -737,6 +764,7 @@ pub fn forgejo(transport: &mut impl ForgeRest, url: &str, at: &str) -> io::Resul
             .as_str()
             .and_then(|url| coordinate(url, false).ok())
             != Some((host, owner, repo, number))
+        || p["html_url"].as_str() != Some(url)
     {
         return Err(invalid(
             "Forgejo pull identity differs from requested coordinate",

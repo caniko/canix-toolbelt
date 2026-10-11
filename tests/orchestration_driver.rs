@@ -256,15 +256,19 @@ fn malformed_pending_prompt_metadata_fails_before_observation_or_reconciliation(
 #[test]
 fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
     for status in ["queued", "running"] {
-        for tokens in [100, 200_000] {
+        for (tokens, physical_time) in [(100, 1000), (200_000, 1000), (200_000, 3000)] {
             let (manifest, policy, expected, mut state, mut fixture) = setup();
             fixture.recent = vec![
                 json!({"id":"msg_external_compaction","type":"compaction","status":status,"time":{"created":2000}}),
-                assistant("msg_physical", 1000, tokens),
+                assistant("msg_physical", physical_time, tokens),
             ];
             let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
             assert!(observation.occupied["destination"].contains(&1));
             assert!(observation.active["destination"].is_empty());
+            assert_eq!(
+                observation.in_progress_compactions[&1]["id"],
+                "msg_external_compaction"
+            );
             let report = cycle(
                 &manifest,
                 &policy,
@@ -282,8 +286,85 @@ fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
             assert!(state["packets"]["1"]["pendingCompaction"].is_null());
             assert!(state["packets"]["1"]["pending"].is_null());
             assert!(fixture.submissions.is_empty());
+            fixture.recent[0]["status"] = json!("completed");
+            let fresh = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
+            assert!(!fresh.occupied["destination"].contains(&1));
+            assert!(fresh.in_progress_compactions.is_empty());
         }
     }
+}
+
+#[test]
+fn terminal_compactions_cannot_hide_older_native_reservations() {
+    for status in ["queued", "running"] {
+        for terminal in ["completed", "failed"] {
+            for time in [2500, 3500] {
+                for tokens in [100, 200_000] {
+                    let (manifest, policy, expected, mut state, mut fixture) = setup();
+                    fixture.recent = vec![
+                        json!({"id":"msg_terminal","type":"compaction","status":terminal,"time":{"created":time}}),
+                        json!({"id":"msg_external","type":"compaction","status":status,"time":{"created":2000}}),
+                        assistant("msg_physical", 3000, tokens),
+                    ];
+                    let report = cycle(
+                        &manifest,
+                        &policy,
+                        &expected,
+                        &mut state,
+                        &mut fixture,
+                        "now",
+                        0,
+                        true,
+                    )
+                    .unwrap();
+                    assert!(report.errors.is_empty());
+                    assert!(report.occupied["destination"].contains(&1));
+                    assert_eq!(report.in_progress_compactions[&1]["id"], "msg_external");
+                    assert!(report.selected.is_empty());
+                    assert!(fixture.submissions.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reservation_search_exhausts_terminal_pages_and_rejects_unknown_tails() {
+    let page: Vec<_> = (0..64).map(|index| json!({"id":format!("msg_terminal_{index}"),"type":"compaction","status":"completed","time":{"created":2000-index}})).collect();
+    let first = "/api/session/ses_original/message?limit=64&order=desc&type=compaction";
+    let next = "/api/session/ses_original/message?limit=64&type=compaction&cursor=%6F%6C%64%65%72";
+    let (manifest, policy, expected, _, mut fixture) = setup();
+    fixture.recent = vec![assistant("msg_physical", 3000, 100)];
+    fixture
+        .context_pages
+        .insert(first.into(), json!({"data":page,"cursor":{"next":"older"}}));
+    fixture.context_pages.insert(next.into(), json!({"data":[{"id":"msg_old_queued","type":"compaction","status":"queued","time":{"created":1000}}],"cursor":{"next":null}}));
+    let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
+    assert!(observation.occupied["destination"].contains(&1));
+    assert_eq!(
+        observation.in_progress_compactions[&1]["id"],
+        "msg_old_queued"
+    );
+    for incomplete in [
+        json!(page),
+        json!({"data":page}),
+        json!({"data":page,"cursor":{"next":"older"}}),
+    ] {
+        fixture.context_pages.insert(first.into(), incomplete);
+        fixture
+            .context_pages
+            .insert(next.into(), json!({"data":page,"cursor":{"next":"older"}}));
+        assert!(observe(&manifest, &policy, &expected, &mut fixture).is_err());
+    }
+    fixture.context_pages.insert(first.into(), json!({"data":[{"id":"msg_terminal","type":"compaction","status":"completed","time":{"created":2500}},{"id":"msg_queued","type":"compaction","status":"queued","time":{"created":2000}}],"cursor":{"next":null}}));
+    fixture.recent = vec![assistant("msg_physical", 3000, 300_000)];
+    assert!(
+        observe(&manifest, &policy, &expected, &mut fixture)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("context ceiling")
+    );
 }
 
 #[test]

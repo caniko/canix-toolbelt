@@ -614,7 +614,7 @@ fn old_audit_cannot_absorb_edited_feedback_or_a_new_linked_repair() {
         json!({"url":"one","state":"CLOSED","head":"h","comments":[]}),
         &manifest,
     );
-    state["packets"]["1"]["pending"] = json!({"body":{"id":"original","text":"exact"}});
+    state["packets"]["1"]["pending"] = json!({"body":{"id":"original","text":"exact"},"version":"original","goalPolicy":"finish-v1","preparedAt":"2026-10-11T00:00:00Z"});
     state["packets"]["1"]["unrecognized"] = json!("keep");
     let reports = BTreeMap::from([(
         1,
@@ -1624,7 +1624,7 @@ fn legacy_journal_import_cannot_reassign_retained_prs_between_existing_owners() 
 #[test]
 fn legacy_import_requires_complete_owner_bindings_and_retains_exact_pending_work() {
     let manifest = manifest();
-    let pending = json!({"body":{"id":"msg_original","text":"original pending bytes"},"version":"original","preparedAt":"2026-10-11T00:00:00Z"});
+    let pending = json!({"body":{"id":"msg_original","text":"original pending bytes"},"version":"original","goalPolicy":"finish-v1","preparedAt":"2026-10-11T00:00:00Z"});
     let legacy = json!({"prs":{"one":{"url":"one","state":"OPEN"},"two":{"url":"two","state":"OPEN"}},"packets":{"1":{"sessionID":"ses_one","ownerHost":"builder","prs":["one"],"pending":pending,"unrecognizedCheckpoint":{"identity":"retained"}},"2":{"sessionID":"ses_two","ownerHost":"mobile","prs":["two"]}}});
     let mut accepted = legacy.clone();
     refresh(

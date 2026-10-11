@@ -4,6 +4,16 @@ use serde_json::{Value, json};
 use std::io;
 
 struct Graph(Vec<Value>);
+fn fixture_graph(mut responses: Vec<Value>) -> Graph {
+    // Ordinary authenticated fixture responses declare native WRITE permission.
+    // Permission-shape tests below use a raw transport with no fixture defaults.
+    for response in &mut responses {
+        if response["repository"].is_object() {
+            response["repository"]["viewerPermission"] = json!("WRITE");
+        }
+    }
+    Graph(responses)
+}
 impl GraphQl for Graph {
     fn query(&mut self, query: &str) -> io::Result<Value> {
         if query.contains("comments(first:100") {
@@ -36,7 +46,7 @@ fn github_bounds_inline_comments_across_all_threads() {
     let mut p = pull();
     let nodes: Vec<_> = (0..21).map(|thread| json!({"id":format!("thread_{thread}"),"comments":{"totalCount":100,"nodes":(0..100).map(|comment|json!({"id":format!("comment_{thread}_{comment}")})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
     p["reviewThreads"] = json!({"totalCount":21,"nodes":nodes,"pageInfo":{"hasNextPage":false}});
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"pullRequest":p}}),
         json!({"repository":{"pullRequest":p}}),
     ]);
@@ -69,7 +79,7 @@ fn github_request_budget_is_shared_across_nested_connections() {
             if self.calls == 1 {
                 let mut p = pull();
                 p["reviewThreads"] = threads(0, true);
-                return Ok(json!({"repository":{"pullRequest":p}}));
+                return Ok(json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}));
             }
             if query.contains("reviewThreads(first:100,after:") {
                 return Ok(
@@ -81,7 +91,7 @@ fn github_request_budget_is_shared_across_nested_connections() {
                     json!({"node":{"comments":{"totalCount":1,"nodes":[github_comment(&format!("comment_{}",self.calls), "finding")],"pageInfo":{"hasNextPage":false}}}}),
                 )
             } else {
-                Ok(json!({"repository":{"pullRequest":pull()}}))
+                Ok(json!({"repository":{"viewerPermission":"WRITE","pullRequest":pull()}}))
             }
         }
     }
@@ -115,7 +125,7 @@ fn github_rejects_another_pull_identity_before_collecting_its_history() {
         let mut p = pull();
         p["url"] = url;
         let sentinel = json!({"unexpected":"wrong pull history"});
-        let mut transport = Graph(vec![
+        let mut transport = fixture_graph(vec![
             json!({"repository":{"pullRequest":p}}),
             sentinel.clone(),
         ]);
@@ -149,7 +159,7 @@ fn github_revalidates_every_published_status_and_target_field() {
         let p = pull();
         let mut fresh = p.clone();
         fresh[field] = changed;
-        let mut transport = Graph(vec![
+        let mut transport = fixture_graph(vec![
             json!({"repository":{"pullRequest":p}}),
             json!({"repository":{"pullRequest":fresh}}),
         ]);
@@ -215,7 +225,7 @@ fn github_rejects_missing_and_malformed_required_scheduling_fields() {
             } else {
                 p.as_object_mut().unwrap().remove(field);
             }
-            let mut transport = Graph(vec![
+            let mut transport = fixture_graph(vec![
                 json!({"repository":{"pullRequest":p}}),
                 json!({"repository":{"pullRequest":p}}),
             ]);
@@ -289,7 +299,7 @@ fn github_rejects_truncated_history_and_check_nodes() {
                 }
             };
             node.as_object_mut().unwrap().remove(field);
-            let mut transport = Graph(vec![
+            let mut transport = fixture_graph(vec![
                 json!({"repository":{"pullRequest":p}}),
                 json!({"repository":{"pullRequest":p}}),
             ]);
@@ -403,7 +413,7 @@ fn forgejo_rejects_truncated_history_and_status_rows() {
 #[test]
 fn complete_history_keeps_old_comment_bodies_and_uses_live_target() {
     let p = pull();
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
         json!({"repository":{"pullRequest":p}}),
     ]);
@@ -429,7 +439,7 @@ fn complete_history_keeps_old_comment_bodies_and_uses_live_target() {
 fn truncated_history_and_moving_comparison_are_errors() {
     let mut p = pull();
     p["comments"]["totalCount"] = json!(2);
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
     ]);
     assert!(
@@ -445,7 +455,7 @@ fn truncated_history_and_moving_comparison_are_errors() {
     let p = pull();
     let mut moved = p.clone();
     moved["headRefOid"] = json!("next");
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
         json!({"repository":{"pullRequest":moved}}),
     ]);
@@ -466,7 +476,7 @@ fn nested_thread_pagination_retains_outdated_findings_and_detects_cursor_replay(
     let mut p = pull();
     p["reviewThreads"] = json!({"totalCount":1,"nodes":[{"id":"thread","isResolved":false,"isOutdated":true,"path":"src/lib.rs","comments":{"totalCount":1,"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}});
     let next = json!({"node":{"comments":{"totalCount":1,"nodes":[github_comment("old", "outdated finding")],"pageInfo":{"hasNextPage":false,"endCursor":null}}}});
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
         next,
         json!({"repository":{"pullRequest":p}}),
@@ -484,7 +494,7 @@ fn nested_thread_pagination_retains_outdated_findings_and_detects_cursor_replay(
         got["threads"][0]["comments"]["nodes"][0]["body"],
         "outdated finding"
     );
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
         json!({"node":{"comments":{"totalCount":1,"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}}}}),
     ]);
@@ -566,7 +576,7 @@ fn github_requires_counts_on_every_history_and_nested_connection() {
             } else {
                 p[connection]["totalCount"] = count;
             }
-            let mut transport = Graph(vec![json!({"repository":{"pullRequest":p}})]);
+            let mut transport = fixture_graph(vec![json!({"repository":{"pullRequest":p}})]);
             let error = github(
                 &mut transport,
                 "https://github.com/owner/repo/pull/1",
@@ -590,7 +600,7 @@ fn github_requires_unchanged_counts_on_every_following_page() {
         p["comments"]["totalCount"] = json!(2);
         p["comments"]["pageInfo"] = json!({"hasNextPage":true,"endCursor":"older"});
         let next = json!({"repository":{"pullRequest":{"comments":{"totalCount":count,"nodes":[{"id":"second"}],"pageInfo":{"hasNextPage":false}}}}});
-        let mut transport = Graph(vec![json!({"repository":{"pullRequest":p}}), next]);
+        let mut transport = fixture_graph(vec![json!({"repository":{"pullRequest":p}}), next]);
         let error = github(
             &mut transport,
             "https://github.com/owner/repo/pull/1",
@@ -612,7 +622,7 @@ fn github_requires_exactly_one_commit_matching_the_checked_head() {
     ] {
         let mut p = pull();
         p["commits"]["nodes"] = commits;
-        let mut transport = Graph(vec![json!({"repository":{"pullRequest":p}})]);
+        let mut transport = fixture_graph(vec![json!({"repository":{"pullRequest":p}})]);
         let error = github(
             &mut transport,
             "https://github.com/owner/repo/pull/1",
@@ -632,7 +642,7 @@ fn github_rejects_check_changes_without_head_or_feedback_movement() {
     let mut fresh = p.clone();
     fresh["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] =
         json!("FAILURE");
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"pullRequest":p}}),
         json!({"repository":{"pullRequest":fresh}}),
     ]);
@@ -660,7 +670,7 @@ fn github_revalidates_check_contexts_beyond_the_initial_page() {
     changed["node"]["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] = json!("FAILURE");
     for final_page in [last.clone(), changed] {
         let should_pass = final_page == last;
-        let mut transport = Graph(vec![
+        let mut transport = fixture_graph(vec![
             json!({"repository":{"pullRequest":p}}),
             last.clone(),
             json!({"repository":{"pullRequest":p}}),
@@ -1131,7 +1141,7 @@ fn forgejo_requires_a_valid_update_identity_before_collecting_history() {
 fn github_inline_identities_must_be_unique_across_distinct_threads() {
     let mut p = pull();
     p["reviewThreads"] = json!({"totalCount":2,"nodes":[{"id":"thread-one","isResolved":false,"isOutdated":false,"path":"src/lib.rs","comments":{"totalCount":1,"nodes":[github_comment("same-comment", "first finding")],"pageInfo":{"hasNextPage":false}}},{"id":"thread-two","isResolved":false,"isOutdated":false,"path":"src/lib.rs","comments":{"totalCount":1,"nodes":[github_comment("same-comment", "replayed finding")],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}});
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"viewerPermission":"WRITE","pullRequest":p}}),
     ]);
     let error = github(
@@ -1196,7 +1206,7 @@ fn dot_segment_coordinates_are_rejected_before_transport() {
         "https://github.com/owner/../pull/1",
     ] {
         if url.contains("github.com") {
-            let mut transport = Graph(vec![]);
+            let mut transport = fixture_graph(vec![]);
             assert!(
                 github(&mut transport, url, &json!({}), "now", 0)
                     .unwrap_err()
@@ -1237,7 +1247,7 @@ fn github_rejects_invalid_revision_and_update_identities_before_history() {
                 p["commits"]["nodes"][0]["commit"]["oid"] = p["headRefOid"].clone();
             }
             let sentinel = json!({"unexpected":"history fetched before identity validation"});
-            let mut transport = Graph(vec![
+            let mut transport = fixture_graph(vec![
                 json!({"repository":{"pullRequest":p}}),
                 sentinel.clone(),
             ]);
@@ -1274,7 +1284,7 @@ fn github_malformed_check_rollups_return_errors_without_panicking() {
     ] {
         let mut p = pull();
         p["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = malformed;
-        let mut transport = Graph(vec![json!({"repository":{"pullRequest":p}})]);
+        let mut transport = fixture_graph(vec![json!({"repository":{"pullRequest":p}})]);
         let error = github(
             &mut transport,
             "https://github.com/owner/repo/pull/1",
@@ -1366,7 +1376,7 @@ fn github_preserves_explicit_native_nulls_and_pending_checks() {
         &mut p["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"][0];
     check["status"] = json!("QUEUED");
     check["conclusion"] = Value::Null;
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"pullRequest":p}}),
         json!({"repository":{"pullRequest":p}}),
     ]);
@@ -1433,11 +1443,25 @@ fn github_permission_requires_native_shape_and_final_consistency() {
         .is_err(),
         "published stale write permission"
     );
+    // GitHub Apps legitimately receive an explicit native null permission.
+    let mut transport = NativeGraph(vec![
+        json!({"repository":{"viewerPermission":null,"pullRequest":p}}),
+        json!({"repository":{"viewerPermission":null,"pullRequest":p}}),
+    ]);
+    let snapshot = github(
+        &mut transport,
+        "https://github.com/owner/repo/pull/1",
+        &json!({}),
+        "now",
+        0,
+    )
+    .unwrap();
+    assert!(snapshot["viewerPermission"].is_null());
 }
 
 #[test]
 fn provider_specific_pull_segments_reject_aliases_before_transport() {
-    let mut transport = Graph(vec![
+    let mut transport = fixture_graph(vec![
         json!({"repository":{"pullRequest":complete_pull()}}),
         json!({"repository":{"pullRequest":complete_pull()}}),
     ]);
@@ -1463,6 +1487,30 @@ fn provider_specific_pull_segments_reject_aliases_before_transport() {
         .is_err()
     );
     assert_eq!(transport.0.len(), original);
+    for url in [
+        "https://github.com/owner/repo/pull/01",
+        "https://github.com/owner/repo/pull/+1",
+        "https://codefloe.com/owner/repo/pulls/01",
+        "https://codefloe.com/owner/repo/pulls/+1",
+    ] {
+        if url.contains("github.com") {
+            let mut transport = fixture_graph(vec![]);
+            assert!(
+                github(&mut transport, url, &json!({}), "now", 0)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("PR number")
+            );
+        } else {
+            let mut transport = forge_script(vec![]);
+            assert!(
+                forgejo(&mut transport, url, "now")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("PR number")
+            );
+        }
+    }
 }
 
 #[test]
@@ -1483,7 +1531,7 @@ fn github_rejects_malformed_present_history_fields() {
     ] {
         let mut p = complete_pull();
         *p.pointer_mut(pointer).unwrap() = json!({});
-        let mut transport = Graph(vec![
+        let mut transport = fixture_graph(vec![
             json!({"repository":{"pullRequest":p}}),
             json!({"repository":{"pullRequest":p}}),
         ]);
