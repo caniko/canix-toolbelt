@@ -364,6 +364,11 @@ fn observe_fenced(
             "complete retained session expectations are required",
         ));
     }
+    let registered: BTreeSet<_> = manifest
+        .packets
+        .iter()
+        .map(|packet| packet.session_id.as_str())
+        .collect();
     let mut raw = BTreeMap::new();
     for host in policy.max_active_per_host.keys() {
         let data = adapter
@@ -372,6 +377,16 @@ fn observe_fenced(
         if !data.is_object() {
             return Err(invalid(format!(
                 "incomplete activity observation on {host}"
+            )));
+        }
+        if data
+            .as_object()
+            .expect("validated activity map")
+            .keys()
+            .any(|session| !registered.contains(session.as_str()))
+        {
+            return Err(invalid(format!(
+                "unregistered active session on {host}; host capacity is unknown"
             )));
         }
         raw.insert(host.clone(), data);

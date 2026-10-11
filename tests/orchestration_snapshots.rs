@@ -561,9 +561,9 @@ impl ForgeRest for Forge {
         }
         if path.contains("/status?") {
             return Ok(native(if path.ends_with("page=1") {
-                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"success","total_count":101,"statuses":(0..100).map(forge_check).collect::<Vec<_>>()})
+                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"success","total_count":101,"statuses":(1..=100).map(forge_check).collect::<Vec<_>>()})
             } else {
-                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":if self.inconsistent { "failure" } else { "success" },"total_count":101,"statuses":[forge_check(100)]})
+                json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":if self.inconsistent { "failure" } else { "success" },"total_count":101,"statuses":[forge_check(101)]})
             }));
         }
         Ok(ForgeResponse {
@@ -1053,6 +1053,24 @@ fn forgejo_rejects_final_identity_substitution_without_other_movement() {
 
 fn forge_status() -> Value {
     json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"success","total_count":1,"statuses":[forge_check(1)]})
+}
+
+#[test]
+fn forgejo_rejects_zero_native_check_context_id_before_publication() {
+    for final_page in [false, true] {
+        let mut transport = forge_review(forge_review_row(1, 1), json!([forge_inline(1, 1)]));
+        transport.0[6].1["statuses"][0]["id"] = json!(0);
+        if !final_page {
+            transport.0[4].1["statuses"][0]["id"] = json!(0);
+        }
+        let error = forgejo(
+            &mut transport,
+            "https://codefloe.com/owner/repo/pulls/1",
+            "now",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("forge check context"), "{error}");
+    }
 }
 
 fn forge_check(id: u64) -> Value {

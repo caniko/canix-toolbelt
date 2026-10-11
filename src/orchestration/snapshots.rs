@@ -736,10 +736,11 @@ fn forge_checks(
         statuses.extend(rows.iter().cloned());
     }
     let mut ids = BTreeSet::new();
-    if statuses
-        .iter()
-        .any(|status| !status["id"].as_u64().is_some_and(|id| ids.insert(id)))
-    {
+    if statuses.iter().any(|status| {
+        !status["id"]
+            .as_u64()
+            .is_some_and(|id| id > 0 && ids.insert(id))
+    }) {
         return Err(invalid("missing or repeated forge check context"));
     }
     for status in &statuses {

@@ -777,6 +777,12 @@ impl Mirror {
             return Err(invalid("evidence mirror root must be private (mode 0700)"));
         }
         root.try_lock_exclusive()?;
+        if checkout(&root)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                CheckoutTraversal,
+            ));
+        }
         Ok(Self { root })
     }
 
@@ -1001,6 +1007,12 @@ fn apply_locked_with(
     batch: &Batch,
     sync: &mut impl FnMut(&File) -> io::Result<()>,
 ) -> io::Result<Receipt> {
+    if checkout(root)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            CheckoutTraversal,
+        ));
+    }
     bounded_encoding(batch)?;
     if batch
         .exchange_id

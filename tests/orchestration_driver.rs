@@ -361,6 +361,36 @@ fn malformed_pending_prompt_metadata_fails_before_observation_or_reconciliation(
 }
 
 #[test]
+fn unregistered_active_sessions_cannot_release_campaign_capacity() {
+    for host in ["source", "destination"] {
+        let (manifest, policy, expected, mut state, mut fixture) = setup();
+        fixture
+            .hosts
+            .insert(host.into(), json!({"ses_unregistered":{}}));
+        let original = state.clone();
+        let error = cycle(
+            &manifest,
+            &policy,
+            &expected,
+            &mut state,
+            &mut fixture,
+            "now",
+            0,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("unregistered active session"),
+            "{error}"
+        );
+        assert_eq!(state, original);
+        assert_eq!(fixture.saved, original);
+        assert!(fixture.submissions.is_empty());
+        assert!(!fixture.fence_held.get());
+    }
+}
+
+#[test]
 fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
     for status in ["queued", "running"] {
         for (tokens, physical_time) in [(100, 1000), (200_000, 1000), (200_000, 3000)] {

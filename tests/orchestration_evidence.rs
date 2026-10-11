@@ -983,6 +983,32 @@ fn mirror_rejects_public_or_symlink_roots_before_any_mutation() {
 }
 
 #[test]
+fn mirror_rejects_checkout_roots_before_leasing_or_applying() {
+    use std::os::unix::fs::symlink;
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("handoff"), b"incoming").unwrap();
+    let allowed = vec![PathBuf::from("handoff")];
+    let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
+    for marker in ["directory", "file", "symlink"] {
+        let target = mirror_dir();
+        let mut mirror = Mirror::acquire(target.path()).unwrap();
+        let git = target.path().join(".git");
+        match marker {
+            "directory" => fs::create_dir(&git).unwrap(),
+            "file" => fs::write(&git, b"gitdir: elsewhere").unwrap(),
+            _ => symlink("absent-git-directory", &git).unwrap(),
+        }
+        assert!(mirror.apply(&allowed, &batch).is_err());
+        assert!(!target.path().join("handoff").exists());
+        drop(mirror);
+        assert!(Mirror::acquire(target.path()).is_err());
+        assert!(apply(target.path(), &allowed, &batch).is_err());
+        assert!(!target.path().join("handoff").exists());
+        assert!(fs::symlink_metadata(git).is_ok());
+    }
+}
+
+#[test]
 fn empty_allowlist_roots_never_grant_receiver_wide_mutation_scope() {
     let source = tempfile::tempdir().unwrap();
     let target = mirror_dir();
