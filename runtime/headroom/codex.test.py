@@ -51,7 +51,20 @@ env_key = "EXISTING_TOKEN"
         self.assertTrue(any(arg.startswith("model_providers.local.base_url=") for arg in arguments))
         self.assertFalse(any(arg.startswith("model_provider=") for arg in arguments))
         self.assertIn("http://127.0.0.1:8014/v1", env.values())
+        self.assertEqual(env["HEADROOM_CODEX_UPSTREAM_PATH"], "/responses")
         self.assertEqual(arguments[-4:], ["--profile", "local", "exec", "synthetic prompt"])
+
+    def test_custom_provider_transport_is_preserved(self):
+        for setting in ["", "supports_websockets = false", "supports_websockets = true"]:
+            with self.subTest(setting=setting):
+                arguments, _ = self.exercise(f'''
+model_provider = "local"
+[model_providers.local]
+name = "Existing provider"
+base_url = "http://127.0.0.1:8014/v1"
+{setting}
+''', ["exec", "synthetic prompt"])
+                self.assertFalse(any(arg.startswith("model_providers.local.supports_websockets=") for arg in arguments))
 
 
 if __name__ == "__main__":

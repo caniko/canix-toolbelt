@@ -22,6 +22,9 @@ It preserves provider IDs, custom-provider URLs and `CODEX_HOME`, and execs
 `codex.package` with process-local overrides. This selects Codex embedded
 session mode; it does not install, retag sessions, rewrite user configuration
 or manage the shared Codex background server. Fleetix owns MCP configuration.
+Use Infernix's patched 0.40.0 package: the original upstream wheel forces custom
+providers onto WebSockets and ignores their selected upstream on that path.
+The patched adapter preserves transport settings and exact API prefixes.
 
 `claude.enable` and `claude.endpoint` set `ANTHROPIC_BASE_URL` while retaining
 the user's authentication token and existing Infernix Claude wrapper. Point
