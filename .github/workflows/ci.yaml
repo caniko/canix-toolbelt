@@ -179,7 +179,7 @@ jobs:
           git config --global --add url.https://github.com/.insteadOf git@github.com:
 
       - name: Required gate generated-parity
-        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/0d917f8cbbf99bf271006a0cf6f590c34aa828bc -- init ci --platform github --ci-provider actions --runtime nix --check --diff
+        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
 
   gate-supported-systems:
     runs-on: ubuntu-24.04

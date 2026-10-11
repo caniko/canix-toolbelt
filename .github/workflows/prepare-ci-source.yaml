@@ -10,6 +10,7 @@ on:
       - .github/workflows/nix-builds.yaml
       - .github/workflows/pages.yaml
       - .github/workflows/publish-crate.yaml
+      - .github/workflows/trusted-publish-crate.yaml
 
 permissions:
   contents: read
@@ -31,7 +32,7 @@ jobs:
       - name: Render through the declared immutable generator
         env:
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
-          GENERATOR_REF: github:caniko/simit/0d917f8cbbf99bf271006a0cf6f590c34aa828bc
+          GENERATOR_REF: github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2
           # Hosted generation uses the committed public trust root, just as the
           # pinned generator supports for environments without a local GPG key.
           SIMIT_MAINTAINERS_GPG: ${{ github.workspace }}/keys/maintainers.gpg
@@ -56,7 +57,7 @@ jobs:
           # both outputs so a clean consumer imports the complete generated patch.
           git diff --binary -- .github/workflows README.md > "$EVIDENCE/generated-ci.patch"
           cp README.md "$EVIDENCE/README.md"
-          cp .github/workflows/ci.yaml .github/workflows/nix-builds.yaml .github/workflows/pages.yaml .github/workflows/publish-crate.yaml "$EVIDENCE/workflows/"
+          cp .github/workflows/ci.yaml .github/workflows/nix-builds.yaml .github/workflows/pages.yaml .github/workflows/publish-crate.yaml .github/workflows/trusted-publish-crate.yaml "$EVIDENCE/workflows/"
       - name: Seal source preparation evidence
         if: always()
         env:
