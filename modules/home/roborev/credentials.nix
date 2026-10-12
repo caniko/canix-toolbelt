@@ -50,8 +50,8 @@ in [
     message = "ci.github_app_private_key must be a runtime file path or environment reference.";
   }
   {
-    assertion = embedding == "" || (builtins.isAttrs embedding && (embeddingSource.value or "") == "" && ((envName != "" && keyFile == "" && builtins.match "[A-Za-z_][A-Za-z0-9_]*" envName != null) || (envName == "" && keyFile != "" && runtimeSecretPath keyFile)));
-    message = "search.embeddings.api_key requires exactly one env name or runtime file path; literal credentials require runtimeConfigFile.";
+    assertion = embedding == "" || (builtins.isAttrs embedding && (embeddingSource.value or "") == "" && ((envName == "" && keyFile == "") || (envName != "" && keyFile == "" && builtins.match "[A-Za-z_][A-Za-z0-9_]*" envName != null) || (envName == "" && keyFile != "" && runtimeSecretPath keyFile)));
+    message = "search.embeddings.api_key must be unset or name exactly one env/runtime file source; literal credentials require runtimeConfigFile.";
   }
   {
     assertion = (postgresPassword == null || postgresPassword == "") && builtins.match ".*[?&]password=[^&]+.*" (withoutReferences postgres) == null && builtins.all validReference postgresReferences;

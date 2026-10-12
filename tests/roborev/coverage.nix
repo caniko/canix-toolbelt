@@ -186,4 +186,5 @@ in {
     };
   });
   C38_runtime_self_link = reject {programs.roborev.runtimeConfigFile = "/home/roborev-fixture/.roborev/config.toml";};
+  C39_empty_embedding_reference = accepted (configure {programs.roborev.settings.search.embeddings.api_key = {};});
 }
