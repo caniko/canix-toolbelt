@@ -20,9 +20,10 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         installable:
+          - ".#checks.x86_64-linux.direct-network-transitions"
           - ".#canix-toolbelt-pinentry"
           - ".#rage-pinentry"
           - ".#checks.x86_64-linux.pinentry-home-eval"
@@ -31,7 +32,6 @@ jobs:
           - ".#canix-toolbelt-direct-network"
           - ".#checks.x86_64-linux.direct-network-eval"
           - ".#checks.x86_64-linux.executor-admission-eval"
-          - ".#checks.x86_64-linux.direct-network-transitions"
           - ".#checks.x86_64-linux.build-train-eval"
           - ".#checks.x86_64-linux.build-train-policy"
           - ".#canix-toolbelt-roborev-worker"

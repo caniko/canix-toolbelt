@@ -5,6 +5,8 @@ runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
+  # Queue the kernel/systemd regression gate before the expensive pinentry family.
+  ".#checks.x86_64-linux.direct-network-transitions",
   ".#canix-toolbelt-pinentry",
   ".#rage-pinentry",
   ".#checks.x86_64-linux.pinentry-home-eval",
@@ -13,7 +15,6 @@ nix_builds = [
   ".#canix-toolbelt-direct-network",
   ".#checks.x86_64-linux.direct-network-eval",
   ".#checks.x86_64-linux.executor-admission-eval",
-  ".#checks.x86_64-linux.direct-network-transitions",
   ".#checks.x86_64-linux.build-train-eval",
   ".#checks.x86_64-linux.build-train-policy",
   ".#canix-toolbelt-roborev-worker",
@@ -86,7 +87,8 @@ fi
 
 [ci.nix_build]
 separate_events = true
-max_parallel = 2
+# Separate hosted runners provide concurrency without increasing per-runner load.
+max_parallel = 4
 max_jobs = 1
 cores = 2
 timeout_minutes = 40
