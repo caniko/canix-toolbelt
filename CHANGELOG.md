@@ -5,6 +5,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep disposable foreign DNS peers alive through both service-start refusal
+  checks, with bounded lifetime and active-peer assertions before cleanup.
+
 ## [0.5.0] - 2026-10-11
 
 ### Changed
