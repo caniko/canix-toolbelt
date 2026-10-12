@@ -236,3 +236,52 @@ fn multipath_routes_retain_every_eligible_weighted_nexthop_and_reject_mixed_vpn_
     assert_eq!(selected["nexthops"][1]["weight"], 3);
     assert_eq!(selected["metric"], 42);
 }
+
+#[test]
+fn rejects_oversized_link_snapshots_before_selecting_routes() {
+    let link = serde_json::json!({"ifname":"wg-home","linkinfo":{"info_kind":"wireguard"}});
+    let routes = serde_json::json!([{"dst":"default","dev":"wg-home"}]);
+    let at_limit = serde_json::Value::Array(vec![link.clone(); 4096]);
+    assert_eq!(
+        select_routes(&policy(), &at_limit, &routes).unwrap().len(),
+        1
+    );
+    let oversized = serde_json::Value::Array(vec![link; 4097]);
+    assert!(select_routes(&policy(), &oversized, &routes).is_err());
+}
+
+#[test]
+fn rejects_non_array_link_snapshots_instead_of_accepting_empty_topology() {
+    assert!(select_routes(&policy(), &serde_json::json!({}), &serde_json::json!([])).is_err());
+}
+
+#[test]
+fn multipath_kernel_status_flags_do_not_discard_the_route_or_authored_onlink() {
+    let links = serde_json::json!([
+        {"ifname":"enp1s0","link_type":"ether"},
+        {"ifname":"enp2s0","link_type":"ether"}
+    ]);
+    for status in [
+        "dead",
+        "linkdown",
+        "unresolved",
+        "offload",
+        "trap",
+        "notify",
+        "rt_offload",
+        "rt_trap",
+        "rt_offload_failed",
+    ] {
+        let routes = serde_json::json!([{"dst":"default","nexthops":[
+            {"dev":"enp1s0","gateway":"192.0.2.1","weight":2,"flags":[status,"onlink"]},
+            {"dev":"enp2s0","gateway":"198.51.100.1","weight":3,"flags":[]}
+        ]}]);
+        let selected = select_routes(&policy(), &links, &routes).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].nexthops.len(), 2);
+        assert_eq!(selected[0].nexthops[0].weight, 2);
+        assert!(selected[0].nexthops[0].onlink);
+        assert_eq!(selected[0].nexthops[1].weight, 3);
+        assert!(!selected[0].nexthops[1].onlink);
+    }
+}

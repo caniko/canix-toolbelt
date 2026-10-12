@@ -229,6 +229,25 @@ try:
                 raise
 
         verify('before')
+        # Real kernel linkdown status must not block reconciliation or destroy
+        # weighted siblings. The live application path is a different prefix.
+        # The already enrolled uplink2 has its peer down, producing linkdown.
+        for family, destination, gateway in [('-4', '192.0.2.0/24', '198.18.0.2'),
+                                             ('-6', '2001:db8:99::/64', 'fe80::99')]:
+            run('ip', family, 'route', 'add', destination, 'metric', '43',
+                'nexthop', 'via', gateway, 'dev', 'uplink', 'weight', '2', 'onlink',
+                'nexthop', 'via', gateway, 'dev', 'uplink2', 'weight', '3', 'onlink')
+        for family, destination in [('-4', '192.0.2.0/24'), ('-6', '2001:db8:99::/64')]:
+            main = next(route for route in json.loads(run('ip', family, '-j', 'route', 'show', 'table', 'main')) if route.get('dst') == destination)
+            assert 'linkdown' in main['nexthops'][1]['flags'], main
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+            table = next(str(rule['table']) for rule in json.loads(run('ip', family, '-j', 'rule', 'show')) if rule['priority'] == 50)
+            copied = next(route for route in json.loads(run('ip', family, '-j', 'route', 'show', 'table', table)) if route.get('dst') == destination)
+            assert [(hop['dev'], hop['weight']) for hop in copied['nexthops']] == [('uplink', 2), ('uplink2', 3)], copied
+            assert all('onlink' in hop['flags'] for hop in copied['nexthops']), copied
+            run('ip', family, 'route', 'del', destination, 'metric', '43')
+        verify('multipath-linkdown')
+        print('PASS: production daemon accepts real IPv4/IPv6 ECMP linkdown status and preserves weights/onlink')
         for transition in ('kill-switch', 'reconnect', 'server-change'):
             run('ip', 'link', 'add', 'pvpnksintrf0', 'type', 'dummy')
             run('ip', 'addr', 'add', '100.85.0.1/24', 'dev', 'pvpnksintrf0')

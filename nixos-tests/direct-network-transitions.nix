@@ -44,15 +44,17 @@ in
       canix-toolbelt.networking.directNetwork = {
         enable = true;
         inherit package;
-        directInterfaces = ["uplink" "wg-home"];
+        directInterfaces = ["uplink" "wg-home" "ecmp-status"];
         networkManagerDns = false;
         dnsServers = ["198.18.0.2"];
         dnsZones."vpn.example.test" = "10.123.0.1";
         users.operator = {
           services.backend = "app-amc.slice";
+          services.late-start = "app-amc.slice";
           slices = ["agent-tools.slice"];
         };
         systemServices.backup = "canix-background.slice";
+        systemServices.late-start = "canix-background.slice";
       };
       home-manager.users.operator = {
         home.stateVersion = "24.11";
@@ -74,6 +76,17 @@ in
         ExecStart = "${python} ${fixture} probe /home/operator/system-probe.json";
       };
       systemd.timers.backup.timerConfig.OnActiveSec = "1s";
+      # Nobody has no readiness UID enrollment. Its narrow privileged pre-start
+      # client must gate the payload without widening normal user authorization.
+      systemd.services.late-start.serviceConfig = {
+        Type = "oneshot";
+        User = "nobody";
+        ExecStart = "${pkgs.coreutils}/bin/touch /tmp/direct-network-late-system";
+      };
+      home-manager.users.operator.systemd.user.services.late-start.Service = {
+        Type = "oneshot";
+        ExecStart = "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user";
+      };
       systemd.services.network-fixture = {
         path = [pkgs.iproute2 pkgs.wireguard-tools];
         serviceConfig.ExecStart = "${python} ${fixture} setup ${pkgs.dnsmasq}/bin/dnsmasq";

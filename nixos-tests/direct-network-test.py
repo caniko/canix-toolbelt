@@ -145,6 +145,21 @@ for family, destination, first, second in [
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 check_direct()
 
+# Kernel ECMP link-state flags must reconcile while the usable path and all
+# established application traffic stay intact.
+machine.succeed('ip link add ecmp-status type dummy')
+machine.succeed('ip link set ecmp-status up')
+for family, destination, gateway in [('-4', '192.0.2.0/24', '198.18.0.2'),
+                                     ('-6', '2001:db8:99::/64', 'fe80::1')]:
+    machine.succeed(f'ip {family} route add {destination} metric 43 nexthop via {gateway} dev uplink weight 2 onlink nexthop via {gateway} dev ecmp-status weight 3 onlink')
+machine.succeed('ip link set ecmp-status down')
+for family, destination in [('-4', '192.0.2.0/24'), ('-6', '2001:db8:99::/64')]:
+    machine.succeed(f'ip {family} -j route show table main | @PYTHON@ -c \'import json,sys; r=next(r for r in json.load(sys.stdin) if r.get("dst")=="{destination}"); assert "linkdown" in r["nexthops"][1]["flags"]\'')
+    machine.wait_until_succeeds(f'ip {family} -j route show table all | @PYTHON@ -c \'import json,sys; r=[r for r in json.load(sys.stdin) if str(r.get("table")) in ["51821","51822"] and r.get("dst")=="{destination}"]; assert r and all([(h["dev"],h["weight"]) for h in x["nexthops"]]==[("uplink",2),("ecmp-status",3)] for x in r)\'')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+check_direct()
+machine.succeed('ip link del ecmp-status')
+
 # Silent, unauthorized sockets cannot hold the privileged routing loop hostage.
 machine.succeed('systemd-run --unit=silent-peers --property=User=nobody @PYTHON@ @NEGATIVE@ silent-peers --seconds 30 --marker /tmp/silent-peers-ready')
 machine.wait_for_file('/tmp/silent-peers-ready')
@@ -170,6 +185,18 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
     status, output = machine.execute(user + 'canix-toolbelt-direct-network launch --systemctl /run/current-system/sw/bin/systemctl --unit direct-network-agent-tools.service -- /run/current-system/sw/bin/echo must-not-launch 2>&1')
     assert status == 1 and 'direct-network: ' in output and 'direct-network user anchors failed' not in output and 'must-not-launch' not in output, output
     machine.succeed(userctl + 'is-active direct-network-agent-tools.service')
+    if mode == 'tcp':
+        # Persistent anchors stay alive, but cannot admit a new service payload
+        # after the native resolver disappears. Cover both managers and a
+        # system service UID that has no direct readiness authorization.
+        machine.succeed('systemctl is-active direct-network-canix-background-direct.service')
+        machine.succeed(userctl + 'is-active direct-network-app-amc-direct.service')
+        machine.fail('systemctl start late-start.service')
+        machine.fail(userctl + 'start late-start.service')
+        machine.succeed('test ! -e /tmp/direct-network-late-system')
+        machine.succeed('test ! -e /home/operator/direct-network-late-user')
+        machine.succeed('systemctl reset-failed late-start.service')
+        machine.succeed(userctl + 'reset-failed late-start.service')
     machine.succeed('systemctl stop foreign-dns.service')
     # Successful transient services are unloaded after stop. Wait for their
     # removal before reusing the name; reset-failed requires a loaded unit.
@@ -179,6 +206,10 @@ machine.succeed('systemctl start direct-network-dns.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 resume_dns_admission_probes(negative_counter)
 check_direct()
+machine.succeed('systemctl start late-start.service')
+machine.succeed(userctl + 'start late-start.service')
+machine.succeed('test -e /tmp/direct-network-late-system')
+machine.succeed('test -e /home/operator/direct-network-late-user')
 
 # Even a fully enrolled live resolver cannot hide a competing connected UDP
 # socket at an exact endpoint. Both address families must deny normal admission.

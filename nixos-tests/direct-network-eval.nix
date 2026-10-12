@@ -17,6 +17,7 @@
           systemd.services.backup.serviceConfig = {
             User = "operator";
             ExecStart = "${pkgs.coreutils}/bin/true";
+            ExecStartPre = ["${pkgs.coreutils}/bin/true"];
             Slice = "canix-background.slice";
             MemoryMax = "1G";
           };
@@ -24,6 +25,7 @@
             home.stateVersion = "24.11";
             systemd.user.services.backend.Service = {
               ExecStart = "${pkgs.coreutils}/bin/true";
+              ExecStartPre = ["${pkgs.coreutils}/bin/true"];
               Slice = "app-amc.slice";
               MemoryMax = "2G";
             };
@@ -56,9 +58,11 @@ in
   assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";
+  assert config.systemd.services.backup.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
   assert config.systemd.slices.canix-background.sliceConfig.MemoryMax == "4G";
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
+  assert home.systemd.user.services.backend.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
   assert home.systemd.user.slices.app-amc.Slice.MemoryMax == "3G";
   assert home.systemd.user.slices.app-amc-direct.Unit.Description != "";
   assert builtins.elem "direct-network-agent-tools.service" home.systemd.user.services.backend.Unit.Requires;

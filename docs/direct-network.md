@@ -14,10 +14,15 @@ interface can back an eligible bridge or VLAN.
 Same-namespace VLAN parents come from iproute2's named `link` field. A foreign
 namespace's `link_index` cannot establish eligibility through a matching local
 interface index.
+Non-array or oversized link snapshots (more than 4096 interfaces) reject
+reconciliation and readiness before any route, nftables or DNS update.
 
 Multipath routes retain every eligible nexthop, its weight, order and on-link
 flag. A route containing an ineligible nexthop is omitted as a whole. The daemon
 does not silently rewrite a producer's forwarding policy by removing members.
+Kernel-derived nexthop status flags, including `linkdown`, are accepted without
+being replayed as authored flags. The kernel derives current reachability and
+offload state from the actual devices; authored `onlink` remains preserved.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
@@ -97,3 +102,8 @@ cgroup reconciliation. Normal readiness still requires authenticated listeners
 and a current reload-dispatch receipt. Anchors want and order after DNS but use
 their readiness precheck for admission, preserving running workloads across
 resolver lifetime changes.
+Every configured system and Home Manager service also checks normal readiness
+on each start, before its existing pre-start commands. An already-active anchor
+cannot admit new workloads while DNS is unavailable. System-manager prechecks
+run only the narrow readiness client with systemd's `+` prefix so service UIDs
+need no additional user authorization. Established workloads remain running.

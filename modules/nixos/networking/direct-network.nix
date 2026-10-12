@@ -70,7 +70,10 @@
             Requires = map (slice: "${anchor slice}.service") (userSlices user);
             After = map (slice: "${anchor slice}.service") (userSlices user);
           };
-          Service.Slice = lib.mkForce (serviceSlice user.slices parent);
+          Service = {
+            Slice = lib.mkForce (serviceSlice user.slices parent);
+            ExecStartPre = lib.mkBefore [ready];
+          };
         })
         user.services)
     ];
@@ -243,7 +246,14 @@ in {
         (lib.mapAttrs (_: parent: {
             requires = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             after = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
-            serviceConfig.Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
+            serviceConfig = {
+              Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
+              # Active anchors retain established workloads across DNS failure.
+              # Every new start still needs its own admission barrier. The narrow
+              # readiness client runs as root even when User is not enrolled; it
+              # cannot mutate the daemon's policy.
+              ExecStartPre = lib.mkBefore ["+${ready}"];
+            };
           })
           cfg.systemServices)
       ];

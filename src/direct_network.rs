@@ -165,10 +165,11 @@ pub struct NextHop {
     pub onlink: bool,
 }
 
-fn direct_devices(policy: &Policy, links: &Value) -> BTreeSet<String> {
-    let Some(links) = links.as_array().filter(|links| links.len() <= 4096) else {
-        return BTreeSet::new();
-    };
+fn direct_devices(policy: &Policy, links: &Value) -> Result<BTreeSet<String>> {
+    let links = links
+        .as_array()
+        .filter(|links| links.len() <= 4096)
+        .ok_or_else(|| invalid("invalid or oversized link snapshot"))?;
     let mut devices = links
         .iter()
         .filter_map(|link| {
@@ -212,12 +213,12 @@ fn direct_devices(policy: &Policy, links: &Value) -> BTreeSet<String> {
             break;
         }
     }
-    devices
+    Ok(devices)
 }
 
 /// Select direct routes, rejecting VPN/dummy/container interfaces and malformed data.
 pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<Vec<Route>> {
-    let devices = direct_devices(policy, links);
+    let devices = direct_devices(policy, links)?;
     let mut selected = Vec::new();
     for route in routes
         .as_array()
@@ -253,12 +254,31 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
                         return Err(invalid("invalid multipath gateway"));
                     }
                     if hop.get("flags").is_some_and(|flags| {
-                        !flags
-                            .as_array()
-                            .is_some_and(|flags| flags.iter().all(|flag| flag == "onlink"))
+                        !flags.as_array().is_some_and(|flags| {
+                            flags.iter().all(|flag| {
+                                matches!(
+                                    flag.as_str(),
+                                    Some(
+                                        "onlink"
+                                            | "dead"
+                                            | "linkdown"
+                                            | "unresolved"
+                                            | "offload"
+                                            | "trap"
+                                            | "notify"
+                                            | "rt_offload"
+                                            | "rt_trap"
+                                            | "rt_offload_failed"
+                                    )
+                                )
+                            })
+                        })
                     }) {
                         return Err(invalid("unsupported multipath flags"));
                     }
+                    // iproute2 print_rt_flags includes kernel-derived status.
+                    // Replay only authored onlink; the kernel determines live
+                    // reachability/offload from the actual destination devices.
                     Ok(NextHop {
                         device: hop["dev"]
                             .as_str()
@@ -876,7 +896,7 @@ fn sync_dns_servers_with(
 
 fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
     let links = json(&policy.ip, &["-j", "-d", "link", "show"])?;
-    let devices = direct_devices(policy, &links);
+    let devices = direct_devices(policy, &links)?;
     let v4 = select_routes(
         policy,
         &links,
