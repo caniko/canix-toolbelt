@@ -171,7 +171,9 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
     assert status == 1 and 'direct-network: ' in output and 'direct-network user anchors failed' not in output and 'must-not-launch' not in output, output
     machine.succeed(userctl + 'is-active direct-network-agent-tools.service')
     machine.succeed('systemctl stop foreign-dns.service')
-    machine.succeed('systemctl reset-failed foreign-dns.service')
+    # Successful transient services are unloaded after stop. Wait for their
+    # removal before reusing the name; reset-failed requires a loaded unit.
+    machine.wait_until_succeeds('test "$(systemctl show foreign-dns.service -p LoadState --value)" = not-found')
     assert machine.succeed(userctl + 'show backend.service -p MainPID --value').strip() == pid
 machine.succeed('systemctl start direct-network-dns.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
@@ -193,7 +195,7 @@ for mode in ['connected-v4', 'connected-v6', 'mapped-connected']:
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
     machine.succeed('systemctl stop foreign-dns.service')
-    machine.succeed('systemctl reset-failed foreign-dns.service')
+    machine.wait_until_succeeds('test "$(systemctl show foreign-dns.service -p LoadState --value)" = not-found')
     machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
     check_direct()
 
