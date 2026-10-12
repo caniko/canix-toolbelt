@@ -146,7 +146,10 @@ in
   assert !(config.systemd.units ? "direct-network-admission-rooted.service");
   assert !(config.systemd.units ? "direct-network-admission-imaged.service");
   assert !(config.environment.etc ? "systemd/system/backup.service.d/50-direct-network-rooted-admission.conf");
-  assert config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source == config.environment.etc."systemd/system/imaged.service.d/50-direct-network-rooted-admission.conf".source;
+  # The native manager owns the complete systemd/system tree. Nested etc
+  # entries attempt to mkdir through its immutable generated directory symlink.
+  assert !(config.environment.etc ? "systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf");
+  assert !(config.environment.etc ? "systemd/system/imaged.service.d/50-direct-network-rooted-admission.conf");
   assert config.systemd.slices.canix-background.sliceConfig.MemoryMax == "4G";
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
@@ -163,7 +166,6 @@ in
   assert home.systemd.user.services.rooted.Service.MemoryMax == "64M";
   assert home.systemd.user.services.rooted.Service.Restart == "on-failure";
   assert !(home.xdg.configFile ? "systemd/user/backend.service.d/50-direct-network-rooted-admission.conf");
-  assert home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source == config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source;
   assert home.xdg.configFile."systemd/user/imaged.service.d/50-direct-network-rooted-admission.conf".source == home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source;
   assert home.systemd.user.services.desktop.Service.ExecStartPre == "${pkgs.coreutils}/bin/true";
   assert home.systemd.user.slices.app-amc.Slice.MemoryMax == "3G";
@@ -176,7 +178,14 @@ in
   assert policy.allowedUsers == [1000];
   assert config.system.nssDatabases.hosts == ["files" "mymachines" "myhostname" "dns"];
     pkgs.runCommand "direct-network-eval" {} ''
-      dropin=${config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source}
+      # Realise final /etc construction, not only the standalone drop-in file.
+      units=${config.system.build.etc}/etc/systemd/system
+      dropin="$units/rooted.service.d/50-direct-network-rooted-admission.conf"
+      cmp "$dropin" "$units/imaged.service.d/50-direct-network-rooted-admission.conf"
+      cmp "$dropin" ${home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source}
+      test -e "$units/rooted.service"
+      test -e "$units/imaged.service"
+      test ! -e "$units/backup.service.d/50-direct-network-rooted-admission.conf"
       grep -Fx '[Service]' "$dropin"
       grep -Fx 'BindReadOnlyPaths=/run/direct-network' "$dropin"
       ! grep -Fx 'BindReadOnlyPaths=/nix/store' "$dropin"

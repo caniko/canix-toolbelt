@@ -46,6 +46,17 @@
       printf 'BindReadOnlyPaths=%s\n' "$path" >> "$out"
     done < ${(pkgs.closureInfo {rootPaths = [cfg.package];})}/store-paths
   '';
+  rootedServices = lib.filterAttrs (name: _: rootedService name) cfg.systemServices;
+  # The NixOS systemd module owns /etc/systemd/system as one immutable tree.
+  # Compose generated drop-ins through its package interface, never nested etc
+  # entries that would write through that tree's store-directory symlink.
+  rootedAdmissionUnits = pkgs.runCommand "direct-network-rooted-admission-units" {} (
+    lib.concatMapStringsSep "\n" (name: ''
+      directory="$out"/${lib.escapeShellArg "lib/systemd/system/${name}.service.d"}
+      mkdir -p "$directory"
+      ln -s ${rootedAdmission} "$directory/50-direct-network-rooted-admission.conf"
+    '') (lib.attrNames rootedServices)
+  );
   policyData = {
     socket = "/run/direct-network/ready.sock";
     serversFile = "/run/direct-network/servers";
@@ -242,15 +253,8 @@ in {
       # Both policies instead query the host stub over DNS: only enrolled DNS
       # packets are redirected, while desktop DNS retains resolved's VPN policy.
       system.nssDatabases.hosts = lib.mkForce ["files" "mymachines" "myhostname" "dns"];
-      environment.etc =
-        {"direct-network-policy.json".text = builtins.toJSON policyData;}
-        // lib.mapAttrs' (name: _:
-          lib.nameValuePair "systemd/system/${name}.service.d/50-direct-network-rooted-admission.conf" (lib.mkIf (rootedService name) {
-            # Generate closure paths at build time, without reading a derivation
-            # during evaluation. Nonempty assignments append to authored binds.
-            source = rootedAdmission;
-          }))
-        cfg.systemServices;
+      environment.etc."direct-network-policy.json".text = builtins.toJSON policyData;
+      systemd.packages = lib.optional (rootedServices != {}) rootedAdmissionUnits;
       environment.systemPackages = [cfg.package];
       systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (name: {
         description = lib.mkDefault "Direct-network resource slice ${name}";
