@@ -131,7 +131,7 @@ in
   assert config.systemd.services.direct-network-dns.serviceConfig.NoNewPrivileges;
   assert config.systemd.services.direct-network-dns.serviceConfig.ExecStartPre == "+${pkgs.hello}/bin/canix-toolbelt-direct-network ready --routes-only";
   assert pkgs.lib.hasInfix "--user=direct-network-dns --group=direct-network-dns" config.systemd.services.direct-network-dns.serviceConfig.ExecStart;
-  assert config.systemd.services.direct-network.serviceConfig.CapabilityBoundingSet == ["CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
+  assert config.systemd.services.direct-network.serviceConfig.CapabilityBoundingSet == ["CAP_DAC_READ_SEARCH" "CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
   assert config.systemd.services.nscd.environment.NSNCD_IGNORE_HOSTS == "true";
   assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";

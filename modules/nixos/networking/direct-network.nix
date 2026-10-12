@@ -289,7 +289,9 @@ in {
               PrivateTmp = true;
               # Authenticate the unprivileged resolver's MainPID FD and network
               # namespace through cross-UID, ptrace-controlled proc reads.
-              CapabilityBoundingSet = ["CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
+              # Ptrace permission does not bypass the resolver-owned 0500 FD
+              # directory's separate DAC traversal/read check.
+              CapabilityBoundingSet = ["CAP_DAC_READ_SEARCH" "CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
               NoNewPrivileges = true;
             };
           };

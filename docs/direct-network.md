@@ -139,8 +139,10 @@ credential fields deny admission. Credentials participate in both bracketed
 identity checks and reload-receipt equality; sharing the resolver UID does not
 substitute for MainPID-owned listener evidence.
 
-Only the routing daemon has `CAP_SYS_PTRACE`, alongside `CAP_NET_ADMIN`, to inspect
-the cross-UID MainPID's FD links and host network namespace. The resolver cannot
+Only the routing daemon has `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, alongside
+`CAP_NET_ADMIN`, to inspect the cross-UID MainPID's FD links and host network
+namespace. Ptrace admission and reading the resolver-owned `0500` FD directory
+have separate checks, so both inspection capabilities are required. The resolver cannot
 read root-only host files, signal unrelated root processes, or write its root-owned
 `0755` runtime directory and `0644` servers file. Replacement-file permissions are
 explicit even after a restrictive umask or stale temporary file. Silent peers
