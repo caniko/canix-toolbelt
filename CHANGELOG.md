@@ -17,6 +17,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   read-only client-closure and live socket-directory binds. Preserve existing
   chrooted hooks, credentials, resource policy and automatic retries through
   admission denial and recovery.
+- Preserve system and Home Manager readiness after the final pre-start command
+  reset, and supply rooted Home Manager units with the same narrow read-only
+  client-closure and live socket-directory binds as system services.
 
 ## [0.5.0] - 2026-10-11
 

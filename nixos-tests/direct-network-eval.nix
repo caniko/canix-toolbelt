@@ -39,6 +39,14 @@
             ExecStart = "/bin/true";
             ExecStartPre = ["/bin/test -e /inside-image"];
           };
+          systemd.services.reset.serviceConfig = {
+            ExecStart = "${pkgs.coreutils}/bin/true";
+            ExecStartPre = ["/bin/false" "" "/bin/false" " " "/bin/true"];
+          };
+          systemd.services.scalar-reset.serviceConfig = {
+            ExecStart = "${pkgs.coreutils}/bin/true";
+            ExecStartPre = "";
+          };
           home-manager.users.operator = {
             home.stateVersion = "24.11";
             systemd.user.services.backend.Service = {
@@ -55,6 +63,28 @@
               ExecStart = "${pkgs.coreutils}/bin/true";
               ExecStartPre = "${pkgs.coreutils}/bin/true";
             };
+            systemd.user.services.rooted.Service = {
+              RootDirectory = "/srv/user-root";
+              ExecStart = "/bin/true";
+              ExecStartPre = "/bin/test -e /inside-root";
+              ExecStartPost = "/bin/test -e /inside-root";
+              BindReadOnlyPaths = ["/srv/user-data:/data"];
+              MemoryMax = "64M";
+              Restart = "on-failure";
+            };
+            systemd.user.services.imaged.Service = {
+              RootImage = "/srv/user-root.img";
+              ExecStart = "/bin/true";
+              ExecStartPre = ["/bin/test -e /inside-image"];
+            };
+            systemd.user.services.reset.Service = {
+              ExecStart = "${pkgs.coreutils}/bin/true";
+              ExecStartPre = ["/bin/false" "" "/bin/false" " " "/bin/true"];
+            };
+            systemd.user.services.scalar-reset.Service = {
+              ExecStart = "${pkgs.coreutils}/bin/true";
+              ExecStartPre = "";
+            };
             systemd.user.slices.app-amc.Slice.MemoryMax = "3G";
           };
           canix-toolbelt.networking.directNetwork = {
@@ -63,9 +93,15 @@
             systemServices.backup = "canix-background.slice";
             systemServices.rooted = "canix-background.slice";
             systemServices.imaged = "canix-background.slice";
+            systemServices.reset = "canix-background.slice";
+            systemServices.scalar-reset = "canix-background.slice";
             users.operator = {
               services.backend = "app-amc.slice";
               services.backend-list = "app-amc.slice";
+              services.rooted = "app-amc.slice";
+              services.imaged = "app-amc.slice";
+              services.reset = "app-amc.slice";
+              services.scalar-reset = "app-amc.slice";
               slices = ["agent-tools.slice"];
             };
             directInterfaces = ["wg-home"];
@@ -80,6 +116,11 @@
   # Decode a fixture projection, rather than using executable store-context
   # strings as a dependency-free runtime input to builtins.fromJSON.
   policy = builtins.fromJSON (builtins.unsafeDiscardStringContext config.environment.etc."direct-network-policy.json".text);
+  # Match systemd's effective command list, not just the unparsed Nix list.
+  effective = pkgs.lib.foldl' (commands: command:
+    if pkgs.lib.trim command == ""
+    then []
+    else commands ++ [command]) [];
 in
   # An empty list emits no unit directive; inspect the rendered reset too.
   assert pkgs.lib.hasInfix "CapabilityBoundingSet=\n" config.systemd.units."direct-network-dns.service".text;
@@ -88,6 +129,9 @@ in
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";
   assert config.systemd.services.backup.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
+  assert effective config.systemd.services.reset.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/true"];
+  assert effective config.systemd.services.scalar-reset.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready"];
+  assert pkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "ExecStartPre= \nExecStartPre=+${pkgs.hello}/bin/canix-toolbelt-direct-network ready\nExecStartPre=/bin/true\n") config.systemd.units."reset.service".text;
   assert config.systemd.services.rooted.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-root"];
   assert config.systemd.services.imaged.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-image"];
   assert config.systemd.services.rooted.serviceConfig.RootDirectory == "/srv/rooted";
@@ -108,6 +152,19 @@ in
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
   assert home.systemd.user.services.backend.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
   assert home.systemd.user.services.backend-list.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true" "${pkgs.coreutils}/bin/false"];
+  assert effective home.systemd.user.services.reset.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/true"];
+  assert effective home.systemd.user.services.scalar-reset.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready"];
+  assert home.systemd.user.services.rooted.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-root"];
+  assert home.systemd.user.services.imaged.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-image"];
+  assert home.systemd.user.services.rooted.Service.RootDirectory == "/srv/user-root";
+  assert home.systemd.user.services.imaged.Service.RootImage == "/srv/user-root.img";
+  assert home.systemd.user.services.rooted.Service.ExecStartPost == "/bin/test -e /inside-root";
+  assert home.systemd.user.services.rooted.Service.BindReadOnlyPaths == ["/srv/user-data:/data"];
+  assert home.systemd.user.services.rooted.Service.MemoryMax == "64M";
+  assert home.systemd.user.services.rooted.Service.Restart == "on-failure";
+  assert !(home.xdg.configFile ? "systemd/user/backend.service.d/50-direct-network-rooted-admission.conf");
+  assert home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source == config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source;
+  assert home.xdg.configFile."systemd/user/imaged.service.d/50-direct-network-rooted-admission.conf".source == home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source;
   assert home.systemd.user.services.desktop.Service.ExecStartPre == "${pkgs.coreutils}/bin/true";
   assert home.systemd.user.slices.app-amc.Slice.MemoryMax == "3G";
   assert home.systemd.user.slices.app-amc-direct.Unit.Description != "";

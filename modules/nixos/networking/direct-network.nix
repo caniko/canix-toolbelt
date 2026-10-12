@@ -30,6 +30,16 @@
   rootedService = name: rootedConfig config.systemd.services.${name}.serviceConfig;
   binary = "${cfg.package}/bin/canix-toolbelt-direct-network";
   ready = "${binary} ready";
+  # Empty systemd assignments clear all preceding commands. Preserve the
+  # authored resets, then admit before the hooks that are actually effective.
+  insertAdmission = command: original: let
+    commands = lib.toList original;
+    reset = lib.lists.findFirstIndex (value: builtins.isString value && lib.trim value == "") null (lib.reverseList commands);
+    boundary = builtins.length commands - reset;
+  in
+    if reset == null
+    then [command] ++ commands
+    else lib.take boundary commands ++ [command] ++ lib.drop boundary commands;
   rootedAdmission = pkgs.runCommand "direct-network-rooted-admission.conf" {} ''
     printf '[Service]\nBindReadOnlyPaths=/run/direct-network\n' > "$out"
     while IFS= read -r path; do
@@ -84,13 +94,12 @@
           };
           Service = {
             Slice = lib.mkForce (serviceSlice user.slices parent);
-            ExecStartPre = lib.mkBefore [ready];
           };
         })
         user.services)
     ];
   };
-  mkUser = user: {
+  mkUser = user: {config, ...}: {
     # Home Manager leaves ExecStartPre in its freeform unit schema, whose
     # scalar/list union cannot merge a scalar command with our ordered list.
     # Coerce commands only for enrolled services. Keep the option tree static:
@@ -106,11 +115,23 @@
             then lib.types.coercedTo command lib.toList (lib.types.listOf command)
             else lib.types.either primitive (lib.types.listOf primitive);
           default = [];
+          apply = commands:
+            if builtins.hasAttr name user.services
+            then insertAdmission ready commands
+            else commands;
           description = "Pre-start commands, with direct-network admission for enrolled services.";
         };
       }));
     };
-    config = mkUserConfig user;
+    config =
+      mkUserConfig user
+      // {
+        xdg.configFile = lib.mapAttrs' (name: _:
+          lib.nameValuePair "systemd/user/${name}.service.d/50-direct-network-rooted-admission.conf" (lib.mkIf (rootedConfig config.systemd.user.services.${name}.Service) {
+            source = rootedAdmission;
+          }))
+        user.services;
+      };
   };
 in {
   options.canix-toolbelt.networking.directNetwork = {
@@ -186,7 +207,7 @@ in {
       options.serviceConfig = lib.mkOption {
         apply = service:
           if cfg.enable && builtins.hasAttr name cfg.systemServices
-          then service // {ExecStartPre = ["+${ready}"] ++ lib.toList (service.ExecStartPre or []);}
+          then service // {ExecStartPre = insertAdmission "+${ready}" (service.ExecStartPre or []);}
           else service;
       };
     }));

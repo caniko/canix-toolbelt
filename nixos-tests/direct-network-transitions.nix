@@ -92,6 +92,7 @@ in
         users.operator = {
           services.backend = "app-amc.slice";
           services.late-start = "app-amc.slice";
+          services.rooted-user-start = "app-amc.slice";
           slices = ["agent-tools.slice"];
         };
         systemServices.backup = "canix-background.slice";
@@ -126,6 +127,8 @@ in
       systemd.services.late-start.serviceConfig = {
         Type = "oneshot";
         User = "nobody";
+        # Admission must survive the resets and precede the effective hook.
+        ExecStartPre = ["${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/touch /tmp/direct-network-late-system-pre"];
         ExecStart = "${pkgs.coreutils}/bin/touch /tmp/direct-network-late-system";
       };
       systemd.tmpfiles.rules = ["d /run/direct-network-root-state 0777 root root -"];
@@ -143,8 +146,21 @@ in
       systemd.services.rooted-retry.unitConfig.StartLimitIntervalSec = 0;
       home-manager.users.operator.systemd.user.services.late-start.Service = {
         Type = "oneshot";
+        ExecStartPre = ["${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user-pre"];
         ExecStart = "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user";
       };
+      home-manager.users.operator.systemd.user.services.rooted-user-start.Service =
+        rootedService
+        // {
+          RootDirectory = serviceRoot;
+          WorkingDirectory = "/";
+          User = "operator";
+          # Exercise a real user-manager namespace without the readiness client
+          # in the root. All authored hooks retain the same root and user.
+          ExecStartPre = ["/bin/sh -c 'exit 1'" "" "/bin/sh -c 'test -e /inside-root && test -S /run/direct-network/ready.sock && test \"$(${pkgs.coreutils}/bin/id -u)\" = 1000 && echo pre > /tmp/%N-pre'"];
+          ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 1000 && echo payload > /tmp/%N-payload'";
+          ExecStartPost = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 1000 && echo post > /tmp/%N-post'";
+        };
       systemd.services.network-fixture = {
         path = [pkgs.iproute2 pkgs.wireguard-tools];
         serviceConfig.ExecStart = "${python} ${fixture} setup ${pkgs.dnsmasq}/bin/dnsmasq";

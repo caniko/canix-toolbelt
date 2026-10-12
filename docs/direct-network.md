@@ -113,7 +113,9 @@ and a current reload-dispatch receipt. Anchors want and order after DNS but use
 their readiness precheck for admission, preserving running workloads across
 resolver lifetime changes.
 Every configured system and Home Manager service also checks normal readiness
-on each start, before its existing pre-start commands. An already-active anchor
+on each start, after the final empty `ExecStartPre` reset and before its remaining
+pre-start commands. Authored resets still clear earlier hooks, but cannot erase
+admission. An already-active anchor
 cannot admit new workloads while DNS is unavailable. System-manager prechecks
 run only the narrow readiness client with systemd's `+` prefix so service UIDs
 need no additional user authorization. Established workloads remain running.
@@ -122,7 +124,8 @@ precheck. Admission denial is therefore a service execution failure governed by
 the workload's existing `Restart`, `StartLimitIntervalSec` and `StartLimitBurst`
 policy, including automatic recovery when DNS returns. Existing pre/start/post
 commands retain their configured root, credentials and resource limits.
-A generated systemd drop-in appends read-only binds for the readiness package's
+A generated systemd drop-in, installed for both system and Home Manager units,
+appends read-only binds for the readiness package's
 individual runtime-closure paths and the host `/run/direct-network` directory.
 It preserves authored binds and does not expose the whole Nix store or change
 `RootDirectoryStartOnly`. Closure enumeration happens at build time, without
@@ -133,3 +136,7 @@ the correct file/directory type when constructing the root. This includes
 `/run/direct-network` and each store path in the readiness package's closure.
 Writable roots may let systemd create missing destinations; a read-only root
 cannot receive missing mount points at service start.
+Rooted user-manager units retain systemd's native prerequisites: unprivileged
+user namespaces for `RootDirectory`, and systemd's authorized mountfsd image
+mounting support for `RootImage`. The module supplies the readiness binds without
+changing those kernel, authorization or service namespace policies.
