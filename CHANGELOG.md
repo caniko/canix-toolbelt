@@ -19,6 +19,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Keep trusted publisher verification on the admitted signed source rather than
+  the workflow's default-branch revision. Permit signed-tag and trusted-publisher
+  recovery while retaining original-attempt-only branch/PR qualification.
 - Run the direct resolver under a dedicated unprivileged account with no
   capabilities; bind readiness and reload receipts to that account's complete
   credential evidence as well as MainPID, cgroup and all four owned listeners.
