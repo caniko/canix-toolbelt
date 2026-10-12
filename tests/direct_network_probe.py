@@ -7,6 +7,7 @@ separate desktop/service cgroups and real systemd startup/resource boundaries.
 import json
 import pathlib
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -100,15 +101,21 @@ try:
 
     # Both direct DNS address families have their own listener, rather than
     # forwarding a service query through the desktop's resolved policy.
-    def dns(family):
+    def dns(family, direct=True):
         listener = socket.socket(family, socket.SOCK_DGRAM)
-        listener.bind(('::1' if family == socket.AF_INET6 else '127.0.0.54', 5354))
+        if direct:
+            # Legacy namespace policy has no native resolver cgroup. Its reply
+            # socket must explicitly identify itself before raw output lookup.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, struct.pack('I', 0xca010000))
+        address = '::1' if family == socket.AF_INET6 else ('127.0.0.54' if direct else '127.0.0.53')
+        listener.bind((address, 5354 if direct else 53))
         while True:
             data, peer = listener.recvfrom(4096)
-            listener.sendto(b'direct-dns:' + data, peer)
+            listener.sendto((b'direct-dns:' if direct else b'desktop-dns:') + data, peer)
 
     for family in (socket.AF_INET, socket.AF_INET6):
         threading.Thread(target=dns, args=(family,), daemon=True).start()
+        threading.Thread(target=dns, args=(family, False), daemon=True).start()
     readiness = socket.socket()
     readiness.bind(('127.0.0.54', 5354))
     readiness.listen()
@@ -179,6 +186,24 @@ try:
         assert failed_launch.returncode != 0 and 'must-not-launch' not in failed_launch.stdout
         old = [socket.create_connection((ip, 8080), timeout=3)
                for ip in ('203.0.113.20', '2001:db8:20::20')]
+
+        # Closed UDP sockets leave conntrack state behind. Reuse the identical
+        # tuple across policies in both orders, without flushing that state.
+        for family, target, source in [(socket.AF_INET, '127.0.0.53', '127.0.0.1'),
+                                       (socket.AF_INET6, '::1', '::1')]:
+            for port, sequence in [(45001, ['direct', 'desktop', 'direct']),
+                                   (45002, ['desktop', 'direct', 'desktop'])]:
+                for routing in sequence:
+                    with socket.socket(family, socket.SOCK_DGRAM) as query:
+                        query.settimeout(3)
+                        if routing == 'desktop':
+                            query.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, 123)
+                        query.bind((source, port))
+                        query.sendto(b'tuple-reuse', (target, 53))
+                        response, peer = query.recvfrom(1024)
+                        assert peer[:2] == (target, 53), peer
+                        assert response == f'{routing}-dns:tuple-reuse'.encode(), (family, port, routing, response)
+        print('PASS: production DNS rules isolate IPv4/IPv6 reused UDP tuples in both policy orders')
 
         def verify(label):
             for connection in old:

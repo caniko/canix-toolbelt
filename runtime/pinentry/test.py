@@ -305,6 +305,8 @@ class PinentryIntegration(unittest.TestCase):
         # Disposable fixtures only. Keep failure state in the retained builder
         # log before cleanup kills the child processes and closes their panes.
         try:
+            for path in self.root.glob("xvfb-*.log"):
+                print("pinentry fixture Xvfb stderr:", path.read_bytes()[-65536:].decode(errors="replace"), file=sys.stderr)
             panes = self.panes()
             print("pinentry fixture panes:", json.dumps(panes), file=sys.stderr)
             for candidate in panes:
@@ -564,10 +566,13 @@ class PinentryIntegration(unittest.TestCase):
 
     def desktop_query(self, agent, stale_qt=False):
         read_fd, write_fd = os.pipe()
-        server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
-                                  pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Xvfb emits keyboard-map warnings on every xdotool connection. An
+        # unread pipe can fill before Qt starts, blocking the server and even
+        # its termination. Keep the diagnostics without backpressuring Xvfb.
+        with tempfile.NamedTemporaryFile(prefix="xvfb-", suffix=".log", dir=self.root, delete=False) as server_log:
+            server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
+                                      pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=server_log)
         os.close(write_fd)
-        self.addCleanup(server.stderr.close)
         self.addCleanup(lambda: server.wait(timeout=5))
         self.addCleanup(server.terminate)
         self.assertTrue(select.select([read_fd], [], [], 5)[0], "Xvfb did not start")

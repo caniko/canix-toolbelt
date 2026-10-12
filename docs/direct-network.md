@@ -25,7 +25,7 @@ two distinct upstreams.
 ## Kernel ownership and upgrades
 
 The module reserves mark `0xca010000`, rule priorities 49/50, routing tables
-51821/51822 and route protocol 242 **within those two tables**. Other routing
+51821/51822, UDP DNS conntrack zone `0xca01`, and route protocol 242 **within those two tables**. Other routing
 owners must not use that namespace. Each table is inspected independently of
 policy-rule presence, for both address families. Untagged or differently tagged
 routes cause reconciliation to fail before any table flush. Flushes select only
@@ -38,6 +38,18 @@ link-local routes. Neither operation replaces a concurrently inserted foreign
 route. The unreachable fallback uses `add`, and observed conflicts block the
 switch after installation too.
 The inactive complete snapshot is installed before moving the live rules.
+
+UDP DNS interception assigns the reserved zone from the current socket before
+conntrack lookup. Resolver replies use that same zone only for the enrolled
+listener's exact source endpoints and DNS response bit; its upstream queries
+remain outside it. Replies to a client using source port 53 still enter the
+reply zone before the resolver's upstream-query exemption is considered.
+This separates retained direct DNS mappings from new desktop sockets reusing
+the same tuple, in either policy order. A foreign nonzero socket mark remains
+outside interception. Only TCP restores an output mark from conntrack, to retain
+passive listener handshakes; UDP output enrollment comes from the current socket.
+The DNS zone does not isolate every other UDP masquerade mapping. It is reserved
+for this module and must not be assigned by another raw-output zone owner.
 
 Earlier daemon versions installed untagged routes. They are not adopted or
 automatically deleted during an upgrade. Inspect their route/rule origin and

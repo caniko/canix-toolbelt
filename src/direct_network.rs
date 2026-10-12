@@ -28,6 +28,8 @@ const ROUTE_PROTOCOL: u32 = 242;
 const LOCAL_PRIORITY: u32 = 49;
 const DIRECT_PRIORITY: u32 = 50;
 const NFT_TABLE: &str = "toolbelt_direct_network";
+// Separate redirected UDP DNS tuples from the desktop stub's retained flows.
+const DNS_ZONE: u16 = 0xca01;
 
 mod dns;
 
@@ -381,11 +383,50 @@ fn nft_rules(
     if exists {
         text.push_str(&format!("delete table inet {NFT_TABLE}\n"));
     }
-    text.push_str(&format!("table inet {NFT_TABLE} {{\n chain output {{\n type route hook output priority mangle; policy accept;\n"));
+    let dns_path = policy
+        .dns_cgroup
+        .as_ref()
+        .filter(|path| paths.contains(path));
+    text.push_str(&format!("table inet {NFT_TABLE} {{\n chain dns_zone {{\n type filter hook output priority raw; policy accept;\n"));
+    // UDP conntrack belongs to a tuple, not a socket/cgroup. Classify DNS from
+    // the current socket before lookup so a new desktop socket cannot inherit
+    // a closed enrolled socket's DNAT mapping, or suppress later interception.
+    if let Some(path) = dns_path {
+        let level = path.split('/').count();
+        // A reply to a client bound to port 53 is not an upstream query. The
+        // DNS QR bit distinguishes listener responses even when both ports
+        // overlap an upstream socket; check it before the upstream exemption.
+        for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
+            text.push_str(&format!(
+                "meta mark {{ 0, {MARK} }} {address} udp sport 5354 @th,80,8 & 0x80 == 0x80 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE} return\n"
+            ));
+        }
+        text.push_str(&format!(
+            "udp dport 53 socket cgroupv2 level {level} \"{path}\" return\n"
+        ));
+    } else if policy.dns_cgroup.is_none() {
+        // Packet-rule compatibility only: native readiness still rejects a
+        // missing resolver identity. This reply socket must carry SO_MARK.
+        for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
+            text.push_str(&format!(
+                "meta mark {MARK} {address} udp sport 5354 ct zone set {DNS_ZONE}\n"
+            ));
+        }
+    }
+    text.push_str(&format!(
+        "meta mark {MARK} udp dport 53 ct zone set {DNS_ZONE}\n"
+    ));
+    for path in paths {
+        let level = path.split('/').count();
+        text.push_str(&format!(
+            "meta mark 0 udp dport 53 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE}\n"
+        ));
+    }
+    text.push_str(" }\n chain output {\n type route hook output priority mangle; policy accept;\n");
     // Passive TCP handshakes may be emitted from request sockets without the
     // listener's cgroup metadata. Restore the enrolled incoming flow's mark.
     text.push_str(&format!(
-        "meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
+        "meta l4proto tcp meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
     ));
     for path in paths {
         let level = path.split('/').count();
@@ -402,11 +443,7 @@ fn nft_rules(
         ));
     }
     text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain dns {{\n type nat hook output priority dstnat; policy accept;\n"));
-    if let Some(path) = policy
-        .dns_cgroup
-        .as_ref()
-        .filter(|path| paths.contains(path))
-    {
+    if let Some(path) = dns_path {
         text.push_str(&format!(
             "socket cgroupv2 level {} \"{path}\" return\n",
             path.split('/').count()

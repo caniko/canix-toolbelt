@@ -32,6 +32,7 @@ in
         settings.Resolve = {
           DNS = "198.18.0.2";
           Cache = false;
+          DNSStubListenerExtra = "[::1]:53";
         };
       };
       users.users.operator = {
@@ -39,7 +40,7 @@ in
         uid = 1000;
         linger = true;
       };
-      environment.systemPackages = [pkgs.python3 pkgs.iproute2 pkgs.wireguard-tools pkgs.curl pkgs.dnsutils package];
+      environment.systemPackages = [pkgs.python3 pkgs.iproute2 pkgs.wireguard-tools pkgs.curl pkgs.dnsutils pkgs.nftables pkgs.conntrack-tools package];
       canix-toolbelt.networking.directNetwork = {
         enable = true;
         inherit package;

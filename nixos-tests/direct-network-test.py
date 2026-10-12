@@ -236,10 +236,38 @@ for family in ['-4', '-6']:
 machine.succeed('resolvectl dns wg-proton 172.31.0.2')
 machine.succeed("resolvectl domain wg-proton '~.'")
 machine.succeed('resolvectl flush-caches')
-desktop = json.loads(machine.succeed(userrun + '--slice=app.slice ' + probe))
-assert desktop['v4'] == desktop['v6'] == 'vpn', desktop
-assert desktop['fleet'] == 'direct', desktop
-assert desktop['dns'] == ['198.51.100.20', '2001:db8:30::20'], desktop
+try:
+    desktop = json.loads(machine.succeed(userrun + '--slice=app.slice ' + probe))
+    assert desktop['v4'] == desktop['v6'] == 'vpn', desktop
+    assert desktop['fleet'] == 'direct', desktop
+    assert desktop['dns'] == ['198.51.100.20', '2001:db8:30::20'], desktop
+    # Real cgroups and wire-format DNS reuse the same UDP tuple in both policy
+    # orders. Each query checks the transaction, answer and reverse-NAT peer;
+    # no retries or conntrack flush may conceal a wrong-policy response.
+    for version in [4, 6]:
+        for port, slices in [(53001, ['agent-tools.slice', 'app.slice', 'agent-tools.slice']),
+                             (53002, ['app.slice', 'agent-tools.slice', 'app.slice'])]:
+            for slice_name in slices:
+                ipv4, ipv6 = ('203.0.113.20', '2001:db8:20::20') if slice_name == 'agent-tools.slice' else ('198.51.100.20', '2001:db8:30::20')
+                print(machine.succeed(userrun + f'--slice={slice_name} @PYTHON@ @FIXTURE@ dns-query {version} {port} {ipv4} {ipv6}'))
+        # Socket marks owned by another engine override cgroup enrollment.
+        print(machine.succeed(f'systemd-run --quiet --wait --pipe --slice=system-direct.slice @PYTHON@ @FIXTURE@ dns-query {version} 53003 198.51.100.20 2001:db8:30::20 123'))
+        print(machine.succeed(f'systemd-run --quiet --wait --pipe --slice=app.slice @PYTHON@ @FIXTURE@ dns-query {version} 53004 203.0.113.20 2001:db8:20::20 3389063168'))
+    # A listener reply to client port 53 still needs reverse DNAT; it must not
+    # be mistaken for the resolver's own port-53 upstream query.
+    print(machine.succeed('systemd-run --quiet --wait --pipe --slice=system-direct.slice @PYTHON@ @FIXTURE@ dns-query 4 53 203.0.113.20 2001:db8:20::20'))
+    machine.succeed(userrun + "--slice=agent-tools.slice sh -c 'dig +tcp +short +time=2 +tries=1 @127.0.0.53 public.example.test | grep -Fx 203.0.113.20'")
+except Exception:
+    for command in [
+        'resolvectl status',
+        'nft list table inet toolbelt_direct_network',
+        'conntrack -L -p udp -o extended',
+        'journalctl -b -u systemd-resolved.service -u direct-network.service -u direct-network-dns.service --no-pager -n 150',
+        'ss -lnptu',
+    ]:
+        status, output = machine.execute(command)
+        print(command, status, output)
+    raise
 check_direct()
 
 # A system-manager timer running as the same UID remains direct too.
