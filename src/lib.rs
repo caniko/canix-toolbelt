@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod execution_protocol;
+
 #[cfg(all(unix, feature = "build-train"))]
 pub mod build_train;
 #[cfg(all(target_os = "linux", feature = "direct-network"))]
