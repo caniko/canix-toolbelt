@@ -27,6 +27,10 @@
             ExecStartPre = ["/bin/test -e /inside-root"];
             MemoryMax = "64M";
           };
+          systemd.services.rooted.unitConfig = {
+            StartLimitIntervalSec = "30s";
+            StartLimitBurst = 2;
+          };
           systemd.services.imaged.serviceConfig = {
             RootImage = "/srv/root.img";
             ExecStart = "/bin/true";
@@ -87,12 +91,16 @@ in
   assert config.systemd.services.imaged.serviceConfig.RootImage == "/srv/root.img";
   assert !(config.systemd.services.rooted.serviceConfig.RootDirectoryStartOnly or false);
   assert config.systemd.services.rooted.serviceConfig.MemoryMax == "64M";
+  assert config.systemd.services.rooted.unitConfig.StartLimitIntervalSec == "30s";
+  assert config.systemd.services.rooted.unitConfig.StartLimitBurst == 2;
   assert builtins.elem "direct-network-admission-rooted.service" config.systemd.services.rooted.requires;
   assert builtins.elem "direct-network-admission-rooted.service" config.systemd.services.rooted.after;
   assert builtins.elem "direct-network-admission-imaged.service" config.systemd.services.imaged.requires;
   assert config.systemd.services.direct-network-admission-rooted.serviceConfig.Type == "oneshot";
   assert !(config.systemd.services.direct-network-admission-rooted.serviceConfig.RemainAfterExit or false);
   assert config.systemd.services.direct-network-admission-rooted.serviceConfig.ExecStart == "${pkgs.hello}/bin/canix-toolbelt-direct-network ready";
+  assert config.systemd.services.direct-network-admission-rooted.unitConfig.StartLimitIntervalSec == 0;
+  assert pkgs.lib.hasInfix "StartLimitIntervalSec=0\n" config.systemd.units."direct-network-admission-rooted.service".text;
   assert config.systemd.slices.canix-background.sliceConfig.MemoryMax == "4G";
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";

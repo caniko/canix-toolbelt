@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
@@ -231,6 +232,20 @@ for name in ['rooted-start', 'imaged-start']:
         machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload')
 machine.succeed('systemctl start rooted-retry.service')
 machine.succeed('test -e /run/direct-network-root-state/rooted-retry-payload')
+# The workload disables start limits. Its admission dependency must not impose
+# a separate five-start burst; each healthy automatic restart still admits anew.
+retry_admissions = {machine.succeed('systemctl show direct-network-admission-rooted-retry.service -p InvocationID --value').strip()}
+retry_started = time.monotonic()
+for _ in range(6):
+    machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload')
+    machine.succeed('systemctl kill --kill-whom=main --signal=TERM rooted-retry.service')
+    machine.wait_until_succeeds('test -e /run/direct-network-root-state/rooted-retry-payload', timeout=10)
+    invocation = machine.succeed('systemctl show direct-network-admission-rooted-retry.service -p InvocationID --value').strip()
+    assert invocation and invocation not in retry_admissions, (invocation, retry_admissions)
+    retry_admissions.add(invocation)
+    machine.succeed('grep -Fx pre /run/direct-network-root-state/rooted-retry-pre')
+    machine.succeed('grep -Fx payload /run/direct-network-root-state/rooted-retry-payload')
+assert len(retry_admissions) == 7 and time.monotonic() - retry_started < 60, retry_admissions
 machine.succeed('systemctl stop direct-network-dns.service')
 for mode in ['tcp', 'both', 'missing-ipv6']:
     marker = f'/run/foreign-{mode}-ready'

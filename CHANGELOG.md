@@ -15,6 +15,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   cross-family gateways before any forwarding, firewall or DNS changes.
 - Admit rooted system services through a fresh host-side readiness dependency,
   preserving their existing chrooted hooks and automatic-restart checks.
+- Leave retry rate limits with the enrolled workload instead of imposing the
+  admission helper's separate default start burst on rooted services.
 
 ## [0.5.0] - 2026-10-11
 

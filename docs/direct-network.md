@@ -122,3 +122,5 @@ admission dependency replaces the inline precheck. It does not retain a successf
 active state, so each manual start or automatic restart requires fresh admission.
 The unit's existing pre-start commands and payload retain their original root,
 credentials and resource limits; no readiness binary or socket is mounted into it.
+The admission helper has no independent start-rate limit: the enrolled service's
+own `StartLimitIntervalSec` and `StartLimitBurst` policy continues to govern retries.

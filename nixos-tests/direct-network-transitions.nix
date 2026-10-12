@@ -34,6 +34,12 @@ in
     nodes.machine = {...}: {
       imports = [inputs.home-manager.nixosModules.home-manager ../modules/nixos/networking/direct-network.nix];
       virtualisation.memorySize = 1536;
+      # Keep the default burst of five, with a window long enough that slow
+      # hosted execution cannot clear the helper's counter during this test.
+      systemd.settings.Manager = {
+        DefaultStartLimitIntervalSec = "60s";
+        DefaultStartLimitBurst = 5;
+      };
       # The test driver's default VLAN uses 2001:db8:1::/64 too. This fixture
       # owns all provider/fleet networks and must not use the QEMU WAN route.
       virtualisation.vlans = [];
@@ -116,9 +122,10 @@ in
           Type = "exec";
           RootDirectory = serviceRoot;
           Restart = "always";
-          RestartSec = "1s";
+          RestartSec = "100ms";
           ExecStart = "/bin/sh -c 'test -e /inside-root && echo payload > /tmp/%N-payload && exec ${pkgs.coreutils}/bin/sleep infinity'";
         };
+      systemd.services.rooted-retry.unitConfig.StartLimitIntervalSec = 0;
       home-manager.users.operator.systemd.user.services.late-start.Service = {
         Type = "oneshot";
         ExecStart = "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user";

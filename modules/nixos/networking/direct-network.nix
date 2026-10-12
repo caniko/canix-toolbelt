@@ -291,6 +291,9 @@ in {
             # Keep generated keys independent of the final services attrset.
             enable = rootedService name;
             description = "Admit rooted direct-network service ${name}";
+            # The enrolled service owns retry rate policy. A second default
+            # burst on this fresh oneshot would reject otherwise permitted starts.
+            unitConfig.StartLimitIntervalSec = 0;
             requires = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             after = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             serviceConfig = {
