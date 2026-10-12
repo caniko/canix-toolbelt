@@ -9,24 +9,40 @@
   nmcliFixture = pkgs.writeScript "direct-network-nmcli-fixture" ("#!${python}\n" + builtins.readFile ./direct-network-nmcli.py);
   package = pkgs.callPackage ../nix/package.nix {directNetwork = true;};
   serviceRoot = pkgs.runCommand "direct-network-service-root" {} ''
-    mkdir -p "$out/bin" "$out/tmp" "$out/nix/store" "$out/run"
+    mkdir -p "$out/bin" "$out/tmp" "$out/nix/store" "$out/run/direct-network" "$out/run/systemd/journal" "$out/run/host" "$out/dev" "$out/proc" "$out/sys"
+    # Only the fixture's shell/utility closure is in the image. The readiness
+    # client and its live socket must be supplied by the enrolled module.
+    while IFS= read -r path; do
+      cp -a "$path" "$out/nix/store/"
+    done < ${(pkgs.closureInfo {rootPaths = [pkgs.bash pkgs.coreutils];})}/store-paths
+    # Immutable roots must already contain bind mount points. Keep additional
+    # readiness contents absent so their read-only binds are still exercised.
+    while IFS= read -r path; do
+      if [ ! -e "$out$path" ]; then
+        if [ -d "$path" ]; then
+          mkdir -p "$out$path"
+        else
+          touch "$out$path"
+        fi
+      fi
+    done < ${(pkgs.closureInfo {rootPaths = [package];})}/store-paths
     ln -s ${pkgs.bash}/bin/bash "$out/bin/sh"
     touch "$out/inside-root"
   '';
   serviceImage = pkgs.runCommand "direct-network-service-root.ext4" {nativeBuildInputs = [pkgs.e2fsprogs];} ''
-    truncate -s 16M "$out"
+    truncate -s 256M "$out"
     mkfs.ext4 -q -F -d ${serviceRoot} "$out"
   '';
   rootedService = {
     Type = "oneshot";
     User = "nobody";
     MemoryMax = "64M";
-    BindReadOnlyPaths = ["/nix/store"];
     BindPaths = ["/run/direct-network-root-state:/tmp"];
-    # Both commands must retain their alternate root and the readiness socket
-    # deliberately remains unavailable inside it.
-    ExecStartPre = ["/bin/sh -c 'test -e /inside-root && test ! -S /run/direct-network/ready.sock && echo pre > /tmp/%N-pre'"];
-    ExecStart = "/bin/sh -c 'test -e /inside-root && echo payload > /tmp/%N-payload'";
+    # All original hooks retain the configured root and UID. No blanket store
+    # bind may hide a missing readiness-client runtime dependency.
+    ExecStartPre = ["/bin/sh -c 'test -e /inside-root && test -S /run/direct-network/ready.sock && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo pre > /tmp/%N-pre'"];
+    ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo payload > /tmp/%N-payload'";
+    ExecStartPost = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo post > /tmp/%N-post'";
   };
 in
   pkgs.testers.runNixOSTest {
@@ -34,8 +50,7 @@ in
     nodes.machine = {...}: {
       imports = [inputs.home-manager.nixosModules.home-manager ../modules/nixos/networking/direct-network.nix];
       virtualisation.memorySize = 1536;
-      # Keep the default burst of five, with a window long enough that slow
-      # hosted execution cannot clear the helper's counter during this test.
+      # The enrolled workload's explicit retry policy must remain authoritative.
       systemd.settings.Manager = {
         DefaultStartLimitIntervalSec = "60s";
         DefaultStartLimitBurst = 5;
@@ -123,7 +138,7 @@ in
           RootDirectory = serviceRoot;
           Restart = "always";
           RestartSec = "100ms";
-          ExecStart = "/bin/sh -c 'test -e /inside-root && echo payload > /tmp/%N-payload && exec ${pkgs.coreutils}/bin/sleep infinity'";
+          ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo payload > /tmp/%N-payload && exec ${pkgs.coreutils}/bin/sleep infinity'";
         };
       systemd.services.rooted-retry.unitConfig.StartLimitIntervalSec = 0;
       home-manager.users.operator.systemd.user.services.late-start.Service = {

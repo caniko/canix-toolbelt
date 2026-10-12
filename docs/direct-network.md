@@ -117,10 +117,19 @@ on each start, before its existing pre-start commands. An already-active anchor
 cannot admit new workloads while DNS is unavailable. System-manager prechecks
 run only the narrow readiness client with systemd's `+` prefix so service UIDs
 need no additional user authorization. Established workloads remain running.
-For units using `RootDirectory` or `RootImage`, a dedicated host-root oneshot
-admission dependency replaces the inline precheck. It does not retain a successful
-active state, so each manual start or automatic restart requires fresh admission.
-The unit's existing pre-start commands and payload retain their original root,
-credentials and resource limits; no readiness binary or socket is mounted into it.
-The admission helper has no independent start-rate limit: the enrolled service's
-own `StartLimitIntervalSec` and `StartLimitBurst` policy continues to govern retries.
+Units using `RootDirectory` or `RootImage` retain the same inline readiness
+precheck. Admission denial is therefore a service execution failure governed by
+the workload's existing `Restart`, `StartLimitIntervalSec` and `StartLimitBurst`
+policy, including automatic recovery when DNS returns. Existing pre/start/post
+commands retain their configured root, credentials and resource limits.
+A generated systemd drop-in appends read-only binds for the readiness package's
+individual runtime-closure paths and the host `/run/direct-network` directory.
+It preserves authored binds and does not expose the whole Nix store or change
+`RootDirectoryStartOnly`. Closure enumeration happens at build time, without
+import-from-derivation. Binding the directory rather than its socket inode lets
+each new precheck observe a recreated daemon socket.
+For immutable or read-only alternate roots, create the bind destinations with
+the correct file/directory type when constructing the root. This includes
+`/run/direct-network` and each store path in the readiness package's closure.
+Writable roots may let systemd create missing destinations; a read-only root
+cannot receive missing mount points at service start.

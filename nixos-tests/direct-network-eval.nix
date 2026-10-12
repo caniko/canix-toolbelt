@@ -23,8 +23,11 @@
           };
           systemd.services.rooted.serviceConfig = {
             RootDirectory = "/srv/rooted";
+            User = "nobody";
             ExecStart = "/bin/true";
             ExecStartPre = ["/bin/test -e /inside-root"];
+            ExecStartPost = "/bin/test -e /inside-root";
+            BindReadOnlyPaths = ["/srv/rooted-data:/data"];
             MemoryMax = "64M";
           };
           systemd.services.rooted.unitConfig = {
@@ -85,22 +88,21 @@ in
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";
   assert config.systemd.services.backup.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
-  assert config.systemd.services.rooted.serviceConfig.ExecStartPre == ["/bin/test -e /inside-root"];
-  assert config.systemd.services.imaged.serviceConfig.ExecStartPre == ["/bin/test -e /inside-image"];
+  assert config.systemd.services.rooted.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-root"];
+  assert config.systemd.services.imaged.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/test -e /inside-image"];
   assert config.systemd.services.rooted.serviceConfig.RootDirectory == "/srv/rooted";
   assert config.systemd.services.imaged.serviceConfig.RootImage == "/srv/root.img";
   assert !(config.systemd.services.rooted.serviceConfig.RootDirectoryStartOnly or false);
+  assert config.systemd.services.rooted.serviceConfig.User == "nobody";
+  assert config.systemd.services.rooted.serviceConfig.ExecStartPost == "/bin/test -e /inside-root";
+  assert config.systemd.services.rooted.serviceConfig.BindReadOnlyPaths == ["/srv/rooted-data:/data"];
   assert config.systemd.services.rooted.serviceConfig.MemoryMax == "64M";
   assert config.systemd.services.rooted.unitConfig.StartLimitIntervalSec == "30s";
   assert config.systemd.services.rooted.unitConfig.StartLimitBurst == 2;
-  assert builtins.elem "direct-network-admission-rooted.service" config.systemd.services.rooted.requires;
-  assert builtins.elem "direct-network-admission-rooted.service" config.systemd.services.rooted.after;
-  assert builtins.elem "direct-network-admission-imaged.service" config.systemd.services.imaged.requires;
-  assert config.systemd.services.direct-network-admission-rooted.serviceConfig.Type == "oneshot";
-  assert !(config.systemd.services.direct-network-admission-rooted.serviceConfig.RemainAfterExit or false);
-  assert config.systemd.services.direct-network-admission-rooted.serviceConfig.ExecStart == "${pkgs.hello}/bin/canix-toolbelt-direct-network ready";
-  assert config.systemd.services.direct-network-admission-rooted.unitConfig.StartLimitIntervalSec == 0;
-  assert pkgs.lib.hasInfix "StartLimitIntervalSec=0\n" config.systemd.units."direct-network-admission-rooted.service".text;
+  assert !(config.systemd.units ? "direct-network-admission-rooted.service");
+  assert !(config.systemd.units ? "direct-network-admission-imaged.service");
+  assert !(config.environment.etc ? "systemd/system/backup.service.d/50-direct-network-rooted-admission.conf");
+  assert config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source == config.environment.etc."systemd/system/imaged.service.d/50-direct-network-rooted-admission.conf".source;
   assert config.systemd.slices.canix-background.sliceConfig.MemoryMax == "4G";
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
@@ -116,4 +118,14 @@ in
   assert !(builtins.elem "user.slice/user-1000.slice/user@1000.service/app.slice" policy.cgroupPaths);
   assert policy.allowedUsers == [1000];
   assert config.system.nssDatabases.hosts == ["files" "mymachines" "myhostname" "dns"];
-    pkgs.writeText "direct-network-eval" "Explicit cgroups retain all resource ancestors; desktop DNS and traffic remain separate.\n"
+    pkgs.runCommand "direct-network-eval" {} ''
+      dropin=${config.environment.etc."systemd/system/rooted.service.d/50-direct-network-rooted-admission.conf".source}
+      grep -Fx '[Service]' "$dropin"
+      grep -Fx 'BindReadOnlyPaths=/run/direct-network' "$dropin"
+      ! grep -Fx 'BindReadOnlyPaths=/nix/store' "$dropin"
+      ! grep -Fx 'BindReadOnlyPaths=' "$dropin"
+      while IFS= read -r path; do
+        grep -Fx "BindReadOnlyPaths=$path" "$dropin"
+      done < ${(pkgs.closureInfo {rootPaths = [pkgs.hello];})}/store-paths
+      cp "$dropin" "$out"
+    ''

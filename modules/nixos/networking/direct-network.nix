@@ -22,15 +22,20 @@
   rootSlices = lib.unique (["system-direct.slice"] ++ cfg.systemSlices ++ map (serviceSlice cfg.systemSlices) (lib.attrValues cfg.systemServices));
   userSlices = user: lib.unique (user.slices ++ map (serviceSlice user.slices) (lib.attrValues user.services));
   anchor = slice: "direct-network-${lib.removeSuffix ".slice" slice}";
-  admission = name: "direct-network-admission-${name}";
-  # RootDirectory/RootImage apply even to '+' commands. A separate, non-retained
-  # oneshot runs in the host root on every start transaction, including retries,
-  # without moving the service's existing hooks out of its configured root.
+  # RootDirectory/RootImage apply even to '+' commands. Keep readiness inline so
+  # denial follows the payload's Restart= policy, and supply only the client's
+  # runtime closure plus the live host socket directory inside alternate roots.
   rootedConfig = service:
     (service.RootDirectory or "") != "" || (service.RootImage or "") != "";
   rootedService = name: rootedConfig config.systemd.services.${name}.serviceConfig;
   binary = "${cfg.package}/bin/canix-toolbelt-direct-network";
   ready = "${binary} ready";
+  rootedAdmission = pkgs.runCommand "direct-network-rooted-admission.conf" {} ''
+    printf '[Service]\nBindReadOnlyPaths=/run/direct-network\n' > "$out"
+    while IFS= read -r path; do
+      printf 'BindReadOnlyPaths=%s\n' "$path" >> "$out"
+    done < ${(pkgs.closureInfo {rootPaths = [cfg.package];})}/store-paths
+  '';
   policyData = {
     socket = "/run/direct-network/ready.sock";
     serversFile = "/run/direct-network/servers";
@@ -180,7 +185,7 @@ in {
     type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
       options.serviceConfig = lib.mkOption {
         apply = service:
-          if cfg.enable && builtins.hasAttr name cfg.systemServices && !(rootedConfig service)
+          if cfg.enable && builtins.hasAttr name cfg.systemServices
           then service // {ExecStartPre = ["+${ready}"] ++ lib.toList (service.ExecStartPre or []);}
           else service;
       };
@@ -216,7 +221,15 @@ in {
       # Both policies instead query the host stub over DNS: only enrolled DNS
       # packets are redirected, while desktop DNS retains resolved's VPN policy.
       system.nssDatabases.hosts = lib.mkForce ["files" "mymachines" "myhostname" "dns"];
-      environment.etc."direct-network-policy.json".text = builtins.toJSON policyData;
+      environment.etc =
+        {"direct-network-policy.json".text = builtins.toJSON policyData;}
+        // lib.mapAttrs' (name: _:
+          lib.nameValuePair "systemd/system/${name}.service.d/50-direct-network-rooted-admission.conf" (lib.mkIf (rootedService name) {
+            # Generate closure paths at build time, without reading a derivation
+            # during evaluation. Nonempty assignments append to authored binds.
+            source = rootedAdmission;
+          }))
+        cfg.systemServices;
       environment.systemPackages = [cfg.package];
       systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (name: {
         description = lib.mkDefault "Direct-network resource slice ${name}";
@@ -286,37 +299,9 @@ in {
             RestartSec = "2s";
           };
         }))
-        (lib.mapAttrs' (name: parent:
-          lib.nameValuePair (admission name) {
-            # Keep generated keys independent of the final services attrset.
-            enable = rootedService name;
-            description = "Admit rooted direct-network service ${name}";
-            # The enrolled service owns retry rate policy. A second default
-            # burst on this fresh oneshot would reject otherwise permitted starts.
-            unitConfig.StartLimitIntervalSec = 0;
+        (lib.mapAttrs (_: parent: {
             requires = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             after = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
-            serviceConfig = {
-              Type = "oneshot";
-              RemainAfterExit = false;
-              ExecStart = ready;
-              TimeoutStartSec = "20s";
-              CapabilityBoundingSet = "";
-              NoNewPrivileges = true;
-              ProtectSystem = "strict";
-              ProtectHome = true;
-              PrivateTmp = true;
-            };
-          })
-        cfg.systemServices)
-        (lib.mapAttrs (name: parent: let
-            rooted = rootedService name;
-            dependencies =
-              ["${anchor (serviceSlice cfg.systemSlices parent)}.service"]
-              ++ lib.optional rooted "${admission name}.service";
-          in {
-            requires = dependencies;
-            after = dependencies;
             serviceConfig = {
               Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
               # Active anchors retain established workloads across DNS failure.

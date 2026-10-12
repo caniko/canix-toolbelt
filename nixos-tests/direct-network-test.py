@@ -224,27 +224,29 @@ for name in ['rooted-start', 'imaged-start']:
     previous = ''
     for _ in range(2):
         machine.succeed(f'systemctl start {name}.service')
-        current = machine.succeed(f'systemctl show direct-network-admission-{name}.service -p InvocationID --value').strip()
+        current = machine.succeed(f'systemctl show {name}.service -p InvocationID --value').strip()
         assert current and current != previous, (name, current, previous)
         previous = current
         machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
         machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
-        machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload')
+        machine.succeed(f'grep -Fx post /run/direct-network-root-state/{name}-post')
+        machine.succeed(f'test "$(systemctl show {name}.service -p MemoryMax --value)" = 67108864')
+        machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload /run/direct-network-root-state/{name}-post')
 machine.succeed('systemctl start rooted-retry.service')
 machine.succeed('test -e /run/direct-network-root-state/rooted-retry-payload')
-# The workload disables start limits. Its admission dependency must not impose
-# a separate five-start burst; each healthy automatic restart still admits anew.
-retry_admissions = {machine.succeed('systemctl show direct-network-admission-rooted-retry.service -p InvocationID --value').strip()}
+# The workload disables start limits; each automatic restart must admit anew.
+retry_admissions = {machine.succeed('systemctl show rooted-retry.service -p InvocationID --value').strip()}
 retry_started = time.monotonic()
 for _ in range(6):
-    machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload')
+    machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload /run/direct-network-root-state/rooted-retry-post')
     machine.succeed('systemctl kill --kill-whom=main --signal=TERM rooted-retry.service')
     machine.wait_until_succeeds('test -e /run/direct-network-root-state/rooted-retry-payload', timeout=10)
-    invocation = machine.succeed('systemctl show direct-network-admission-rooted-retry.service -p InvocationID --value').strip()
+    invocation = machine.succeed('systemctl show rooted-retry.service -p InvocationID --value').strip()
     assert invocation and invocation not in retry_admissions, (invocation, retry_admissions)
     retry_admissions.add(invocation)
     machine.succeed('grep -Fx pre /run/direct-network-root-state/rooted-retry-pre')
     machine.succeed('grep -Fx payload /run/direct-network-root-state/rooted-retry-payload')
+    machine.wait_until_succeeds('grep -Fx post /run/direct-network-root-state/rooted-retry-post')
 assert len(retry_admissions) == 7 and time.monotonic() - retry_started < 60, retry_admissions
 machine.succeed('systemctl stop direct-network-dns.service')
 for mode in ['tcp', 'both', 'missing-ipv6']:
@@ -268,14 +270,17 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed('systemctl is-active direct-network-canix-background-direct.service')
         machine.succeed(userctl + 'is-active direct-network-app-amc-direct.service')
         machine.succeed('systemctl is-active foreign-dns.service')
-        # Automatic restarts also pull in a fresh, non-retained admission job.
-        machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload')
+        # Admission denial must remain a payload execution failure, so Restart=
+        # keeps retrying and recovers without any start/restart/reset-failed.
+        machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload /run/direct-network-root-state/rooted-retry-post')
+        denied_restart_before = int(machine.succeed('systemctl show rooted-retry.service -p NRestarts --value'))
         machine.succeed('systemctl kill --kill-whom=main --signal=TERM rooted-retry.service')
-        machine.wait_until_succeeds('test "$(systemctl show direct-network-admission-rooted-retry.service -p ExecMainStatus --value)" = 1')
+        machine.wait_until_succeeds('test "$(systemctl show rooted-retry.service -p NRestarts --value)" -ge ' + str(denied_restart_before + 3), timeout=60)
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-retry-pre')
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-retry-payload')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-retry-post')
         machine.fail('systemctl start rooted-start.service')
-        machine.succeed('test "$(systemctl show direct-network-admission-rooted-start.service -p ExecMainStatus --value)" = 1')
+        machine.succeed('test "$(systemctl show rooted-start.service -p Result --value)" = exit-code')
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-pre')
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-payload')
         machine.fail('systemctl start late-start.service')
@@ -288,7 +293,7 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed(userctl + 'reset-failed late-start.service')
     if mode == 'both':
         machine.fail('systemctl start imaged-start.service')
-        machine.succeed('test "$(systemctl show direct-network-admission-imaged-start.service -p ExecMainStatus --value)" = 1')
+        machine.succeed('test "$(systemctl show imaged-start.service -p Result --value)" = exit-code')
         machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-pre')
         machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-payload')
     machine.succeed('systemctl is-active foreign-dns.service')
@@ -301,11 +306,16 @@ machine.succeed('systemctl start direct-network-dns.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 resume_dns_admission_probes(negative_counter)
 check_direct()
-machine.succeed('systemctl reset-failed rooted-start.service imaged-start.service rooted-retry.service direct-network-admission-rooted-start.service direct-network-admission-imaged-start.service direct-network-admission-rooted-retry.service')
-machine.succeed('systemctl start rooted-start.service imaged-start.service rooted-retry.service')
+# The long-running rooted payload recovers on its own from the denied retries.
+machine.wait_until_succeeds('test -e /run/direct-network-root-state/rooted-retry-payload', timeout=45)
+machine.wait_until_succeeds('grep -Fx post /run/direct-network-root-state/rooted-retry-post')
+machine.succeed('systemctl is-active rooted-retry.service')
+machine.succeed('systemctl reset-failed rooted-start.service imaged-start.service')
+machine.succeed('systemctl start rooted-start.service imaged-start.service')
 for name in ['rooted-start', 'imaged-start', 'rooted-retry']:
     machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
     machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
+    machine.succeed(f'grep -Fx post /run/direct-network-root-state/{name}-post')
 machine.succeed('systemctl start late-start.service')
 machine.succeed(userctl + 'start late-start.service')
 machine.succeed('test -e /tmp/direct-network-late-system')
@@ -340,6 +350,9 @@ machine.succeed('systemctl daemon-reload')
 negative_counter = pause_dns_admission_probes()
 machine.succeed('systemctl restart direct-network.service direct-network-dns.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+machine.succeed('rm /run/direct-network-root-state/rooted-start-pre /run/direct-network-root-state/rooted-start-payload /run/direct-network-root-state/rooted-start-post')
+machine.succeed('systemctl start rooted-start.service')
+machine.succeed('grep -Fx post /run/direct-network-root-state/rooted-start-post')
 machine.wait_until_succeeds('dig +short +time=2 +tries=1 @127.0.0.54 -p 5354 reload.example.test | grep -Fx 192.0.2.10')
 resume_dns_admission_probes(negative_counter)
 reload_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip()

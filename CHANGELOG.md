@@ -13,10 +13,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   retaining decode diagnostics and refusing to treat unreadable state as cleanup.
 - Reject ECMP groups above the bounded iproute2 replay capacity and unsupported
   cross-family gateways before any forwarding, firewall or DNS changes.
-- Admit rooted system services through a fresh host-side readiness dependency,
-  preserving their existing chrooted hooks and automatic-restart checks.
-- Leave retry rate limits with the enrolled workload instead of imposing the
-  admission helper's separate default start burst on rooted services.
+- Keep rooted-service readiness in the payload's pre-start lifecycle, with
+  read-only client-closure and live socket-directory binds. Preserve existing
+  chrooted hooks, credentials, resource policy and automatic retries through
+  admission denial and recovery.
 
 ## [0.5.0] - 2026-10-11
 
