@@ -50,6 +50,8 @@
   # strings as a dependency-free runtime input to builtins.fromJSON.
   policy = builtins.fromJSON (builtins.unsafeDiscardStringContext config.environment.etc."direct-network-policy.json".text);
 in
+  # An empty list emits no unit directive; inspect the rendered reset too.
+  assert pkgs.lib.hasInfix "CapabilityBoundingSet=\n" config.systemd.units."direct-network-dns.service".text;
   assert config.systemd.services.nscd.environment.NSNCD_IGNORE_HOSTS == "true";
   assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";

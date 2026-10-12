@@ -29,7 +29,10 @@ The module reserves mark `0xca010000`, rule priorities 49/50, routing tables
 owners must not use that namespace. Each table is inspected independently of
 policy-rule presence, for both address families. Untagged or differently tagged
 routes cause reconciliation to fail before any table flush. Flushes select only
-protocol 242. IPv4 routes use `add`; IPv6 routes use non-replacing `append` to
+protocol 242. The observed owned IPv6 unreachable fallback is explicitly deleted
+from the inactive table first; iproute2 refuses to flush a default of that type
+at the maximum metric, even with a type selector. IPv4 routes use
+`add`; IPv6 routes use non-replacing `append` to
 retain same-prefix, same-metric siblings on distinct interfaces, including
 link-local routes. Neither operation replaces a concurrently inserted foreign
 route. The unreachable fallback uses `add`, and observed conflicts block the
@@ -63,7 +66,9 @@ activity does not have to remain static. This is an observation-bound startup
 barrier, not a promise that the resolver cannot exit after acknowledgement.
 
 Dnsmasq runs as root with an explicitly empty group override and no capabilities
-on its unprivileged port. This permits same-UID descriptor inspection from the
+on its unprivileged port. The module emits an explicit empty
+`CapabilityBoundingSet=` directive; an empty Nix list would omit it and retain
+systemd's default capabilities. This permits same-UID descriptor inspection from the
 routing daemon without giving it `CAP_SYS_PTRACE`. Silent peers outside the
 allowed UID list are rejected before reading their requests.
 

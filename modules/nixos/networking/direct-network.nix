@@ -220,7 +220,9 @@ in {
               # DNS-only unprivileged port needs no capabilities. Same-root UID
               # with empty target capabilities permits MainPID FD authentication
               # without granting the routing daemon CAP_SYS_PTRACE.
-              CapabilityBoundingSet = [];
+              # An empty list emits no directive, retaining systemd's default
+              # capabilities and blocking the limited daemon's proc inspection.
+              CapabilityBoundingSet = "";
             };
           };
         }

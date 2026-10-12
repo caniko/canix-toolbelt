@@ -125,6 +125,12 @@ try:
             'dnsServers': [], 'dnsZones': {}, 'networkManagerDns': False,
         }))
         log = (directory / 'daemon.log').open('w+')
+        # Recover retained owned fallbacks in either inactive table. IPv6's
+        # default flush omits unreachable routes, breaking the next exclusive add.
+        for family in ['-4', '-6']:
+            for table in ['51821', '51822']:
+                run('ip', family, 'route', 'add', 'unreachable', 'default', 'table', table,
+                    'proto', '242', 'metric', '4294967295')
         daemon = subprocess.Popen([binary, 'daemon', '--policy', str(policy)], stdout=log, stderr=log)
         for _ in range(5):
             if daemon.poll() is not None:

@@ -584,6 +584,50 @@ fn numeric_id(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
+fn remove_retained_fallback(policy: &Policy, family: &str, table: u32) -> Result<()> {
+    if family != "-6" {
+        return Ok(());
+    }
+    // iproute2 refuses to flush IPv6 unreachable defaults at the maximum
+    // metric, even with an explicit type selector. Delete only an observed
+    // owned fallback from the inactive table before its next exclusive add.
+    let routes = json(
+        &policy.ip,
+        &[family, "-N", "-j", "route", "show", "table", "all"],
+    )?;
+    if routes
+        .as_array()
+        .ok_or_else(|| invalid("ip route did not return an array"))?
+        .iter()
+        .any(|route| {
+            numeric_id(&route["table"]) == Some(u64::from(table))
+                && numeric_id(&route["protocol"]) == Some(u64::from(ROUTE_PROTOCOL))
+                && numeric_id(&route["type"]) == Some(7)
+                && route["dst"] == "default"
+                && route["metric"] == u32::MAX
+        })
+    {
+        output(
+            &policy.ip,
+            &args(&[
+                family,
+                "route",
+                "del",
+                "unreachable",
+                "default",
+                "table",
+                &table.to_string(),
+                "proto",
+                &ROUTE_PROTOCOL.to_string(),
+                "metric",
+                &u32::MAX.to_string(),
+            ]),
+            None,
+        )?;
+    }
+    Ok(())
+}
+
 fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> {
     check_reservations(policy)?;
     let initial = family_rules(policy, family)?;
@@ -609,6 +653,7 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
         delete_rule(policy, family, rule)?;
     }
     check_reservations(policy)?;
+    remove_retained_fallback(policy, family, table)?;
     let batch = route_batch(routes, table, family);
     output(&policy.ip, &args(&[family, "-batch", "-"]), Some(&batch)).map_err(|error| {
         invalid(format!(

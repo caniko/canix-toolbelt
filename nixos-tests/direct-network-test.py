@@ -154,7 +154,8 @@ machine.succeed('systemctl stop silent-peers.service')
 # Authenticate the actual hardened DNS unit, not unrelated TCP reachability.
 # Stopping DNS must preserve the established application process/connections.
 dns_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip()
-machine.succeed(f'grep "^CapEff:[[:space:]]*0000000000000000$" /proc/{dns_pid}/status')
+for capability in ['CapEff', 'CapPrm', 'CapBnd', 'CapAmb']:
+    machine.succeed(f'grep "^{capability}:[[:space:]]*0000000000000000$" /proc/{dns_pid}/status')
 negative_counter = pause_dns_admission_probes()
 machine.succeed('systemctl stop direct-network-dns.service')
 for mode in ['tcp', 'both', 'missing-ipv6']:
