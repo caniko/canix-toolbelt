@@ -256,6 +256,11 @@ in {
       environment.etc."direct-network-policy.json".text = builtins.toJSON policyData;
       systemd.packages = lib.optional (rootedServices != {}) rootedAdmissionUnits;
       environment.systemPackages = [cfg.package];
+      users.groups.direct-network-dns = {};
+      users.users.direct-network-dns = {
+        isSystemUser = true;
+        group = "direct-network-dns";
+      };
       systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (name: {
         description = lib.mkDefault "Direct-network resource slice ${name}";
       });
@@ -282,7 +287,9 @@ in {
               ProtectHome = true;
               ReadWritePaths = ["/run/direct-network"];
               PrivateTmp = true;
-              CapabilityBoundingSet = ["CAP_NET_ADMIN"];
+              # Authenticate the unprivileged resolver's MainPID FD and network
+              # namespace through cross-UID, ptrace-controlled proc reads.
+              CapabilityBoundingSet = ["CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
               NoNewPrivileges = true;
             };
           };
@@ -292,8 +299,12 @@ in {
             requires = ["direct-network.service"];
             after = ["direct-network.service"];
             serviceConfig = {
-              ExecStartPre = "${ready} --routes-only";
-              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --user=root --group= --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
+              User = "direct-network-dns";
+              Group = "direct-network-dns";
+              # Routes bootstrap is root-only; the network-facing payload starts
+              # with its dedicated identity already established by systemd.
+              ExecStartPre = "+${ready} --routes-only";
+              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --user=direct-network-dns --group=direct-network-dns --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
               Slice = "system-direct.slice";
               Restart = "on-failure";
               RestartSec = "2s";
@@ -301,11 +312,10 @@ in {
               ProtectHome = true;
               PrivateTmp = true;
               NoNewPrivileges = true;
-              # DNS-only unprivileged port needs no capabilities. Same-root UID
-              # with empty target capabilities permits MainPID FD authentication
-              # without granting the routing daemon CAP_SYS_PTRACE.
+              # DNS-only unprivileged port needs no capabilities. Keep the
+              # root-owned servers directory/file readable but not writable.
               # An empty list emits no directive, retaining systemd's default
-              # capabilities and blocking the limited daemon's proc inspection.
+              # capabilities instead of the explicit empty capability reset.
               CapabilityBoundingSet = "";
             };
           };

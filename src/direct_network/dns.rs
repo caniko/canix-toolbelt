@@ -9,6 +9,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 const UNIT: &str = "direct-network-dns.service";
+const USER: &str = "direct-network-dns";
 const PORT: u16 = 5354;
 const SOCKET_ROW_LIMIT: u64 = 4096;
 
@@ -19,6 +20,7 @@ pub(super) struct Identity {
     starttime: u64,
     cgroup_inode: u64,
     net_namespace: u64,
+    uid: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,12 +78,61 @@ fn unit_pid(properties: &str, cgroup: &str) -> Result<u32> {
         .ok_or_else(|| invalid("resolver unit has no main process"))
 }
 
+fn credentials(status: &str, expected_uid: u32) -> Result<u32> {
+    if expected_uid == 0 {
+        return Err(invalid("resolver account must be unprivileged"));
+    }
+    let required = [
+        "Uid",
+        "CapInh",
+        "CapPrm",
+        "CapEff",
+        "CapBnd",
+        "CapAmb",
+        "NoNewPrivs",
+    ];
+    let mut fields = BTreeMap::new();
+    for line in status.lines() {
+        let (key, value) = line
+            .split_once(':')
+            .ok_or_else(|| invalid("invalid resolver credential evidence"))?;
+        if required.contains(&key) && fields.insert(key, value.trim()).is_some() {
+            return Err(invalid("duplicate resolver credential evidence"));
+        }
+    }
+    let uids = fields
+        .get("Uid")
+        .ok_or_else(|| invalid("missing resolver UID evidence"))?
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if uids != [expected_uid; 4] || fields.get("NoNewPrivs") != Some(&"1") {
+        return Err(invalid(
+            "resolver credentials differ from unprivileged account",
+        ));
+    }
+    for key in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        let value = fields
+            .get(key)
+            .ok_or_else(|| invalid("missing resolver capability evidence"))?;
+        if value.is_empty()
+            || value.len() > 16
+            || !value.bytes().all(|b| b.is_ascii_hexdigit())
+            || u64::from_str_radix(value, 16)? != 0
+        {
+            return Err(invalid("resolver retains capabilities"));
+        }
+    }
+    Ok(expected_uid)
+}
+
 fn identity(
     proc_root: &Path,
     cgroup_root: &Path,
     cgroup: &str,
     pid: u32,
     enrolled: u64,
+    expected_uid: u32,
 ) -> Result<Identity> {
     let process = proc_root.join(pid.to_string());
     let membership = bounded_text(&process.join("cgroup"), 65536)?;
@@ -107,6 +158,7 @@ fn identity(
         starttime: starttime(&bounded_text(&process.join("stat"), 65536)?, pid)?,
         cgroup_inode: cg.ino(),
         net_namespace: namespace.ino(),
+        uid: credentials(&bounded_text(&process.join("status"), 65536)?, expected_uid)?,
     })
 }
 
@@ -252,6 +304,7 @@ fn capture(
     cgroups: &BTreeMap<String, u64>,
     proc_root: &Path,
     cgroup_root: &Path,
+    expected_uid: u32,
 ) -> Result<Observation> {
     let cgroup = policy
         .dns_cgroup
@@ -261,7 +314,7 @@ fn capture(
         .get(cgroup)
         .ok_or_else(|| invalid("resolver cgroup is not enrolled"))?;
     let pid = unit_pid(properties, cgroup)?;
-    let before = identity(proc_root, cgroup_root, cgroup, pid, enrolled)?;
+    let before = identity(proc_root, cgroup_root, cgroup, pid, enrolled, expected_uid)?;
     let process = proc_root.join(pid.to_string());
     let owned = socket_inodes(&process)?;
     let mut sockets = [0; 4];
@@ -287,7 +340,7 @@ fn capture(
     {
         return Err(invalid("resolver listener ownership changed"));
     }
-    if identity(proc_root, cgroup_root, cgroup, pid, enrolled)? != before {
+    if identity(proc_root, cgroup_root, cgroup, pid, enrolled, expected_uid)? != before {
         return Err(invalid("resolver process identity changed"));
     }
     Ok(Observation {
@@ -304,6 +357,7 @@ pub(super) fn test_observation(pid: u32) -> Observation {
             starttime: 987,
             cgroup_inode: 123,
             net_namespace: 456,
+            uid: 1001,
         },
         sockets: [1, 2, 3, 4],
     }
@@ -322,12 +376,19 @@ fn properties(policy: &Policy) -> Result<String> {
 }
 
 pub(super) fn observe(policy: &Policy, cgroups: &BTreeMap<String, u64>) -> Result<Observation> {
+    // NixOS allocates the dedicated static account at activation, not evaluation.
+    // Resolve its trusted account identity once per complete double snapshot.
+    let uid = nix::unistd::User::from_name(USER)?
+        .ok_or_else(|| invalid("resolver account is unavailable"))?
+        .uid
+        .as_raw();
     let first = capture(
         &properties(policy)?,
         policy,
         cgroups,
         Path::new("/proc"),
         Path::new("/sys/fs/cgroup"),
+        uid,
     )?;
     let second = capture(
         &properties(policy)?,
@@ -335,6 +396,7 @@ pub(super) fn observe(policy: &Policy, cgroups: &BTreeMap<String, u64>) -> Resul
         cgroups,
         Path::new("/proc"),
         Path::new("/sys/fs/cgroup"),
+        uid,
     )?;
     if first != second {
         return Err(invalid("resolver authenticated snapshot changed"));
@@ -528,8 +590,44 @@ mod tests {
             BTreeMap::from([(cg.to_owned(), fs::metadata(cgroups.join(cg)).unwrap().ino())]);
         let properties =
             format!("ActiveState=active\nSubState=running\nMainPID=42\nControlGroup=/{cg}\n");
+        let capture = |properties: &str,
+                       policy: &Policy,
+                       enrolled: &BTreeMap<String, u64>,
+                       proc: &Path,
+                       cgroups: &Path| {
+            super::capture(properties, policy, enrolled, proc, cgroups, 1001)
+        };
+        let credentials = "Uid:\t1001\t1001\t1001\t1001\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n";
+        fs::write(proc.join("42/status"), credentials).unwrap();
         let valid = capture(&properties, &policy, &enrolled, &proc, &cgroups).unwrap();
         assert_eq!(valid.sockets, [123, 124, 125, 126]);
+        for rejected in [
+            credentials.replace("1001", "0"),
+            credentials.replace("1001", "1002"),
+            credentials.replacen("1001", "0", 1),
+            credentials.replace("CapEff:\t0000000000000000", "CapEff:\t0000000000000001"),
+            credentials.replace("CapBnd:\t0000000000000000", "CapBnd:\t0000000000000001"),
+            credentials.replace("NoNewPrivs:\t1", "NoNewPrivs:\t0"),
+            credentials.replace("CapInh:\t0000000000000000\n", ""),
+            credentials.to_owned() + "Uid:\t1001\t1001\t1001\t1001\n",
+        ] {
+            fs::write(proc.join("42/status"), &rejected).unwrap();
+            assert!(
+                capture(&properties, &policy, &enrolled, &proc, &cgroups).is_err(),
+                "privileged or unexpected resolver credentials were admitted: {rejected}"
+            );
+        }
+        fs::write(proc.join("42/status"), credentials).unwrap();
+        assert!(super::capture(&properties, &policy, &enrolled, &proc, &cgroups, 0).is_err());
+        assert!(super::capture(&properties, &policy, &enrolled, &proc, &cgroups, 1002).is_err());
+        fs::write(proc.join("42/status"), credentials.replace("1001", "1002")).unwrap();
+        let changed =
+            super::capture(&properties, &policy, &enrolled, &proc, &cgroups, 1002).unwrap();
+        assert_ne!(
+            changed, valid,
+            "credential generation was omitted from the receipt"
+        );
+        fs::write(proc.join("42/status"), credentials).unwrap();
         // These files describe the entire host namespace, not just MainPID's
         // four sockets. A busy host must still authenticate its exact listeners.
         for (i, (name, v6, udp)) in [

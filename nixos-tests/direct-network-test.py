@@ -215,8 +215,18 @@ machine.succeed('systemctl stop silent-peers.service')
 # Authenticate the actual hardened DNS unit, not unrelated TCP reachability.
 # Stopping DNS must preserve the established application process/connections.
 dns_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID --value').strip()
-for capability in ['CapEff', 'CapPrm', 'CapBnd', 'CapAmb']:
+dns_status = dict(line.split(':', 1) for line in machine.succeed(f'cat /proc/{dns_pid}/status').splitlines())
+resolver_uid = int(machine.succeed('id -u direct-network-dns').strip())
+assert resolver_uid != 0 and list(map(int, dns_status['Uid'].split())) == [resolver_uid] * 4
+for capability in ['CapInh', 'CapEff', 'CapPrm', 'CapBnd', 'CapAmb']:
     machine.succeed(f'grep "^{capability}:[[:space:]]*0000000000000000$" /proc/{dns_pid}/status')
+assert dns_status['NoNewPrivs'].strip() == '1'
+assert machine.succeed(f'stat -Lc %d:%i /proc/{dns_pid}/ns/net').strip() == machine.succeed('stat -Lc %d:%i /proc/1/ns/net').strip()
+machine.succeed('canix-toolbelt-direct-network ready')
+machine.succeed('systemd-run --unit=resolver-root-peer sleep 60')
+root_peer = machine.succeed('systemctl show resolver-root-peer.service -p MainPID --value').strip()
+machine.succeed(f'systemd-run --wait --pipe --collect --unit=resolver-privilege-proof --property=User=direct-network-dns --property=Group=direct-network-dns --property=CapabilityBoundingSet= --property=NoNewPrivileges=yes @PYTHON@ @NEGATIVE@ privilege-boundary --root-peer {root_peer}')
+machine.succeed('systemctl stop resolver-root-peer.service')
 negative_counter = pause_dns_admission_probes()
 # Repeated starts must rerun admission even though the slice anchor stays live.
 # Existing prechecks and payloads still execute inside RootDirectory/RootImage.
@@ -224,14 +234,17 @@ for name in ['rooted-start', 'imaged-start']:
     previous = ''
     for _ in range(2):
         machine.succeed(f'systemctl start {name}.service')
-        current = machine.succeed(f'systemctl show {name}.service -p InvocationID --value').strip()
-        assert current and current != previous, (name, current, previous)
+        # Inactive oneshots clear the manager's live InvocationID. Retain the
+        # actual payload environment instead, without changing its lifecycle.
+        current = machine.succeed(f'cat /run/direct-network-root-state/{name}-invocation').strip()
+        assert len(current) == 32 and all(c in '0123456789abcdef' for c in current), (name, current)
+        assert current != previous, (name, current, previous)
         previous = current
         machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
         machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
         machine.succeed(f'grep -Fx post /run/direct-network-root-state/{name}-post')
         machine.succeed(f'test "$(systemctl show {name}.service -p MemoryMax --value)" = 67108864')
-        machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload /run/direct-network-root-state/{name}-post')
+        machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload /run/direct-network-root-state/{name}-post /run/direct-network-root-state/{name}-invocation')
 for _ in range(2):
     machine.succeed(userctl + 'start rooted-user-start.service')
     for phase in ['pre', 'payload', 'post']:
@@ -264,11 +277,12 @@ machine.succeed('systemctl kill --kill-whom=main --signal=TERM rooted-retry.serv
 machine.wait_until_succeeds('test "$(systemctl show rooted-retry.service -p NRestarts --value)" -ge ' + str(denied_restart_before + 3), timeout=60)
 for phase in ['pre', 'payload', 'post']:
     machine.succeed(f'test ! -e /run/direct-network-root-state/rooted-retry-{phase}')
-for mode in ['tcp', 'both', 'missing-ipv6']:
-    marker = f'/run/foreign-{mode}-ready'
+for mode, peer_user in [('tcp', 'root'), ('both', 'root'), ('missing-ipv6', 'root'), ('same-account', 'direct-network-dns')]:
+    marker = f'/tmp/foreign-{mode}-ready' if mode == 'same-account' else f'/run/foreign-{mode}-ready'
     # Keep the impostor alive through both 15-second service-start barriers.
     # The explicit lifetime stays within the negative peer's 120-second bound.
-    machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --seconds 120 --marker {marker}')
+    peer_mode = 'both' if mode == 'same-account' else mode
+    machine.succeed(f'systemd-run --unit=foreign-dns --property=User={peer_user} @PYTHON@ @NEGATIVE@ {peer_mode} --seconds 120 --marker {marker}')
     machine.wait_for_file(marker)
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
@@ -290,6 +304,7 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed('test "$(systemctl show rooted-start.service -p Result --value)" = exit-code')
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-pre')
         machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-payload')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-invocation')
         system_status, system_output = machine.execute('systemctl start late-start.service')
         assert system_status == 1, (system_status, system_output)
         machine.succeed('systemctl is-active foreign-dns.service')
@@ -308,6 +323,7 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed('test "$(systemctl show imaged-start.service -p Result --value)" = exit-code')
         machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-pre')
         machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-payload')
+        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-invocation')
         rooted_user_status, rooted_user_output = machine.execute(userctl + 'start rooted-user-start.service')
         assert rooted_user_status == 1, (rooted_user_status, rooted_user_output)
         for phase in ['pre', 'payload', 'post']:

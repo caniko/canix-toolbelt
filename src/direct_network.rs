@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::IpAddr;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
@@ -944,10 +944,30 @@ fn sync_dns_servers_with(
     servers: &str,
     observe: impl Fn(&Policy, &BTreeMap<String, u64>) -> Result<dns::Observation>,
 ) -> Result<()> {
-    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(servers) {
+    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(servers)
+        || fs::metadata(&policy.servers_file).is_ok_and(|m| m.mode() & 0o777 != 0o644)
+    {
         state.dns_dispatch = None;
         let temp = format!("{}.new", policy.servers_file);
-        fs::write(&temp, servers)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .mode(0o644)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(&temp)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+        {
+            return Err(invalid("invalid DNS servers replacement ownership"));
+        }
+        file.set_len(0)?;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
+        file.write_all(servers.as_bytes())?;
+        file.sync_all()?;
         fs::rename(temp, &policy.servers_file)?;
     }
     let resolver = match observe(policy, &state.cgroups) {
@@ -1198,6 +1218,9 @@ mod tests {
         p.servers_file = root.path().join("servers").to_str().unwrap().into();
         let mut state = State::default();
         let servers = "server=192.0.2.53\n";
+        let temporary_servers = format!("{}.new", p.servers_file);
+        fs::write(&temporary_servers, "restrictive stale replacement").unwrap();
+        fs::set_permissions(&temporary_servers, fs::Permissions::from_mode(0o600)).unwrap();
         let observe = |_: &Policy, _: &BTreeMap<String, u64>| Ok(dns::test_observation(42));
         assert!(
             sync_dns_servers_with(&p, &mut state, servers, observe).is_err(),
@@ -1205,6 +1228,7 @@ mod tests {
         );
         assert!(state.dns_dispatch.is_none());
         assert_eq!(fs::read_to_string(&p.servers_file).unwrap(), servers);
+        assert_eq!(fs::metadata(&p.servers_file).unwrap().mode() & 0o777, 0o644);
         sync_dns_servers_with(&p, &mut state, servers, observe).unwrap();
         assert!(state.dns_dispatch.is_some());
         assert_eq!(fs::read_to_string(&count).unwrap(), "2\n");

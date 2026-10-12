@@ -5,16 +5,27 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
-### Added
+## [0.5.0] - 2026-10-11
 
-- Provider-free execution wire types and pure validators generated for Rust and
-  TypeScript from one versioned schema. Bind discovery to exact implementation,
-  configuration and credential-reference identities; preserve u64 counters as
-  strings and reject unavailable guarantees before execution. Ship shared
-  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
+### Changed
+
+- Consume registry Fleetix 0.6.0 for native shared construction. Preserve the
+  Toolbelt library paths and frontend return type through compatibility adapters
+  while sharing Fleetix's exact service, connection and command types. Native
+  execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
+- Alias the existing NixOS option paths to Fleetix's service module, including
+  retained-deployment staging, operator-bound policy, configurable private paths
+  and preserved runtime-directory ownership through offline rollover.
 
 ### Fixed
 
+- Run the direct resolver under a dedicated unprivileged account with no
+  capabilities; bind readiness and reload receipts to that account's complete
+  credential evidence as well as MainPID, cgroup and all four owned listeners.
+- Explicitly install root-owned readable, non-resolver-writable servers files,
+  including replacement of restrictive stale temporary files before DNS reload.
+- Compose rooted admission drop-ins through the native systemd package tree and
+  retain completed oneshot payload invocation identities in kernel VM evidence.
 - Keep disposable foreign DNS peers alive through both service-start refusal
   checks, with bounded lifetime and active-peer assertions before cleanup.
 - Retry malformed pinentry pane observations within the original deadline,
@@ -46,21 +57,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Retain canonical single-path scope in the selected route and replay it explicitly,
   including global scope omitted by iproute2's JSON printer. Expose typed
   `RouteScope` in `Route` so scope-only changes also invalidate its snapshot.
-
-## [0.5.0] - 2026-10-11
-
-### Changed
-
-- Consume registry Fleetix 0.6.0 for native shared construction. Preserve the
-  Toolbelt library paths and frontend return type through compatibility adapters
-  while sharing Fleetix's exact service, connection and command types. Native
-  execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
-- Alias the existing NixOS option paths to Fleetix's service module, including
-  retained-deployment staging, operator-bound policy, configurable private paths
-  and preserved runtime-directory ownership through offline rollover.
-
-### Fixed
-
 - Match the Claude release manifest to nixpkgs' raw or Zstandard download
   recipe, keeping both the declared checksum and installation format compatible.
 - Require native owner/host observation fencing through dispatch; unsupported
@@ -102,6 +98,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Provider-free execution wire types and pure validators generated for Rust and
+  TypeScript from one versioned schema. Bind discovery to exact implementation,
+  configuration and credential-reference identities; preserve u64 counters as
+  strings and reject unavailable guarantees before execution. Ship shared
+  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
 - Host-neutral native campaign journal, admission and bounded recovery primitives
   behind the `orchestration` feature, including native input reconciliation,
   complete forge-history collection, evidence replication, bounded context

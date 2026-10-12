@@ -1,10 +1,37 @@
 """Bounded, disposable negative peers for the direct-network VM gate."""
 
 import argparse
+import os
 import pathlib
+import pwd
 import select
 import socket
 import time
+
+
+def privilege_boundary(root_peer: int) -> None:
+    uid = pwd.getpwnam('direct-network-dns').pw_uid
+    assert uid != 0 and os.getresuid() == (uid, uid, uid)
+    status = dict(line.split(':', 1) for line in pathlib.Path('/proc/self/status').read_text().splitlines())
+    assert list(map(int, status['Uid'].split())) == [uid] * 4
+    for field in ['CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb']:
+        assert int(status[field], 16) == 0, (field, status[field])
+    assert status['NoNewPrivs'].strip() == '1'
+    servers = pathlib.Path('/run/direct-network/servers')
+    assert servers.stat().st_uid == 0 and servers.stat().st_mode & 0o777 == 0o644
+    assert os.access(servers, os.R_OK) and not os.access(servers, os.W_OK)
+    assert not os.access(servers.parent, os.W_OK)
+    servers.read_text()
+    try:
+        with pathlib.Path('/etc/shadow').open('rb'):
+            raise AssertionError('resolver credentials can open root shadow data')
+    except PermissionError:
+        pass
+    try:
+        os.kill(root_peer, 0)
+        raise AssertionError('resolver credentials can signal an unrelated root process')
+    except PermissionError:
+        pass
 
 
 def silent_peers(path: str, marker: pathlib.Path, seconds: float) -> None:
@@ -89,14 +116,21 @@ def foreign_listener(mode: str, marker: pathlib.Path, seconds: float) -> None:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['silent-peers', 'tcp', 'both', 'missing-ipv6', 'connected-v4', 'connected-v6', 'mapped-connected'])
-    parser.add_argument('--marker', required=True, type=pathlib.Path)
+    parser.add_argument('mode', choices=['silent-peers', 'tcp', 'both', 'missing-ipv6', 'connected-v4', 'connected-v6', 'mapped-connected', 'privilege-boundary'])
+    parser.add_argument('--marker', type=pathlib.Path)
+    parser.add_argument('--root-peer', type=int)
     parser.add_argument('--socket', default='/run/direct-network/ready.sock')
     parser.add_argument('--seconds', type=float, default=30)
     args = parser.parse_args()
     if not 0 < args.seconds <= 120:
         parser.error('seconds must be in (0, 120]')
-    if args.mode == 'silent-peers':
+    if args.mode == 'privilege-boundary':
+        if args.root_peer is None or args.root_peer <= 1:
+            parser.error('privilege-boundary requires a disposable root peer PID')
+        privilege_boundary(args.root_peer)
+    elif args.marker is None:
+        parser.error('listener probes require --marker')
+    elif args.mode == 'silent-peers':
         silent_peers(args.socket, args.marker, args.seconds)
     else:
         foreign_listener(args.mode, args.marker, args.seconds)

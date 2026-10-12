@@ -129,12 +129,22 @@ the required listener identity. Unrelated host sockets do not impose an aggregat
 table-size limit. The scan still reaches EOF to detect competing listeners and
 rejects malformed, oversized or unreadable evidence.
 
-Dnsmasq runs as root with an explicitly empty group override and no capabilities
-on its unprivileged port. The module emits an explicit empty
+Systemd starts dnsmasq as the dedicated static `direct-network-dns` account and
+group, with no capabilities on its unprivileged port. The module emits an explicit empty
 `CapabilityBoundingSet=` directive; an empty Nix list would omit it and retain
-systemd's default capabilities. This permits same-UID descriptor inspection from the
-routing daemon without giving it `CAP_SYS_PTRACE`. Silent peers outside the
-allowed UID list are rejected before reading their requests.
+systemd's default capabilities. Admission resolves the trusted account at runtime
+and requires all four process UIDs to match its nonzero UID, all five capability
+sets to be empty, and `NoNewPrivs` to be set. Missing, malformed or duplicate
+credential fields deny admission. Credentials participate in both bracketed
+identity checks and reload-receipt equality; sharing the resolver UID does not
+substitute for MainPID-owned listener evidence.
+
+Only the routing daemon has `CAP_SYS_PTRACE`, alongside `CAP_NET_ADMIN`, to inspect
+the cross-UID MainPID's FD links and host network namespace. The resolver cannot
+read root-only host files, signal unrelated root processes, or write its root-owned
+`0755` runtime directory and `0644` servers file. Replacement-file permissions are
+explicit even after a restrictive umask or stale temporary file. Silent peers
+outside the allowed UID list are rejected before reading their requests.
 
 Servers-file installation invalidates the reload-dispatch receipt before any
 write. Failed dispatches remain pending and are retried even when the committed
@@ -144,8 +154,9 @@ HUP dispatch establishes signal delivery, **not asynchronous reload completion
 or upstream reachability**. The hosted VM gate separately verifies effective
 DNS answers and persistent application connections through transitions.
 
-The root-only `ready --routes-only` barrier allows DNS bootstrap after route and
-cgroup reconciliation. Normal readiness still requires authenticated listeners
+The root-prefixed pre-start `ready --routes-only` barrier allows DNS bootstrap
+after route and cgroup reconciliation, before the unprivileged payload starts.
+Normal readiness still requires authenticated listeners
 and a current reload-dispatch receipt. Anchors want and order after DNS but use
 their readiness precheck for admission, preserving running workloads across
 resolver lifetime changes.

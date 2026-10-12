@@ -124,6 +124,14 @@
 in
   # An empty list emits no unit directive; inspect the rendered reset too.
   assert pkgs.lib.hasInfix "CapabilityBoundingSet=\n" config.systemd.units."direct-network-dns.service".text;
+  assert config.users.users.direct-network-dns.isSystemUser;
+  assert config.users.users.direct-network-dns.group == "direct-network-dns";
+  assert config.systemd.services.direct-network-dns.serviceConfig.User == "direct-network-dns";
+  assert config.systemd.services.direct-network-dns.serviceConfig.Group == "direct-network-dns";
+  assert config.systemd.services.direct-network-dns.serviceConfig.NoNewPrivileges;
+  assert config.systemd.services.direct-network-dns.serviceConfig.ExecStartPre == "+${pkgs.hello}/bin/canix-toolbelt-direct-network ready --routes-only";
+  assert pkgs.lib.hasInfix "--user=direct-network-dns --group=direct-network-dns" config.systemd.services.direct-network-dns.serviceConfig.ExecStart;
+  assert config.systemd.services.direct-network.serviceConfig.CapabilityBoundingSet == ["CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
   assert config.systemd.services.nscd.environment.NSNCD_IGNORE_HOSTS == "true";
   assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";

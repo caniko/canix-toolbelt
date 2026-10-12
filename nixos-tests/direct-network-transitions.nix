@@ -41,7 +41,7 @@
     # All original hooks retain the configured root and UID. No blanket store
     # bind may hide a missing readiness-client runtime dependency.
     ExecStartPre = ["/bin/sh -c 'test -e /inside-root && test -S /run/direct-network/ready.sock && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo pre > /tmp/%N-pre'"];
-    ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo payload > /tmp/%N-payload'";
+    ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo \"$INVOCATION_ID\" > /tmp/%N-invocation && echo payload > /tmp/%N-payload'";
     ExecStartPost = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo post > /tmp/%N-post'";
   };
 in
