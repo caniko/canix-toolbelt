@@ -20,6 +20,10 @@ Generated TypeScript schema metadata is recursively frozen at initialization,
 keeping exported metadata and validation constraints bound to the same digest.
 JavaScript array inputs must contain an own element at every index; sparse arrays
 and inherited replacements are rejected before encoding or negotiation.
+Encoding and negotiation capture messages with `structuredClone` before
+validation, serialization or discovery checks. Accessors are evaluated during
+capture; subsequent checks read the detached data. Proxies and other uncloneable
+inputs, including throwing accessors, produce a redacted `invalid-frame` error.
 
 `decode` accepts a single UTF-8 compact JSON document with recursively sorted
 object keys and canonical string escapes. Duplicate keys, unknown fields,

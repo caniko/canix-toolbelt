@@ -166,3 +166,99 @@ test("schema mutation cannot relax identity validation", () => {
     if (!Object.isFrozen(schema.definitions.Id)) Reflect.set(schema.definitions.Id, "maxBytes", original);
   }
 });
+
+test("encoding validates and emits the same accessor-backed identity", () => {
+  const value = message("describe");
+  let reads = 0;
+  Object.defineProperty(value, "requestId", {
+    enumerable: true,
+    get: () => ++reads === 1 ? "ok" : "bad\nvalue",
+  });
+  assert.equal(decode(encode(value)).requestId, "ok");
+});
+
+test("encoding snapshots nested accessors before validation", () => {
+  const value = message("describe");
+  if (value.body.kind !== "describe") throw new Error("fixture");
+  const implementation = value.body.expectedImplementation;
+  const digest = implementation.engineDigest;
+  let reads = 0;
+  Object.defineProperty(implementation, "engineDigest", {
+    enumerable: true,
+    get: () => ++reads === 1 ? digest : "invalid-digest",
+  });
+  const decoded = decode(encode(value));
+  if (decoded.body.kind !== "describe") throw new Error("fixture");
+  assert.equal(decoded.body.expectedImplementation.engineDigest, digest);
+});
+
+test("encoding snapshots array accessors before validation", () => {
+  const value = message("capabilities");
+  if (value.body.kind !== "capabilities") throw new Error("fixture");
+  let reads = 0;
+  Object.defineProperty(value.body.profiles, 0, {
+    enumerable: true,
+    get: () => ++reads === 1 ? "linux-untrusted-review" : "unknown-profile",
+  });
+  const decoded = decode(encode(value));
+  if (decoded.body.kind !== "capabilities") throw new Error("fixture");
+  assert.equal(decoded.body.profiles[0], "linux-untrusted-review");
+});
+
+test("uncapturable messages produce redacted protocol errors", () => {
+  const throwing = message("describe");
+  Object.defineProperty(throwing, "requestId", {
+    enumerable: true,
+    get: () => { throw new Error("synthetic-private-getter-value"); },
+  });
+  for (const value of [throwing, new Proxy(message("describe"), {})]) {
+    for (const operation of [() => encode(value), () => negotiate(value, message("capabilities"), [])]) {
+      assert.throws(operation, error => error instanceof ProtocolError
+        && error.code === "invalid-frame"
+        && error.message === "execution protocol rejected: invalid-frame"
+        && error.cause === undefined);
+    }
+  }
+});
+
+for (const binding of ["correlation", "implementation", "profile", "capabilities"] as const) {
+  test(`discovery checks the captured ${binding} rather than rereading accessors`, () => {
+    const request = message("describe");
+    const response = message("capabilities");
+    if (request.body.kind !== "describe" || response.body.kind !== "capabilities") throw new Error("fixture");
+    let target: object;
+    let key: string;
+    let initial: unknown;
+    let later: unknown;
+    let code: string;
+    switch (binding) {
+      case "correlation":
+        target = response; key = "requestId";
+        initial = "mismatched-request"; later = request.requestId;
+        code = "transport-failed";
+        break;
+      case "implementation":
+        target = response.body.implementation; key = "engineDigest";
+        initial = "a".repeat(64); later = response.body.implementation.engineDigest;
+        code = "custody-lost";
+        break;
+      case "profile":
+        target = request.body; key = "requiredProfile";
+        initial = "macos-untrusted-review"; later = "linux-untrusted-review";
+        code = "unsupported-profile";
+        break;
+      case "capabilities":
+        target = response.body; key = "capabilities";
+        initial = response.body.capabilities.filter(capability => capability !== "zero-effect-reopen");
+        later = response.body.capabilities;
+        code = "unsupported-capability";
+        break;
+    }
+    let reads = 0;
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      get: () => ++reads === 1 ? initial : later,
+    });
+    assert.throws(() => negotiate(request, response, []), { code });
+  });
+}

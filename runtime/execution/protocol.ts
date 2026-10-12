@@ -111,18 +111,29 @@ export function decode(bytes: Uint8Array): Message {
   return value;
 }
 
-/** Validate before emitting the canonical transport document. */
-export function encode(message: Message): Uint8Array {
-  validate(message);
-  const bytes = encoder.encode(canonical(message));
+/** Capture caller-owned values once; later checks only read detached data. */
+function captureFrame(message: Message): { value: Message; bytes: Uint8Array } {
+  let value: unknown;
+  try {
+    value = structuredClone(message);
+  } catch {
+    throw new ProtocolError("invalid-frame");
+  }
+  validate(value);
+  const bytes = encoder.encode(canonical(value));
   if (bytes.length > schema.maxFrameBytes) throw new ProtocolError("invalid-frame");
-  return bytes;
+  return { value, bytes };
+}
+
+/** Validate and emit the same captured canonical transport document. */
+export function encode(message: Message): Uint8Array {
+  return captureFrame(message).bytes;
 }
 
 /** Discovery never substitutes for authenticated custodian observation. */
 export function negotiate(request: Message, response: Message, required: Capability[]): void {
-  encode(request);
-  encode(response);
+  request = captureFrame(request).value;
+  response = captureFrame(response).value;
   if (request.body.kind !== "describe" || response.body.kind !== "capabilities") throw new ProtocolError("invalid-frame");
   if (request.requestId !== response.requestId) throw new ProtocolError("transport-failed");
   if (canonical(response.body.implementation) !== canonical(request.body.expectedImplementation)
