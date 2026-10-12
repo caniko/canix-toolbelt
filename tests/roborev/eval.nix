@@ -117,121 +117,123 @@
         }
       ];
     }).config;
-in {
-  E01_disabled =
-    !(disabled.systemd.user.services ? roborev)
-    && !(disabled.home.file ? roborev-config)
-    && !(disabled.home.activation ? roborevDataDir)
-    && !(disabled.home.activation ? roborevDataDirCheck);
-  E02_program =
-    accepted program
-    && !(program.systemd.user.services ? roborev)
-    && program.home.file.roborev-config.target == ".roborev/config.toml";
-  E02_service = accepted service && service.systemd.user.services.roborev.Service.Type == "notify";
-  E02_implied_program = accepted implied && implied.programs.roborev.enable;
-  E02_conflict = reject {
-    programs.roborev.enable = false;
-    services.roborev.enable = true;
-  };
-  E03_no_user_manager = reject {
-    services.roborev.enable = true;
-    systemd.user.enable = false;
-  };
-  E03_integrated =
-    accepted integrated
-    && integrated.programs.roborev.settings == service.programs.roborev.settings
-    && integrated.systemd.user.services.roborev.Service.ExecStart == service.systemd.user.services.roborev.Service.ExecStart
-    && integrated.home.file.roborev-config.target == service.home.file.roborev-config.target;
-  # Home Manager forces failed assertions before returning its public config.
-  E03_darwin_rejected = !(builtins.tryEval (builtins.deepSeq darwin.assertions true)).success;
-  E04_merge =
-    accepted merged
-    && merged.programs.roborev.settings.max_workers == 3
-    && merged.programs.roborev.settings.ci.enabled == false;
-  E04_reserved = reject {programs.roborev.settings.default_agent = "codex";};
-  E05_mappings = accepted mappings;
-  E05_missing = reject {programs.roborev.defaultAgent = "codex";};
-  E05_unknown = reject {programs.roborev.agentCommands.unknown = "/fixture/no";};
-  E05_control = reject {programs.roborev.agentCommands.opencode = "/fixture/no\ninjected";};
-  E06_inline_auth = reject {programs.roborev.settings.auth_key = "SYNTHETIC_SENTINEL";};
-  E06_inline_web = reject {programs.roborev.settings.web.auth_token = "SYNTHETIC_SENTINEL";};
-  E06_inline_anthropic = reject {programs.roborev.settings.anthropic_api_key = "SYNTHETIC_SENTINEL";};
-  # Construct the synthetic PEM header at evaluation time for the source scanner.
-  E06_inline_app = reject {programs.roborev.settings.ci.github_app_private_key = builtins.concatStringsSep " " ["-----BEGIN" "PRIVATE KEY-----"];};
-  E06_store_runtime = reject {
-    services.roborev = {
-      enable = true;
-      requiredFiles = ["/nix/store/secret"];
+in
+  {
+    E01_disabled =
+      !(disabled.systemd.user.services ? roborev)
+      && !(disabled.home.file ? roborev-config)
+      && !(disabled.home.activation ? roborevDataDir)
+      && !(disabled.home.activation ? roborevDataDirCheck);
+    E02_program =
+      accepted program
+      && !(program.systemd.user.services ? roborev)
+      && program.home.file.roborev-config.target == ".roborev/config.toml";
+    E02_service = accepted service && service.systemd.user.services.roborev.Service.Type == "notify";
+    E02_implied_program = accepted implied && implied.programs.roborev.enable;
+    E02_conflict = reject {
+      programs.roborev.enable = false;
+      services.roborev.enable = true;
     };
-  };
-  E06_store_traversal = reject {
-    services.roborev = {
-      enable = true;
-      requiredFiles = ["/run/../nix/store/secret"];
+    E03_no_user_manager = reject {
+      services.roborev.enable = true;
+      systemd.user.enable = false;
     };
-  };
-  E06_store_web = reject {programs.roborev.settings.web.auth_token_file = "/nix/store/secret";};
-  E06_env_reference = accepted (eval (lib.recursiveUpdate enabled {
-    programs.roborev.settings.anthropic_api_key = "\${SYNTHETIC_API_KEY}";
-    programs.roborev.settings.ci.github_app_private_key = "/run/fixture-app-key.pem";
-  }));
-  E06_path_runtime = reject {
-    services.roborev = {
-      enable = true;
-      environmentFiles = [./eval.nix];
+    E03_integrated =
+      accepted integrated
+      && integrated.programs.roborev.settings == service.programs.roborev.settings
+      && integrated.systemd.user.services.roborev.Service.ExecStart == service.systemd.user.services.roborev.Service.ExecStart
+      && integrated.home.file.roborev-config.target == service.home.file.roborev-config.target;
+    # Home Manager forces failed assertions before returning its public config.
+    E03_darwin_rejected = !(builtins.tryEval (builtins.deepSeq darwin.assertions true)).success;
+    E04_merge =
+      accepted merged
+      && merged.programs.roborev.settings.max_workers == 3
+      && merged.programs.roborev.settings.ci.enabled == false;
+    E04_reserved = reject {programs.roborev.settings.default_agent = "codex";};
+    E05_mappings = accepted mappings;
+    E05_missing = reject {programs.roborev.defaultAgent = "codex";};
+    E05_unknown = reject {programs.roborev.agentCommands.unknown = "/fixture/no";};
+    E05_control = reject {programs.roborev.agentCommands.opencode = "/fixture/no\ninjected";};
+    E06_inline_auth = reject {programs.roborev.settings.auth_key = "SYNTHETIC_SENTINEL";};
+    E06_inline_web = reject {programs.roborev.settings.web.auth_token = "SYNTHETIC_SENTINEL";};
+    E06_inline_anthropic = reject {programs.roborev.settings.anthropic_api_key = "SYNTHETIC_SENTINEL";};
+    # Construct the synthetic PEM header at evaluation time for the source scanner.
+    E06_inline_app = reject {programs.roborev.settings.ci.github_app_private_key = builtins.concatStringsSep " " ["-----BEGIN" "PRIVATE KEY-----"];};
+    E06_store_runtime = reject {
+      services.roborev = {
+        enable = true;
+        requiredFiles = ["/nix/store/secret"];
+      };
     };
-  };
-  E06_unit_injection = reject {
-    services.roborev = {
-      enable = true;
-      environmentFiles = ["/run/secret\nExecStart=evil"];
+    E06_store_traversal = reject {
+      services.roborev = {
+        enable = true;
+        requiredFiles = ["/run/../nix/store/secret"];
+      };
     };
-  };
-  E06_environment_file_continuation = reject {
-    services.roborev = {
-      enable = true;
-      environmentFiles = ["/run/file\\"];
+    E06_store_web = reject {programs.roborev.settings.web.auth_token_file = "/nix/store/secret";};
+    E06_env_reference = accepted (eval (lib.recursiveUpdate enabled {
+      programs.roborev.settings.anthropic_api_key = "\${SYNTHETIC_API_KEY}";
+      programs.roborev.settings.ci.github_app_private_key = "/run/fixture-app-key.pem";
+    }));
+    E06_path_runtime = reject {
+      services.roborev = {
+        enable = true;
+        environmentFiles = [./eval.nix];
+      };
     };
-  };
-  E06_environment_file_trailing_space = reject {
-    services.roborev = {
-      enable = true;
-      environmentFiles = ["/run/file "];
+    E06_unit_injection = reject {
+      services.roborev = {
+        enable = true;
+        environmentFiles = ["/run/secret\nExecStart=evil"];
+      };
     };
-  };
-  E06_environment_file_glob = reject {
-    services.roborev = {
-      enable = true;
-      environmentFiles = ["/run/file*"];
+    E06_environment_file_continuation = reject {
+      services.roborev = {
+        enable = true;
+        environmentFiles = ["/run/file\\"];
+      };
     };
-  };
-  E08_defaults =
-    program.programs.roborev.settings.server_addr
-    == "unix://"
-    && program.programs.roborev.settings.max_workers == 2
-    && program.programs.roborev.settings.isolate_reviews
-    && !program.programs.roborev.settings.ci.enabled
-    && !program.programs.roborev.settings.web.enabled
-    && !program.programs.roborev.enableTelemetry;
-  E09_data_outside_home = reject {programs.roborev.dataDir = "/run/roborev";};
-  E09_inactive_worker =
-    accepted inactiveWorker
-    && !inactiveWorker.programs.roborev.enable
-    && !inactiveWorker.services.roborev.enable
-    && !inactiveWorker.programs.roborev.settings.ci.enabled
-    && inactiveWorker.programs.roborev.settings.ci.repos == []
-    && !(inactiveWorker.systemd.user.services ? roborev)
-    && !(inactiveWorker.home.file ? roborev-config);
-  E09_data_dotdot = reject {programs.roborev.dataDir = "/home/roborev-fixture/../other";};
-  E09_data_trailing = reject {programs.roborev.dataDir = "/home/roborev-fixture/.roborev/";};
-  E10_restart =
-    builtins.elem service.programs.roborev.finalPackage
-    service.systemd.user.services.roborev.Unit.X-Restart-Triggers
-    && builtins.elem service.programs.roborev._configFile
-    service.systemd.user.services.roborev.Unit.X-Restart-Triggers;
-  S06_restart_identity =
-    changed.programs.roborev._configFile.drvPath
-    != service.programs.roborev._configFile.drvPath
-    && changed.programs.roborev.finalPackage.drvPath != service.programs.roborev.finalPackage.drvPath
-    && changed.systemd.user.services.roborev.Unit.X-Restart-Triggers != service.systemd.user.services.roborev.Unit.X-Restart-Triggers;
-}
+    E06_environment_file_trailing_space = reject {
+      services.roborev = {
+        enable = true;
+        environmentFiles = ["/run/file "];
+      };
+    };
+    E06_environment_file_glob = reject {
+      services.roborev = {
+        enable = true;
+        environmentFiles = ["/run/file*"];
+      };
+    };
+    E08_defaults =
+      program.programs.roborev.settings.server_addr
+      == "unix://"
+      && program.programs.roborev.settings.max_workers == 2
+      && program.programs.roborev.settings.isolate_reviews
+      && !program.programs.roborev.settings.ci.enabled
+      && !program.programs.roborev.settings.web.enabled
+      && !program.programs.roborev.enableTelemetry;
+    E09_data_outside_home = reject {programs.roborev.dataDir = "/run/roborev";};
+    E09_inactive_worker =
+      accepted inactiveWorker
+      && !inactiveWorker.programs.roborev.enable
+      && !inactiveWorker.services.roborev.enable
+      && !inactiveWorker.programs.roborev.settings.ci.enabled
+      && inactiveWorker.programs.roborev.settings.ci.repos == []
+      && !(inactiveWorker.systemd.user.services ? roborev)
+      && !(inactiveWorker.home.file ? roborev-config);
+    E09_data_dotdot = reject {programs.roborev.dataDir = "/home/roborev-fixture/../other";};
+    E09_data_trailing = reject {programs.roborev.dataDir = "/home/roborev-fixture/.roborev/";};
+    E10_restart =
+      builtins.elem service.programs.roborev.finalPackage
+      service.systemd.user.services.roborev.Unit.X-Restart-Triggers
+      && builtins.elem service.programs.roborev._configFile
+      service.systemd.user.services.roborev.Unit.X-Restart-Triggers;
+    S06_restart_identity =
+      changed.programs.roborev._configFile.drvPath
+      != service.programs.roborev._configFile.drvPath
+      && changed.programs.roborev.finalPackage.drvPath != service.programs.roborev.finalPackage.drvPath
+      && changed.systemd.user.services.roborev.Unit.X-Restart-Triggers != service.systemd.user.services.roborev.Unit.X-Restart-Triggers;
+  }
+  // import ./coverage.nix {inherit pkgs eval enabled reject accepted;}
