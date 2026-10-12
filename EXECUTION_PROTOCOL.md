@@ -16,6 +16,11 @@ python3 scripts/generate-execution-protocol.py
 python3 scripts/generate-execution-protocol.py --check
 ```
 
+Generated TypeScript schema metadata is recursively frozen at initialization,
+keeping exported metadata and validation constraints bound to the same digest.
+JavaScript array inputs must contain an own element at every index; sparse arrays
+and inherited replacements are rejected before encoding or negotiation.
+
 `decode` accepts a single UTF-8 compact JSON document with recursively sorted
 object keys and canonical string escapes. Duplicate keys, unknown fields,
 alternate encodings, invalid UTF-8, unpaired surrogates and incompatible versions

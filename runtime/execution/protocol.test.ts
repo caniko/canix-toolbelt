@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { decode, encode, negotiate, type Message, ProtocolError } from "./protocol.ts";
-import { schemaDigest } from "./types.ts";
+import { schema, schemaDigest } from "./types.ts";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../tests/execution-protocol-fixtures.json", import.meta.url), "utf8"));
 const encoder = new TextEncoder();
@@ -110,4 +110,59 @@ test("every implementation field and mandatory guarantee is bound", () => {
   }
   response.body.profiles = [];
   assert.throws(() => negotiate(request, response, []), { code: "unsupported-profile" });
+});
+
+test("sparse protocol arrays cannot be encoded or negotiated", () => {
+  const request = message("describe");
+  for (const field of ["profiles", "capabilities"] as const) {
+    for (const gap of ["deleted", "extended", "inherited"] as const) {
+      const response = message("capabilities");
+      if (response.body.kind !== "capabilities") throw new Error("fixture");
+      const items = response.body[field];
+      const index = items.length - 1;
+      if (gap === "extended") items.length += 1;
+      else {
+        const removed = items[index];
+        delete items[index];
+        if (gap === "inherited") {
+          const prototype = Object.create(Array.prototype);
+          Object.defineProperty(prototype, index, { value: removed });
+          Object.setPrototypeOf(items, prototype);
+        }
+      }
+      assert.throws(() => encode(response), { code: "invalid-frame" }, `${field}: ${gap}`);
+      assert.throws(() => negotiate(request, response, []), { code: "invalid-frame" }, `${field}: ${gap}`);
+    }
+  }
+});
+
+test("exported schema metadata is recursively immutable", () => {
+  const source = JSON.parse(readFileSync(new URL("./protocol.json", import.meta.url), "utf8"));
+  assert.deepEqual(schema, source);
+  function assertFrozen(value: unknown): void {
+    if (typeof value !== "object" || value === null) return;
+    assert.equal(Object.isFrozen(value), true);
+    for (const child of Object.values(value)) assertFrozen(child);
+  }
+  assertFrozen(schema);
+  assert.equal(Reflect.set(schema, "maxFrameBytes", 131072), false);
+  assert.equal(Reflect.set(schema.definitions.Id, "maxBytes", 1024), false);
+  assert.equal(Reflect.set(schema.definitions.Profile.enum, "0", "unknown-profile"), false);
+  assert.equal(Reflect.deleteProperty(schema.definitions.Message.fields, "schemaVersion"), false);
+  assert.equal(Reflect.set(schema.definitions.Capabilities.fields.profiles, "maxItems", 5), false);
+  assert.deepEqual(schema, source);
+});
+
+test("schema mutation cannot relax identity validation", () => {
+  const original = schema.definitions.Id.maxBytes;
+  try {
+    Reflect.set(schema.definitions.Id, "maxBytes", 1024);
+    const value = message("describe");
+    value.requestId = "x".repeat(original + 1);
+    assert.throws(() => encode(value), { code: "invalid-frame" });
+    assert.throws(() => decode(encoder.encode(canonical(value))), { code: "invalid-frame" });
+  } finally {
+    // Restore a mutable baseline during RED without changing frozen metadata.
+    if (!Object.isFrozen(schema.definitions.Id)) Reflect.set(schema.definitions.Id, "maxBytes", original);
+  }
 });

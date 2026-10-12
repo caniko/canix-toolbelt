@@ -79,9 +79,11 @@ function matches(value: unknown, definition: Definition): boolean {
     return matches(fields, variant);
   }
   if (definition.items) {
-    return Array.isArray(value) && value.length <= definition.maxItems!
-      && value.every(item => matches(item, definition.items!))
-      && (!definition.unique || new Set(value.map(canonical)).size === value.length);
+    if (!Array.isArray(value) || value.length > definition.maxItems!) return false;
+    for (let index = 0; index < value.length; index++) {
+      if (!Object.hasOwn(value, index) || !matches(value[index], definition.items)) return false;
+    }
+    return !definition.unique || new Set(value.map(canonical)).size === value.length;
   }
   return false;
 }
