@@ -139,7 +139,9 @@
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
           name: path:
             lib.optionalString (builtins.hasAttr name commandNames)
-            "makeWrapper ${escapeShellArg path} \"$out/libexec/roborev-agents/${commandNames.${name}}\""
+            # Only env must exist in the build sandbox; the approved agent may
+            # be provisioned at a runtime path. Preserve it as one argv element.
+            "makeWrapper ${pkgs.coreutils}/bin/env \"$out/libexec/roborev-agents/${commandNames.${name}}\" --add-flags ${escapeShellArg (escapeShellArg path)}"
         )
         cfg.agentCommands)}
       wrapProgram "$out/bin/roborev" \

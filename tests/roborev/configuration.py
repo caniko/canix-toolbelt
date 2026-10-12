@@ -30,6 +30,13 @@ def main():
     assert settings["projects"] == {} and "task_column_order" not in settings
     repository = tomllib.loads(Path(fixture["repositoryConfig"]).read_text())
     assert repository == {"review_md_fallback": False, "max_prompt_size": 0, "excluded_branches": [], "ci": {"reviews": {}}}
+    for alias in fixture["aliases"].values():
+        target = Path(alias["target"])
+        target.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+        target.chmod(0o700)
+        args = ["fixture", "space $ percent % quote \""]
+        result = subprocess.run([alias["wrapper"], *args], capture_output=True, text=True, check=True)
+        assert json.loads(result.stdout) == args
     for name, root in fixture["integrations"].items():
         root = Path(root)
         hooks = (root / "hooks").read_text()

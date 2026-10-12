@@ -9,6 +9,12 @@
     toml = pkgs.formats.toml {};
   };
   profiles = ["claude" "codex" "copilot" "cursor" "droid" "gemini" "hermes" "qwen" "grok"];
+  aliasNames = {
+    copilot = "copilot";
+    droid = "droid";
+    kilo = "kilo";
+    kiro = "kiro-cli";
+  };
   evaluate = extra:
     (homeManager.lib.homeManagerConfiguration {
       inherit pkgs;
@@ -28,7 +34,7 @@
     }).config.programs.roborev;
   generated = evaluate {
     programs.roborev = {
-      agentCommands.opencode = "${pkgs.coreutils}/bin/true";
+      agentCommands = {opencode = "${pkgs.coreutils}/bin/true";} // pkgs.lib.mapAttrs (name: _: "/build/roborev-${name} agent $literal %pct \"quote\" \\back") aliasNames;
       settings = {
         hook_timeout_seconds = 0;
         mouse_enabled = false;
@@ -63,6 +69,12 @@
     inherit (schema) inventory;
     generatedConfig = generated._configFile;
     generatedBinary = "${generated.finalPackage}/bin/roborev";
+    aliases =
+      pkgs.lib.mapAttrs (name: executable: {
+        target = generated.agentCommands.${name};
+        wrapper = "${generated.finalPackage}/libexec/roborev-agents/${executable}";
+      })
+      aliasNames;
     repositoryConfig = generated.repositories.fixture.configFile;
     integrations = pkgs.lib.mapAttrs (_: integration: toString integration.package) generated.integrations;
     runtimeConfig = private.runtimeConfigFile;
