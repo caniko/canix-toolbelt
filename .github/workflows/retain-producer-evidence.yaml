@@ -16,7 +16,9 @@ concurrency:
 jobs:
   retain:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Observe the whole two-job-wide installable matrix, including hosted queue
+    # time. The matrix can outlive two hours even when every producer passes.
+    timeout-minutes: 240
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
