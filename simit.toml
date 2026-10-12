@@ -7,6 +7,7 @@ components = ["flake-evaluation"]
 nix_builds = [
   # Queue the kernel/systemd regression gate before the expensive pinentry family.
   ".#checks.x86_64-linux.direct-network-transitions",
+  ".#checks.x86_64-linux.execution-protocol",
   ".#canix-toolbelt-pinentry",
   ".#rage-pinentry",
   ".#checks.x86_64-linux.pinentry-home-eval",

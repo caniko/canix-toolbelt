@@ -5,6 +5,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Provider-free execution wire types and pure validators generated for Rust and
+  TypeScript from one versioned schema. Bind discovery to exact implementation,
+  configuration and credential-reference identities; preserve u64 counters as
+  strings and reject unavailable guarantees before execution. Ship shared
+  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
+
 ### Fixed
 
 - Keep disposable foreign DNS peers alive through both service-start refusal

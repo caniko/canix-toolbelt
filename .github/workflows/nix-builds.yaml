@@ -24,6 +24,7 @@ jobs:
       matrix:
         installable:
           - ".#checks.x86_64-linux.direct-network-transitions"
+          - ".#checks.x86_64-linux.execution-protocol"
           - ".#canix-toolbelt-pinentry"
           - ".#rage-pinentry"
           - ".#checks.x86_64-linux.pinentry-home-eval"
