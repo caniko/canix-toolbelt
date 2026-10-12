@@ -143,6 +143,8 @@ pub struct Route {
     pub source: Option<String>,
     /// Route metric.
     pub metric: u64,
+    /// Canonical scope, including global scope omitted by iproute2's printer.
+    pub scope: RouteScope,
     /// Connected routes are also kept reachable from desktop applications.
     pub local: bool,
     /// Gateways explicitly declared on-link by the producer.
@@ -150,6 +152,28 @@ pub struct Route {
     /// Complete multipath route. Mixed eligible/ineligible routes are omitted
     /// rather than rewriting the producer's forwarding policy.
     pub nexthops: Vec<NextHop>,
+}
+
+/// Canonical route scopes supported by the direct-table projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteScope {
+    /// Universe scope; the canonical default in a route-table snapshot.
+    Global,
+    /// Link-local scope, including ordinary IPv4 connected routes.
+    Link,
+    /// Host-local scope.
+    Host,
+}
+
+impl RouteScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Link => "link",
+            Self::Host => "host",
+        }
+    }
 }
 
 /// One validated, weighted direct-route nexthop.
@@ -332,6 +356,39 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route.get("flow").is_some() {
             return Err(invalid("unsupported direct route realms"));
         }
+        if route.get("tos").is_some() {
+            return Err(invalid("unsupported direct route TOS selector"));
+        }
+        if route.get("from").is_some() || route.get("src").is_some() {
+            return Err(invalid("unsupported direct route source selector"));
+        }
+        // Compatibility output can expand a referenced resilient group into
+        // ordinary-looking hops. Their members/weights do not encode its
+        // bucket-based policy, so never rewrite the group as inline ECMP.
+        if route.get("nhid").is_some() {
+            return Err(invalid("unsupported direct route referenced nexthop"));
+        }
+        // iproute2 omits canonical universe scope in ordinary JSON output.
+        // Replaying a device-only IPv4 route without an explicit scope would
+        // instead infer link scope. Retain scope in both the snapshot and batch.
+        let scope = match route.get("scope") {
+            None => RouteScope::Global,
+            Some(value) => match value.as_str() {
+                Some("global") => RouteScope::Global,
+                Some("link") => RouteScope::Link,
+                Some("host") => RouteScope::Host,
+                _ => return Err(invalid("unsupported direct route scope")),
+            },
+        };
+        if !nexthops.is_empty() && scope != RouteScope::Global {
+            return Err(invalid("unsupported direct route multipath scope"));
+        }
+        // iproute2 emits the canonical medium default on ordinary IPv6
+        // routes. Replaying that default preserves preference; accepting a
+        // high/low or malformed value would silently change uplink selection.
+        if route.get("pref").is_some_and(|pref| pref != "medium") {
+            return Err(invalid("unsupported direct route preference"));
+        }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();
         let source = route["prefsrc"].as_str();
@@ -349,6 +406,7 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             gateway: gateway.map(str::to_owned),
             source: source.map(str::to_owned),
             metric: route["metric"].as_u64().unwrap_or(0),
+            scope,
             local: destination != "default"
                 && gateway.is_none()
                 && nexthops.iter().all(|hop| hop.gateway.is_none()),
@@ -528,7 +586,11 @@ fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
         if let Some(source) = &route.source {
             text.push_str(&format!(" src {source}"));
         }
-        text.push_str(&format!(" metric {}", route.metric));
+        text.push_str(&format!(
+            " scope {} metric {}",
+            route.scope.as_str(),
+            route.metric
+        ));
         if route.nexthops.is_empty() {
             text.push_str(&format!(" dev {}", route.device));
             if route.onlink {
@@ -1222,6 +1284,39 @@ mod tests {
     }
 
     #[test]
+    fn batches_preserve_canonical_scope_including_omitted_global_device_routes() {
+        let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+        for (family, route, scope) in [
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","metric":44}),
+                "global",
+            ),
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","scope":"global","metric":44}),
+                "global",
+            ),
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","scope":"link","metric":44}),
+                "link",
+            ),
+            (
+                "-6",
+                serde_json::json!({"dst":"2001:db8::/64","dev":"enp1s0","pref":"medium","metric":44}),
+                "global",
+            ),
+        ] {
+            let routes = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+            assert!(
+                route_batch(&routes, TABLES[0], family)
+                    .contains(&format!(" scope {scope} metric 44 dev enp1s0\n"))
+            );
+        }
+    }
+
+    #[test]
     fn multipath_batch_preserves_order_weights_and_onlink_flags() {
         let routes = select_routes(
             &policy(),
@@ -1236,7 +1331,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(route_batch(&routes, TABLES[0], "-4").contains("default proto 242 metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+        assert!(route_batch(&routes, TABLES[0], "-4").contains("default proto 242 scope global metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
     }
 
     #[test]

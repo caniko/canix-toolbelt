@@ -248,6 +248,18 @@ try:
             run('ip', family, 'route', 'del', destination, 'metric', '43')
         verify('multipath-linkdown')
         print('PASS: production daemon accepts real IPv4/IPv6 ECMP linkdown status and preserves weights/onlink')
+        # Compatibility route dumps expand a resilient nexthop ID into members,
+        # but replaying those members would discard the group's bucket policy.
+        # Its object creation requires carrier, unlike the preceding deliberate
+        # inline ECMP linkdown observation.
+        run('ip', 'link', 'set', 'unused2', 'up')
+        assert pathlib.Path('/proc/sys/net/ipv4/nexthop_compat_mode').read_text().strip() == '1'
+        run('ip', 'nexthop', 'add', 'id', '110', 'via', '198.18.0.2', 'dev', 'uplink', 'onlink')
+        run('ip', 'nexthop', 'add', 'id', '111', 'via', '198.18.0.2', 'dev', 'uplink2', 'onlink')
+        run('ip', 'nexthop', 'add', 'id', '112', 'group', '110/111', 'type', 'resilient',
+            'buckets', '64', 'idle_timer', '120', 'unbalanced_timer', '300')
+        group = json.loads(run('ip', '-j', 'nexthop', 'show', 'id', '112'))[0]
+        assert group['type'] == 'resilient' and group['resilient_args']['buckets'] == 64, group
         for family, destination, attribute, route in [
             ('-6', '2001:db8:100::/64', 'encap',
              ['encap', 'seg6', 'mode', 'encap', 'segs', '2001:db8:20::20',
@@ -279,6 +291,31 @@ try:
              ['metric', '44',
               'nexthop', 'via', '198.18.0.2', 'dev', 'uplink', 'weight', '2', 'onlink', 'realms', '1',
               'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink', 'realms', '2']),
+            ('-4', '192.0.2.0/24', 'tos',
+             ['tos', '0x10', 'via', '198.18.0.2', 'dev', 'uplink', 'onlink', 'metric', '44']),
+            ('-4', '192.0.2.0/24', 'tos',
+             ['tos', '0x10', 'metric', '44',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-6', '2001:db8:100::/64', 'pref',
+             ['pref', 'high', 'via', 'fe80::99', 'dev', 'uplink', 'onlink', 'metric', '44']),
+            ('-6', '2001:db8:100::/64', 'pref',
+             ['pref', 'high', 'metric', '44',
+              'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-6', '2001:db8:100::/64', 'pref',
+             ['pref', 'low', 'metric', '44',
+              'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-6', '2001:db8:100::/64', 'from',
+             ['from', '2001:db8:1::/64', 'metric', '44',
+              'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-4', '192.0.2.0/24', 'nhid', ['nhid', '112', 'metric', '44']),
+            ('-4', '192.0.2.0/24', 'scope',
+             ['scope', 'link', 'metric', '44',
+              'nexthop', 'dev', 'uplink', 'weight', '2',
+              'nexthop', 'dev', 'uplink2', 'weight', '3']),
         ]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             commands = [('ip', family, '-N', '-j', 'route', 'show', 'table', table)
@@ -290,14 +327,51 @@ try:
             main = next(r for r in json.loads(run('ip', family, '-j', 'route', 'show', 'table', 'main'))
                         if r.get('dst') == destination)
             assert attribute in main or any(attribute in h for h in main.get('nexthops', [])), main
+            if attribute == 'nhid':
+                assert main['nhid'] == 112 and len(main['nexthops']) == 2, main
             denied = subprocess.run([binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only'],
                                     check=False, capture_output=True, text=True, timeout=20)
             assert denied.returncode == 1 and denied.stderr.startswith('direct-network: '), denied.stderr
             assert [run(*command) for command in commands] + [(directory / 'servers').read_text()] == retained
             verify(f'{attribute}-denied')
-            run('ip', family, 'route', 'del', destination, 'metric', '44')
+            selector = ['tos', '0x10'] if attribute == 'tos' else []
+            if attribute == 'from':
+                selector = ['from', '2001:db8:1::/64']
+            run('ip', family, 'route', 'del', destination, *selector, 'metric', '44')
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
-        print('PASS: real encapsulation, cross-family via, ECMP MTU/MSS metrics and route/nexthop realms deny readiness before effects; existing connections survive')
+        for id in ['112', '110', '111']:
+            run('ip', 'nexthop', 'del', 'id', id)
+        print('PASS: real unsupported forwarding policy (encap/via/metrics/realms/TOS/pref/from/nhid/scope) denies readiness before effects; existing connections survive')
+        run('ip', '-6', 'route', 'add', '2001:db8:103::/64', 'pref', 'medium', 'metric', '47',
+            'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+            'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink')
+        run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+        table = next(str(r['table']) for r in json.loads(run('ip', '-6', '-j', 'rule', 'show')) if r['priority'] == 50)
+        copied = next(r for r in json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', table))
+                      if r.get('dst') == '2001:db8:103::/64')
+        assert copied['pref'] == 'medium', copied
+        verify('canonical-medium-preference-preserved')
+        run('ip', '-6', 'route', 'del', '2001:db8:103::/64', 'metric', '47')
+        run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+        print('PASS: ordinary IPv6 medium preference remains admissible and unchanged')
+        for family, destination, scope in [
+            ('-4', '192.0.3.0/24', 'global'),
+            ('-4', '192.0.4.0/24', 'link'),
+            ('-6', '2001:db8:104::/64', 'global'),
+        ]:
+            run('ip', family, 'route', 'add', destination, 'dev', 'uplink', 'scope', scope, 'metric', '48')
+            main = next(r for r in json.loads(run('ip', family, '-j', 'route', 'show', 'table', 'main'))
+                        if r.get('dst') == destination)
+            assert main.get('scope', 'global') == scope, main
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+            table = next(str(r['table']) for r in json.loads(run('ip', family, '-j', 'rule', 'show')) if r['priority'] == 50)
+            copied = next(r for r in json.loads(run('ip', family, '-j', 'route', 'show', 'table', table))
+                          if r.get('dst') == destination)
+            assert copied.get('scope', 'global') == scope, (main, copied)
+            verify('canonical-singlepath-scope-preserved')
+            run('ip', family, 'route', 'del', destination, 'metric', '48')
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+        print('PASS: canonical IPv4/IPv6 single-path scopes are preserved, including omitted global scope')
         for count in [60, 64, 128]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             retained = [run(*command) for command in commands] + [(directory / 'servers').read_text()]

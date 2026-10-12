@@ -363,6 +363,215 @@ fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() 
 }
 
 #[test]
+fn source_selectors_cannot_become_source_unconditional_or_connected_routes() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for key in ["from", "src"] {
+        for source in [
+            serde_json::json!("2001:db8:1::/64"),
+            serde_json::json!("0/64"),
+            serde_json::Value::Null,
+        ] {
+            for mut route in [
+                serde_json::json!({"dst":"2001:db8:2::/64","dev":"enp1s0"}),
+                serde_json::json!({"dst":"2001:db8:2::/64","nexthops":[
+                    {"dev":"enp1s0","gateway":"fe80::1","weight":2}
+                ]}),
+            ] {
+                route[key] = source.clone();
+                let error =
+                    select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+                assert!(error.to_string().contains("source selector"));
+            }
+        }
+    }
+    let routes = serde_json::json!([{"dst":"default","from":"2001:db8:1::/64","nexthops":[
+        {"dev":"enp1s0","gateway":"fe80::1"}, {"dev":"wg-proton","gateway":"fe80::2"}
+    ]}]);
+    assert!(
+        select_routes(&policy(), &links, &routes)
+            .unwrap()
+            .is_empty()
+    );
+    // Preferred source is a different attribute, not a packet-source selector.
+    let routes = serde_json::json!([{"dst":"default","prefsrc":"2001:db8:1::1","nexthops":[
+        {"dev":"enp1s0","gateway":"fe80::1","weight":2}
+    ]}]);
+    assert_eq!(
+        select_routes(&policy(), &links, &routes).unwrap()[0]
+            .source
+            .as_deref(),
+        Some("2001:db8:1::1")
+    );
+}
+
+#[test]
+fn referenced_nexthops_cannot_be_rewritten_as_ordinary_inline_ecmp() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for id in [
+        serde_json::json!(112),
+        serde_json::json!("112"),
+        serde_json::Value::Null,
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2}
+            ]}),
+        ] {
+            route["nhid"] = id.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("referenced nexthop"));
+        }
+    }
+    for route in [
+        serde_json::json!({"dst":"default","nhid":112}),
+        serde_json::json!({"dst":"default","nhid":112,"nexthops":[
+            {"dev":"enp1s0","gateway":"192.0.2.1"}, {"dev":"wg-proton","gateway":"198.51.100.1"}
+        ]}),
+    ] {
+        assert!(
+            select_routes(&policy(), &links, &serde_json::json!([route]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn nondefault_ecmp_scope_is_rejected_instead_of_becoming_universe_scoped() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    let mut route = serde_json::json!({"dst":"192.0.2.0/24","nexthops":[
+        {"dev":"enp1s0","weight":2}, {"dev":"enp1s0","weight":3}
+    ]});
+    let expected = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+    route["scope"] = serde_json::json!("global");
+    assert_eq!(
+        select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+        expected
+    );
+    for scope in [
+        serde_json::json!("link"),
+        serde_json::json!("host"),
+        serde_json::json!(253),
+        serde_json::Value::Null,
+    ] {
+        route["scope"] = scope;
+        let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+        assert!(error.to_string().contains("scope"));
+    }
+    route["nexthops"][1]["dev"] = serde_json::json!("wg-proton");
+    assert!(
+        select_routes(&policy(), &links, &serde_json::json!([route]))
+            .unwrap()
+            .is_empty()
+    );
+    let connected = serde_json::json!([{"dst":"192.0.2.0/24","dev":"enp1s0","scope":"link"}]);
+    assert!(select_routes(&policy(), &links, &connected).unwrap()[0].local);
+}
+
+#[test]
+fn canonical_scope_is_retained_in_snapshot_identity_and_malformed_scopes_reject() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    let mut route = serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0"});
+    let global = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+    assert_eq!(serde_json::to_value(&global[0]).unwrap()["scope"], "global");
+    for scope in ["link", "host"] {
+        route["scope"] = serde_json::json!(scope);
+        let selected = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+        assert_ne!(selected, global);
+        assert_eq!(serde_json::to_value(&selected[0]).unwrap()["scope"], scope);
+    }
+    for invalid in [
+        serde_json::json!("site"),
+        serde_json::json!(253),
+        serde_json::Value::Null,
+        serde_json::json!({}),
+    ] {
+        route["scope"] = invalid;
+        assert!(select_routes(&policy(), &links, &serde_json::json!([route])).is_err());
+    }
+}
+
+#[test]
+fn tos_selectors_reject_eligible_routes_instead_of_widening_their_match() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for tos in [
+        serde_json::json!("0x10"),
+        serde_json::json!(16),
+        serde_json::json!(0),
+        serde_json::Value::Null,
+        serde_json::json!({}),
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","gateway":"192.0.2.1"}),
+            serde_json::json!({"dst":"192.0.2.0/24","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2}
+            ]}),
+        ] {
+            route["tos"] = tos.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("TOS"));
+        }
+    }
+    let routes = serde_json::json!([{"dst":"default","tos":"0x10","nexthops":[
+        {"dev":"enp1s0","gateway":"192.0.2.1"},
+        {"dev":"wg-proton","gateway":"198.51.100.1"}
+    ]}]);
+    assert!(
+        select_routes(&policy(), &links, &routes)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn nondefault_or_malformed_ipv6_preferences_reject_without_changing_the_uplink() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for preference in [
+        serde_json::json!("high"),
+        serde_json::json!("low"),
+        serde_json::json!("MEDIUM"),
+        serde_json::json!(0),
+        serde_json::Value::Null,
+        serde_json::json!({}),
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"fe80::1"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"fe80::1","weight":2}
+            ]}),
+        ] {
+            route["pref"] = preference.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("preference"));
+        }
+    }
+    // iproute2 emits the default medium preference on ordinary IPv6 paths.
+    for mut route in [
+        serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"fe80::1"}),
+        serde_json::json!({"dst":"default","nexthops":[
+            {"dev":"enp1s0","gateway":"fe80::1","weight":2}
+        ]}),
+    ] {
+        let expected = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+        route["pref"] = serde_json::json!("medium");
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            expected
+        );
+    }
+    let routes = serde_json::json!([{"dst":"default","pref":"high","nexthops":[
+        {"dev":"enp1s0","gateway":"fe80::1"},
+        {"dev":"wg-proton","gateway":"fe80::2"}
+    ]}]);
+    assert!(
+        select_routes(&policy(), &links, &routes)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn route_and_nexthop_realms_reject_eligible_snapshots_without_losing_classification() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
     for flow in [

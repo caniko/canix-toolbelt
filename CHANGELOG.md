@@ -28,6 +28,16 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   traffic-control classification instead of silently dropping it.
 - Apply the ECMP replay capacity only after complete direct eligibility, so large
   VPN/container-only and mixed groups remain omitted without denying readiness.
+- Reject unsupported TOS selectors and non-default IPv6 route preferences before
+  replay can widen traffic matching or change direct-uplink selection. Preserve
+  ordinary canonical medium-preference admission.
+- Reject source-specific selectors, compatibility-expanded nexthop IDs and
+  non-default ECMP scopes before copying can discard source constraints, resilient
+  group policy or authored scope. Keep preferred-source addresses and ordinary
+  single-path connected scopes supported.
+- Retain canonical single-path scope in the selected route and replay it explicitly,
+  including global scope omitted by iproute2's JSON printer. Expose typed
+  `RouteScope` in `Route` so scope-only changes also invalidate its snapshot.
 
 ## [0.5.0] - 2026-10-11
 

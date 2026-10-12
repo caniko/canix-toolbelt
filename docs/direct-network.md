@@ -41,6 +41,31 @@ and ECMP routes. The ordinary route preference `metric` remains supported;
 unsupported path options are never silently dropped during replay.
 Route or nexthop `flow` attributes (realms used by traffic-control classification)
 also reject an eligible snapshot before effects rather than losing that policy.
+An eligible route with a `tos` selector rejects before effects, preventing replay
+from widening the route's traffic match. IPv6's canonical `pref = "medium"`
+remains supported through the kernel default; non-default or malformed preference
+values reject instead of changing direct-uplink selection.
+Source-selector `from`/`src` fields also reject on eligible routes; the supported
+preferred-source field is `prefsrc`, which is distinct from those selectors.
+Referenced nexthop IDs (`nhid`) reject even when compatibility output expands
+their members: inline ECMP cannot preserve a resilient group's bucket policy.
+ECMP's canonical global scope remains supported; other explicit ECMP scopes
+reject rather than being rewritten to the inferred universe scope. Ordinary
+single-path scopes are retained and emitted explicitly. This includes global
+scope omitted by iproute2's JSON printer, which otherwise becomes inferred link
+scope during device-only IPv4 replay. Canonical global/link/host scopes are
+supported; unknown or malformed scopes reject before effects.
+
+The selected `Route` now carries a typed `RouteScope` and serializes its canonical
+name, so a scope-only change invalidates the installed snapshot. Rust consumers
+that construct `Route` literals must supply this field when adopting 0.5.0.
+
+The projection retains destinations, eligible interfaces, gateway addresses,
+preferred sources, canonical scopes, ordinary metrics and complete inline hop order/weights/onlink
+policy. Route protocol and table identity belong to the owned target namespace;
+kernel reachability/offload flags are observed rather than authored replay
+policy. Lifetime countdowns and cache/statistics do not form the installed
+projection: current main-table presence is polled again at each reconciliation.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
