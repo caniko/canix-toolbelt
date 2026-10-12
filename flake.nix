@@ -196,6 +196,7 @@
 
         checks =
           {
+            execution-protocol = import ./nixos-tests/execution-protocol.nix {inherit pkgs;};
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs inputs;};
             direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
             executor-admission-eval = import ./nixos-tests/executor-admission-eval.nix {inherit pkgs inputs;};
