@@ -220,7 +220,9 @@ negative_counter = pause_dns_admission_probes()
 machine.succeed('systemctl stop direct-network-dns.service')
 for mode in ['tcp', 'both', 'missing-ipv6']:
     marker = f'/run/foreign-{mode}-ready'
-    machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --marker {marker}')
+    # Keep the impostor alive through both 15-second service-start barriers.
+    # The explicit lifetime stays within the negative peer's 120-second bound.
+    machine.succeed(f'systemd-run --unit=foreign-dns @PYTHON@ @NEGATIVE@ {mode} --seconds 120 --marker {marker}')
     machine.wait_for_file(marker)
     machine.succeed('timeout 8 canix-toolbelt-direct-network ready --routes-only')
     machine.fail('timeout 4 canix-toolbelt-direct-network ready')
@@ -236,12 +238,16 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         # system service UID that has no direct readiness authorization.
         machine.succeed('systemctl is-active direct-network-canix-background-direct.service')
         machine.succeed(userctl + 'is-active direct-network-app-amc-direct.service')
+        machine.succeed('systemctl is-active foreign-dns.service')
         machine.fail('systemctl start late-start.service')
+        machine.succeed('systemctl is-active foreign-dns.service')
         machine.fail(userctl + 'start late-start.service')
+        machine.succeed('systemctl is-active foreign-dns.service')
         machine.succeed('test ! -e /tmp/direct-network-late-system')
         machine.succeed('test ! -e /home/operator/direct-network-late-user')
         machine.succeed('systemctl reset-failed late-start.service')
         machine.succeed(userctl + 'reset-failed late-start.service')
+    machine.succeed('systemctl is-active foreign-dns.service')
     machine.succeed('systemctl stop foreign-dns.service')
     # Successful transient services are unloaded after stop. Wait for their
     # removal before reusing the name; reset-failed requires a loaded unit.
