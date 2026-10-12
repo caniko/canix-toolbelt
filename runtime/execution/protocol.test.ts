@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { decode, encode, negotiate, type Message, ProtocolError } from "./protocol.ts";
+import { decode, encode, negotiate, type Message, type Capability, ProtocolError } from "./protocol.ts";
 import { schema, schemaDigest } from "./types.ts";
 
 const fixtures = JSON.parse(readFileSync(new URL("../../tests/execution-protocol-fixtures.json", import.meta.url), "utf8"));
@@ -262,3 +262,83 @@ for (const binding of ["correlation", "implementation", "profile", "capabilities
     assert.throws(() => negotiate(request, response, []), { code });
   });
 }
+
+for (const location of ["request", "response", "nested", "array"] as const) {
+  test(`discovery preserves required capabilities before ${location} getters run`, () => {
+    const request = message("describe");
+    const response = message("capabilities");
+    if (response.body.kind !== "capabilities") throw new Error("fixture");
+    const required: Capability[] = ["persisted-reconciliation"];
+    let target: object;
+    let key: string | number;
+    let value: unknown;
+    switch (location) {
+      case "request":
+        target = request; key = "requestId"; value = request.requestId;
+        break;
+      case "response":
+        target = response; key = "requestId"; value = response.requestId;
+        break;
+      case "nested":
+        target = response.body.implementation; key = "engineDigest";
+        value = response.body.implementation.engineDigest;
+        break;
+      case "array":
+        target = response.body.profiles; key = 0; value = response.body.profiles[0];
+        break;
+    }
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      get: () => {
+        required.splice(0, required.length, "authenticated-ipc");
+        return value;
+      },
+    });
+    assert.throws(() => negotiate(request, response, required), { code: "unsupported-capability" });
+  });
+}
+
+test("invalid required-capability arrays reject before reading messages", () => {
+  const request = message("describe");
+  const response = message("capabilities");
+  let reads = 0;
+  Object.defineProperty(request, "requestId", {
+    enumerable: true,
+    get: () => { reads++; throw new Error("message must not be read before validating requirements"); },
+  });
+  const inherited = new Array<Capability>(1);
+  const prototype = Object.create(Array.prototype);
+  Object.defineProperty(prototype, 0, { value: "retained-delivery" });
+  Object.setPrototypeOf(inherited, prototype);
+  for (const required of [
+    ["unknown-capability"],
+    [null],
+    [{ capability: "retained-delivery" }],
+    new Array(1),
+    inherited,
+    { 0: "retained-delivery", length: 1 },
+    null,
+  ]) {
+    assert.throws(() => negotiate(request, response, required as Capability[]), { code: "invalid-frame" });
+    assert.equal(reads, 0);
+  }
+});
+
+test("uncapturable requirements produce redacted protocol errors", () => {
+  const throwing: Capability[] = ["retained-delivery"];
+  Object.defineProperty(throwing, 0, {
+    enumerable: true,
+    get: () => { throw new Error("synthetic-private-requirement-value"); },
+  });
+  for (const required of [throwing, new Proxy<Capability[]>([], {})]) {
+    assert.throws(() => negotiate(message("describe"), message("capabilities"), required),
+      error => error instanceof ProtocolError
+        && error.code === "invalid-frame"
+        && error.message === "execution protocol rejected: invalid-frame"
+        && error.cause === undefined);
+  }
+});
+
+test("repeated required capabilities retain set-like discovery semantics", () => {
+  negotiate(message("describe"), message("capabilities"), Array(8).fill("retained-delivery"));
+});

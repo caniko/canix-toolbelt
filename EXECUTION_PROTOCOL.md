@@ -24,6 +24,10 @@ Encoding and negotiation capture messages with `structuredClone` before
 validation, serialization or discovery checks. Accessors are evaluated during
 capture; subsequent checks read the detached data. Proxies and other uncloneable
 inputs, including throwing accessors, produce a redacted `invalid-frame` error.
+Negotiation captures and validates its required-capability array before either
+message is captured, so message accessors cannot change the caller's requirements.
+Requirements must be a dense array of known capabilities; repetitions preserve
+the same set-like semantics as the Rust API.
 
 `decode` accepts a single UTF-8 compact JSON document with recursively sorted
 object keys and canonical string escapes. Duplicate keys, unknown fields,

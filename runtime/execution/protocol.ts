@@ -79,7 +79,7 @@ function matches(value: unknown, definition: Definition): boolean {
     return matches(fields, variant);
   }
   if (definition.items) {
-    if (!Array.isArray(value) || value.length > definition.maxItems!) return false;
+    if (!Array.isArray(value) || (definition.maxItems !== undefined && value.length > definition.maxItems)) return false;
     for (let index = 0; index < value.length; index++) {
       if (!Object.hasOwn(value, index) || !matches(value[index], definition.items)) return false;
     }
@@ -111,14 +111,18 @@ export function decode(bytes: Uint8Array): Message {
   return value;
 }
 
-/** Capture caller-owned values once; later checks only read detached data. */
-function captureFrame(message: Message): { value: Message; bytes: Uint8Array } {
-  let value: unknown;
+/** Capture caller-owned values once, redacting accessor and clone failures. */
+function capture<T>(value: T): T {
   try {
-    value = structuredClone(message);
+    return structuredClone(value);
   } catch {
     throw new ProtocolError("invalid-frame");
   }
+}
+
+/** Later checks only read detached data. */
+function captureFrame(message: Message): { value: Message; bytes: Uint8Array } {
+  const value = capture(message);
   validate(value);
   const bytes = encoder.encode(canonical(value));
   if (bytes.length > schema.maxFrameBytes) throw new ProtocolError("invalid-frame");
@@ -132,6 +136,8 @@ export function encode(message: Message): Uint8Array {
 
 /** Discovery never substitutes for authenticated custodian observation. */
 export function negotiate(request: Message, response: Message, required: Capability[]): void {
+  required = capture(required);
+  if (!matches(required, { items: "Capability" })) throw new ProtocolError("invalid-frame");
   request = captureFrame(request).value;
   response = captureFrame(response).value;
   if (request.body.kind !== "describe" || response.body.kind !== "capabilities") throw new ProtocolError("invalid-frame");
