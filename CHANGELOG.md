@@ -24,6 +24,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   MTU, MSS or congestion-control policy, including on ECMP routes.
 - Stream resolver socket evidence with bounded rows and constant retained state,
   allowing busy host socket tables while preserving duplicate-listener rejection.
+- Reject unsupported route and nexthop realms before replay, preserving producer
+  traffic-control classification instead of silently dropping it.
+- Apply the ECMP replay capacity only after complete direct eligibility, so large
+  VPN/container-only and mixed groups remain omitted without denying readiness.
 
 ## [0.5.0] - 2026-10-11
 

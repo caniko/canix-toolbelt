@@ -230,13 +230,8 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         let nexthops = if let Some(hops) = route.get("nexthops") {
             let hops = hops
                 .as_array()
-                // ip -batch allows 511 arguments. A maximal supported hop
-                // takes eight arguments and 28 netlink bytes (IPv6 gateway).
-                // Sixty leaves room for source/metric/table attributes under
-                // both that limit and the 4096-byte netlink request. Never
-                // truncate a larger group or partially replay it.
-                .filter(|hops| !hops.is_empty() && hops.len() <= 60)
-                .ok_or_else(|| invalid("invalid multipath nexthops (replay limit: 60)"))?;
+                .filter(|hops| !hops.is_empty())
+                .ok_or_else(|| invalid("invalid multipath nexthops"))?;
             if hops.iter().any(|hop| {
                 !hop["dev"]
                     .as_str()
@@ -244,11 +239,22 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             }) {
                 continue;
             }
+            // Only eligible routes will be replayed. ip -batch allows 511
+            // arguments; a maximal supported hop takes eight arguments and
+            // 28 netlink bytes (IPv6 gateway). Sixty leaves room for route
+            // attributes under that limit and the 4096-byte netlink request.
+            // Never truncate a larger direct group or partially replay it.
+            if hops.len() > 60 {
+                return Err(invalid("invalid multipath nexthops (replay limit: 60)"));
+            }
             if route.get("dev").is_some() || route.get("gateway").is_some() {
                 return Err(invalid("ambiguous multipath route"));
             }
             hops.iter()
                 .map(|hop| {
+                    if hop.get("flow").is_some() {
+                        return Err(invalid("unsupported multipath realms"));
+                    }
                     if hop.get("via").is_some() {
                         return Err(invalid("unsupported cross-family multipath gateway"));
                     }
@@ -322,6 +328,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         }
         if route.get("metrics").is_some() {
             return Err(invalid("unsupported direct route metrics"));
+        }
+        if route.get("flow").is_some() {
+            return Err(invalid("unsupported direct route realms"));
         }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();

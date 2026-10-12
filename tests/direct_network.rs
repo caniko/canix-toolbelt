@@ -363,8 +363,93 @@ fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() 
 }
 
 #[test]
+fn route_and_nexthop_realms_reject_eligible_snapshots_without_losing_classification() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for flow in [
+        serde_json::json!({"to":"1"}),
+        serde_json::json!({"from":"1","to":"2"}),
+        serde_json::json!({}),
+        serde_json::Value::Null,
+        serde_json::json!("malformed"),
+    ] {
+        for location in 0..4 {
+            let mut route = if location == 0 {
+                serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"})
+            } else {
+                serde_json::json!({"dst":"default","nexthops":[
+                    {"dev":"enp1s0","gateway":"192.0.2.1","weight":2},
+                    {"dev":"enp1s0","gateway":"192.0.2.2","weight":3}
+                ]})
+            };
+            if location < 2 {
+                route["flow"] = flow.clone();
+            } else {
+                route["nexthops"][location - 2]["flow"] = flow.clone();
+            }
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("realms"));
+        }
+    }
+    for route in [
+        serde_json::json!({"dst":"default","dev":"wg-proton","flow":{"to":"1"}}),
+        serde_json::json!({"dst":"default","flow":{"to":"1"},"nexthops":[
+            {"dev":"enp1s0","gateway":"192.0.2.1","flow":{"to":"1"}},
+            {"dev":"wg-proton","gateway":"198.51.100.1","flow":{"to":"1"}}
+        ]}),
+    ] {
+        assert!(
+            select_routes(&policy(), &links, &serde_json::json!([route]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn oversized_producer_owned_ecmp_groups_are_omitted_before_direct_replay_limits() {
+    let links = serde_json::json!([
+        {"ifname":"enp1s0","link_type":"ether"},
+        {"ifname":"wg-proton","link_type":"none","linkinfo":{"info_kind":"wireguard"}},
+        {"ifname":"docker0","link_type":"ether","linkinfo":{"info_kind":"bridge"}}
+    ]);
+    let direct = serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"});
+    let expected = select_routes(&policy(), &links, &serde_json::json!([direct])).unwrap();
+    for count in [61, 64, 128, 256] {
+        for ineligible in ["wg-proton", "docker0"] {
+            for direct_members in [0, count - 1] {
+                let mut hops = (0..count)
+                    .map(|index| {
+                        serde_json::json!({
+                            "dev":if index < direct_members {"enp1s0"} else {ineligible},
+                            "gateway":"192.0.2.1", "weight":1
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                // Put the only ineligible member last, then first, proving the
+                // complete group is checked before imposing replay capacity.
+                for _ in 0..2 {
+                    let routes =
+                        serde_json::json!([direct,{"dst":"198.51.100.0/24","nexthops":hops}]);
+                    assert_eq!(select_routes(&policy(), &links, &routes).unwrap(), expected);
+                    hops.reverse();
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn ecmp_replay_limit_rejects_oversized_groups_without_truncating_supported_groups() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for invalid in [
+        serde_json::json!([]),
+        serde_json::Value::Null,
+        serde_json::json!({"dev":"enp1s0"}),
+        serde_json::json!("malformed"),
+    ] {
+        let routes = serde_json::json!([{"dst":"default", "nexthops":invalid}]);
+        assert!(select_routes(&policy(), &links, &routes).is_err());
+    }
     for gateway in ["192.0.2.1", "2001:db8::1"] {
         for count in [60, 61, 128, 160, 256] {
             let hops = (0..count)

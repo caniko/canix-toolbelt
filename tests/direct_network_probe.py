@@ -269,6 +269,16 @@ try:
              ['mtu', '1400', 'advmss', '1200', 'metric', '44',
               'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
               'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-4', '192.0.2.0/24', 'flow',
+             ['realms', '1/2', 'via', '198.18.0.2', 'dev', 'uplink', 'onlink', 'metric', '44']),
+            ('-4', '192.0.2.0/24', 'flow',
+             ['realms', '1', 'metric', '44',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink', 'weight', '2', 'onlink', 'realms', '1',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink', 'realms', '1']),
+            ('-4', '192.0.2.0/24', 'flow',
+             ['metric', '44',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink', 'weight', '2', 'onlink', 'realms', '1',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink', 'realms', '2']),
         ]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             commands = [('ip', family, '-N', '-j', 'route', 'show', 'table', table)
@@ -287,7 +297,7 @@ try:
             verify(f'{attribute}-denied')
             run('ip', family, 'route', 'del', destination, 'metric', '44')
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
-        print('PASS: real encapsulation, cross-family via and ECMP MTU/MSS metrics deny readiness before effects; existing connections survive')
+        print('PASS: real encapsulation, cross-family via, ECMP MTU/MSS metrics and route/nexthop realms deny readiness before effects; existing connections survive')
         for count in [60, 64, 128]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             retained = [run(*command) for command in commands] + [(directory / 'servers').read_text()]
@@ -316,6 +326,30 @@ try:
             run('ip', '-6', 'route', 'del', '2001:db8:101::/64', 'metric', '45')
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
         print('PASS: 60-hop IPv6 ECMP replay retains exact hops; 64/128-hop groups reject before effects')
+        run('ip', 'link', 'add', 'vpn-ecmp', 'type', 'dummy')
+        run('ip', '-6', 'addr', 'add', 'fd85::1/64', 'dev', 'vpn-ecmp', 'nodad')
+        run('ip', 'link', 'set', 'vpn-ecmp', 'up')
+        for ineligible_index in [None, 0, 127]:
+            for start in [0, 64]:
+                hops = []
+                for index in range(start, start + 64):
+                    device = 'vpn-ecmp' if ineligible_index is None or index == ineligible_index else 'uplink'
+                    hops += ['nexthop', 'via', f'fe80::{index + 2000:x}', 'dev', device,
+                             'weight', str(index % 256 + 1), 'onlink']
+                run('ip', '-6', 'route', 'add' if start == 0 else 'append',
+                    '2001:db8:102::/64', 'metric', '46', *hops)
+            main = next(r for r in json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', 'main'))
+                        if r.get('dst') == '2001:db8:102::/64')
+            assert len(main['nexthops']) == 128, main
+            assert sum(h['dev'] == 'vpn-ecmp' for h in main['nexthops']) == (128 if ineligible_index is None else 1), main
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+            for table in ['51821', '51822']:
+                copied = json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', table))
+                assert all(r.get('dst') != '2001:db8:102::/64' for r in copied), copied
+            verify('oversized-producer-owned-ecmp-omitted')
+            run('ip', '-6', 'route', 'del', '2001:db8:102::/64', 'metric', '46')
+        run('ip', 'link', 'del', 'vpn-ecmp')
+        print('PASS: 128-hop VPN/container and mixed ECMP groups are omitted as a whole without denying direct readiness')
         for transition in ('kill-switch', 'reconnect', 'server-change'):
             run('ip', 'link', 'add', 'pvpnksintrf0', 'type', 'dummy')
             run('ip', 'addr', 'add', '100.85.0.1/24', 'dev', 'pvpnksintrf0')

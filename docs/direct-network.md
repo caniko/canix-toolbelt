@@ -32,11 +32,15 @@ snapshot, including null or malformed attributes. ECMP replay supports at most
 28 netlink bytes per hop, leaving space for route attributes under both
 iproute2's 512-argument batch array and its 4096-byte netlink request. Larger groups reject before either
 routing table, policy rules, firewall or DNS state is changed; they are never
-truncated or partially appended.
+truncated or partially appended. This replay limit applies only after complete
+direct-interface eligibility is established. Larger VPN/container-only or mixed
+groups remain omitted as a whole and do not deny direct readiness.
 Route-level `metrics` (such as path MTU, advertised MSS and congestion-control
 options) also reject an eligible snapshot before effects, for both single-path
 and ECMP routes. The ordinary route preference `metric` remains supported;
 unsupported path options are never silently dropped during replay.
+Route or nexthop `flow` attributes (realms used by traffic-control classification)
+also reject an eligible snapshot before effects rather than losing that policy.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
