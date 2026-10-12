@@ -200,12 +200,24 @@
   hasWildcard = pattern: builtins.match ".*\\*.*" (stripEnvironmentPrefix pattern) != null;
 
   patternsMayOverlap = left: right: let
-    leftWildcard = hasWildcard left;
-    rightWildcard = hasWildcard right;
-    leftPrefix = patternPrefix left;
-    rightPrefix = patternPrefix right;
-    leftPattern = stripEnvironmentPrefix left;
-    rightPattern = stripEnvironmentPrefix right;
+    leftUnwrapped = stripEnvironmentPrefix left;
+    rightUnwrapped = stripEnvironmentPrefix right;
+    # Generated store wrappers have the same hash wildcard. Compare their
+    # executable/argument suffixes instead of treating every /nix/store/
+    # prefix as one program. Other wildcard shapes remain conservative.
+    sharedStoreWrapper =
+      lib.hasPrefix "/nix/store/*/bin/" leftUnwrapped
+      && lib.hasPrefix "/nix/store/*/bin/" rightUnwrapped;
+    unwrap = pattern:
+      if sharedStoreWrapper
+      then lib.removePrefix "/nix/store/*/bin/" pattern
+      else pattern;
+    leftPattern = unwrap leftUnwrapped;
+    rightPattern = unwrap rightUnwrapped;
+    leftWildcard = hasWildcard leftPattern;
+    rightWildcard = hasWildcard rightPattern;
+    leftPrefix = patternPrefix leftPattern;
+    rightPrefix = patternPrefix rightPattern;
   in
     if !leftWildcard && !rightWildcard
     then leftPattern == rightPattern

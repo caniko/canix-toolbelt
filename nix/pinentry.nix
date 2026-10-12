@@ -9,7 +9,7 @@
   gnupg,
   rage,
   bash,
-  xorg,
+  xorg-server,
   xdotool,
 }:
 assert lib.versionAtLeast zellij.version "0.45";
@@ -47,14 +47,14 @@ assert lib.versionAtLeast zellij.version "0.45";
       runHook postInstall
     '';
     doInstallCheck = true;
-    nativeInstallCheckInputs = [python3 gnupg zellij bash rage xorg.xorgserver xdotool];
+    nativeInstallCheckInputs = [python3 gnupg zellij bash rage xorg-server xdotool];
     installCheckPhase = ''
       runHook preInstallCheck
       ${lib.getExe python3} test.py "$out/bin/canix-toolbelt-pinentry-agent" \
         ${lib.getExe zellij} ${gnupg}/bin/gpg-connect-agent \
         ${gnupg}/bin/gpgconf ${lib.getExe bash} ${gnupg}/bin/gpg \
         "$out/bin/canix-toolbelt-pinentry" ${lib.getExe rage} \
-        ${xorg.xorgserver}/bin/Xvfb ${lib.getExe xdotool}
+        ${xorg-server}/bin/Xvfb ${lib.getExe xdotool}
       runHook postInstallCheck
     '';
     meta = {

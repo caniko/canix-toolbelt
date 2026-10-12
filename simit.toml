@@ -26,6 +26,7 @@ nix_builds = [
   ".#opencode-with-claude",
   ".#checks.x86_64-linux.opencode-claude-eval",
   ".#checks.x86_64-linux.opencode-jev-runtime",
+  ".#checks.x86_64-linux.headroom-eval",
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
@@ -42,10 +43,11 @@ with_msrv = true
 with_audit = true
 with_docs = true
 publish_crates = true
-extra_env= { RUSTDOCFLAGS = "-D warnings" }
+extra_env = { RUSTDOCFLAGS = "-D warnings" }
 # Full flake checks include NixOS guests. Require hosted KVM before boot and
 # serialize realizations so concurrent VM checks fit the hosted runner budget.
-extra_setup = ['''
+extra_setup = [
+  '''
 set -eu
 test "${RUNNER_ENVIRONMENT:-}" = github-hosted
 # Branch/PR qualification binds original attempt-1 production. A signed-tag
@@ -79,7 +81,8 @@ if [ -n "${SIMIT_NIX_BUILD_RESULTS:-}" ]; then
   git rev-parse HEAD > "$SIMIT_NIX_BUILD_RESULTS/revision"
   git rev-parse 'HEAD^{tree}' > "$SIMIT_NIX_BUILD_RESULTS/tree"
 fi
-''']
+''',
+]
 
 [ci.nix_build]
 separate_events = true
@@ -108,7 +111,7 @@ timeout_minutes = 30
 
 [[ci.required_gates]]
 id = "generated-parity"
-run = "bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/0d917f8cbbf99bf271006a0cf6f590c34aa828bc -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
+run = "bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff"
 timeout_minutes = 30
 
 [[ci.required_gates]]

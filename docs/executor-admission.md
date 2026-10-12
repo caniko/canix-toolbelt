@@ -55,11 +55,15 @@ trust hashes, generated files and a member-hashed receipt. Preparation alone
 does not qualify the successor; its own attempt-1 required gates must pass.
 
 The declared generator is Simit
-`0d917f8cbbf99bf271006a0cf6f590c34aa828bc` (`simit 0.19.0`, merged in #43).
-Its original push/PR checks and exact-head production/regeneration run
-`38065064067` passed. Independent provider-archive verification bound all 276
-tracked source files, tree `318fbe76c8c9a4f646c3a77cd3be1cf19e110cd3`, and
-generator SHA-256 `8acc30d1d8f1d291568b1634e4a029608176f0cc59cd9f005e994e73a5c8063d`.
+`db79439e9a7f4863fccba33aee9f325bf9c760c2` (the qualified #42 merge, whose
+package still reports `simit 0.19.0`; the published 0.19.0 is a different source).
+All five original merged-source producers passed. Independent archive verification
+bound 289 tracked source files, tree `b31e5a9d4e8db9a99c386abb4975e898e37880d1`,
+production/regeneration runs `38143300227` and `38143300240`, and generator
+SHA-256 `5044ce445fa0e415775ba96b8f446a2bb3a6ffd09477aa57cbd18bb489a83573`.
+This generator separates signed-tag archive construction from fresh default-branch,
+environment-only upload workers. Enroll `simit-crates-io` restricted to `trunk`
+and the independently qualified `SIMIT_PUBLISHER_REVISION` before publication.
 The matrix explicitly selects `separate_events = true`: push and PR producers
 must both succeed independently. Source preparation is followed by complete
 generated-patch import and successor qualification; no preparation receipt or
