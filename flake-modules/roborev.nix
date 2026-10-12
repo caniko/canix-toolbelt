@@ -51,10 +51,9 @@
       devShells.roborev = shell;
       checks =
         {
-          roborev-module = assert pkgs.lib.assertMsg
-          (builtins.all (value: value) (builtins.attrValues moduleResults))
-          "roborev module regression failed; evaluate tests/roborev/eval.nix for individual results";
-            pkgs.writeText "roborev-module-results.json" (builtins.toJSON moduleResults);
+          roborev-module = import ../tests/roborev/configuration.nix {
+            inherit pkgs homeManager package moduleResults;
+          };
           roborev-shell = harborMeta.lib.devShellTests.mkCheck {
             inherit pkgs shell;
             name = "roborev-shell";

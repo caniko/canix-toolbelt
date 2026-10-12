@@ -91,20 +91,21 @@ in {
               svc.requiredFiles)
             ++ [(command ["${cfg.finalPackage}/bin/roborev" "config" "validate" "--global"])];
           ExecStart = command ["${cfg.finalPackage}/bin/roborev" "daemon" "run" "--config" "${cfg.dataDir}/config.toml"];
-          Environment = lib.mapAttrsToList environment {
-            HOME = config.home.homeDirectory;
-            XDG_CONFIG_HOME = config.xdg.configHome;
-            XDG_DATA_HOME = config.xdg.dataHome;
-            XDG_CACHE_HOME = config.xdg.cacheHome;
-            XDG_STATE_HOME = config.xdg.stateHome;
-            ROBOREV_DATA_DIR = cfg.dataDir;
-            ROBOREV_TELEMETRY_ENABLED =
-              if cfg.enableTelemetry
-              then "1"
-              else "0";
-            PATH = cfg._runtimePath;
-            GIT_TERMINAL_PROMPT = "0";
-          };
+          Environment = lib.mapAttrsToList environment ({
+              HOME = config.home.homeDirectory;
+              XDG_CONFIG_HOME = config.xdg.configHome;
+              XDG_DATA_HOME = config.xdg.dataHome;
+              XDG_CACHE_HOME = config.xdg.cacheHome;
+              XDG_STATE_HOME = config.xdg.stateHome;
+              ROBOREV_DATA_DIR = cfg.dataDir;
+              ROBOREV_TELEMETRY_ENABLED =
+                if cfg.enableTelemetry
+                then "1"
+                else "0";
+              PATH = cfg._runtimePath;
+              GIT_TERMINAL_PROMPT = "0";
+            }
+            // cfg.environment // lib.optionalAttrs (cfg.colorMode != null) {ROBOREV_COLOR_MODE = cfg.colorMode;});
           EnvironmentFile = map (path: lib.replaceStrings ["\\" "%"] ["\\\\" "%%"] path) svc.environmentFiles;
           WorkingDirectory = "%h";
           Restart = "on-failure";
