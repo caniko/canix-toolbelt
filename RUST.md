@@ -1,5 +1,15 @@
 # canix-toolbelt Rust library and CLI
 
+## Shared execution wire contract
+
+`execution_protocol` supplies provider-free wire types, canonical bounded JSON
+validation, redacted typed failures and exact implementation/profile negotiation.
+Rust and TypeScript inventories are generated from one schema and exercise the
+same byte and error-code fixtures. The Cargo archive includes both language
+bindings, validators and schema. See [EXECUTION_PROTOCOL.md](EXECUTION_PROTOCOL.md)
+for the contract and conformance commands. Runtime admission, authenticated IPC,
+engine lifecycle and application completion remain subsequent qualified slices.
+
 ## Shared construction
 
 The optional Unix `build-train` feature consumes registry Fleetix 0.6.0's native
