@@ -9,6 +9,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 - Keep disposable foreign DNS peers alive through both service-start refusal
   checks, with bounded lifetime and active-peer assertions before cleanup.
+- Retry malformed pinentry pane observations within the original deadline,
+  retaining decode diagnostics and refusing to treat unreadable state as cleanup.
 
 ## [0.5.0] - 2026-10-11
 
