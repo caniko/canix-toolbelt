@@ -41,7 +41,7 @@
     inherit (cfg) directInterfaces dnsServers dnsZones networkManagerDns;
   };
   policy = pkgs.writeText "direct-network-policy.json" (builtins.toJSON policyData);
-  mkUser = user: {
+  mkUserConfig = user: {
     # An empty Home Manager unit is a masked unit to systemd. Every declared
     # slice needs content even when it inherits all its resource policy.
     systemd.user.slices = lib.genAttrs (map (lib.removeSuffix ".slice") (userSlices user)) (name: {
@@ -77,6 +77,28 @@
         })
         user.services)
     ];
+  };
+  mkUser = user: {
+    # Home Manager leaves ExecStartPre in its freeform unit schema, whose
+    # scalar/list union cannot merge a scalar command with our ordered list.
+    # Coerce commands only for enrolled services. Keep the option tree static:
+    # submodule name is supplied through _module.args after options are loaded.
+    options.systemd.user.services = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
+        options.Service.ExecStartPre = lib.mkOption {
+          type = let
+            command = lib.types.either lib.types.str lib.types.path;
+            primitive = lib.types.oneOf [lib.types.bool lib.types.int lib.types.str lib.types.path];
+          in
+            if builtins.hasAttr name user.services
+            then lib.types.coercedTo command lib.toList (lib.types.listOf command)
+            else lib.types.either primitive (lib.types.listOf primitive);
+          default = [];
+          description = "Pre-start commands, with direct-network admission for enrolled services.";
+        };
+      }));
+    };
+    config = mkUserConfig user;
   };
 in {
   options.canix-toolbelt.networking.directNetwork = {

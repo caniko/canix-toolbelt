@@ -17,7 +17,7 @@
           systemd.services.backup.serviceConfig = {
             User = "operator";
             ExecStart = "${pkgs.coreutils}/bin/true";
-            ExecStartPre = ["${pkgs.coreutils}/bin/true"];
+            ExecStartPre = "${pkgs.coreutils}/bin/true";
             Slice = "canix-background.slice";
             MemoryMax = "1G";
           };
@@ -25,9 +25,17 @@
             home.stateVersion = "24.11";
             systemd.user.services.backend.Service = {
               ExecStart = "${pkgs.coreutils}/bin/true";
-              ExecStartPre = ["${pkgs.coreutils}/bin/true"];
+              ExecStartPre = "${pkgs.coreutils}/bin/true";
               Slice = "app-amc.slice";
               MemoryMax = "2G";
+            };
+            systemd.user.services.backend-list.Service = {
+              ExecStart = "${pkgs.coreutils}/bin/true";
+              ExecStartPre = ["${pkgs.coreutils}/bin/true" "${pkgs.coreutils}/bin/false"];
+            };
+            systemd.user.services.desktop.Service = {
+              ExecStart = "${pkgs.coreutils}/bin/true";
+              ExecStartPre = "${pkgs.coreutils}/bin/true";
             };
             systemd.user.slices.app-amc.Slice.MemoryMax = "3G";
           };
@@ -37,6 +45,7 @@
             systemServices.backup = "canix-background.slice";
             users.operator = {
               services.backend = "app-amc.slice";
+              services.backend-list = "app-amc.slice";
               slices = ["agent-tools.slice"];
             };
             directInterfaces = ["wg-home"];
@@ -63,6 +72,8 @@ in
   assert home.systemd.user.services.backend.Service.Slice == "app-amc-direct.slice";
   assert home.systemd.user.services.backend.Service.MemoryMax == "2G";
   assert home.systemd.user.services.backend.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
+  assert home.systemd.user.services.backend-list.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true" "${pkgs.coreutils}/bin/false"];
+  assert home.systemd.user.services.desktop.Service.ExecStartPre == "${pkgs.coreutils}/bin/true";
   assert home.systemd.user.slices.app-amc.Slice.MemoryMax == "3G";
   assert home.systemd.user.slices.app-amc-direct.Unit.Description != "";
   assert builtins.elem "direct-network-agent-tools.service" home.systemd.user.services.backend.Unit.Requires;

@@ -64,6 +64,7 @@ in
           Unit.Description = "Persistent connections established before host VPN changes";
           Service = {
             ExecStart = "${python} ${fixture} client /home/operator/state.json";
+            ExecStartPre = "${pkgs.coreutils}/bin/true";
             MemoryMax = "128M";
           };
         };
