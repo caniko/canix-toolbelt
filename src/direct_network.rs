@@ -320,6 +320,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route.get("via").is_some() {
             return Err(invalid("unsupported cross-family direct route gateway"));
         }
+        if route.get("metrics").is_some() {
+            return Err(invalid("unsupported direct route metrics"));
+        }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();
         let source = route["prefsrc"].as_str();

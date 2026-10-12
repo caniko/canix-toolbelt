@@ -33,6 +33,10 @@ snapshot, including null or malformed attributes. ECMP replay supports at most
 iproute2's 512-argument batch array and its 4096-byte netlink request. Larger groups reject before either
 routing table, policy rules, firewall or DNS state is changed; they are never
 truncated or partially appended.
+Route-level `metrics` (such as path MTU, advertised MSS and congestion-control
+options) also reject an eligible snapshot before effects, for both single-path
+and ECMP routes. The ordinary route preference `metric` remains supported;
+unsupported path options are never silently dropped during replay.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
@@ -91,6 +95,10 @@ listeners and observed identity movement deny admission. Two bracketed
 observations compare the required socket mapping; ordinary upstream socket
 activity does not have to remain static. This is an observation-bound startup
 barrier, not a promise that the resolver cannot exit after acknowledgement.
+Socket tables are streamed through a 4096-byte per-row bound, retaining only
+the required listener identity. Unrelated host sockets do not impose an aggregate
+table-size limit. The scan still reaches EOF to detect competing listeners and
+rejects malformed, oversized or unreadable evidence.
 
 Dnsmasq runs as root with an explicitly empty group override and no capabilities
 on its unprivileged port. The module emits an explicit empty

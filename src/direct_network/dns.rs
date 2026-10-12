@@ -3,13 +3,14 @@
 use super::{Policy, Result, args, invalid, output};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 const UNIT: &str = "direct-network-dns.service";
 const PORT: u16 = 5354;
+const SOCKET_ROW_LIMIT: u64 = 4096;
 
 /// An observation binds process identity to the currently enrolled kernel objects.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,15 +167,39 @@ fn endpoint(text: &str, v6: bool) -> Result<(IpAddr, u16)> {
     Ok((ip, port))
 }
 
-fn listener_inode(table: &str, v6: bool, udp: bool, owned: &BTreeSet<u64>) -> Result<u64> {
+fn listener_inode(
+    mut table: impl BufRead,
+    v6: bool,
+    udp: bool,
+    owned: &BTreeSet<u64>,
+) -> Result<u64> {
     let required = if v6 {
         IpAddr::V6(Ipv6Addr::LOCALHOST)
     } else {
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 54))
     };
-    let mut listeners = Vec::new();
-    for row in table.lines().skip(1) {
-        let fields = row.split_whitespace().collect::<Vec<_>>();
+    // Proc tables cover the whole network namespace. Bound each row and the
+    // retained listener state, not the population of unrelated host sockets.
+    let mut listener = None;
+    let mut row = String::new();
+    let mut header = true;
+    loop {
+        row.clear();
+        let bytes = table
+            .by_ref()
+            .take(SOCKET_ROW_LIMIT + 1)
+            .read_line(&mut row)?;
+        if bytes == 0 {
+            break;
+        }
+        if bytes as u64 > SOCKET_ROW_LIMIT {
+            return Err(invalid("resolver socket row exceeds bound"));
+        }
+        if header {
+            header = false;
+            continue;
+        }
+        let fields = row.split_whitespace().take(10).collect::<Vec<_>>();
         if fields.len() < 10 {
             return Err(invalid("truncated proc socket row"));
         }
@@ -210,14 +235,15 @@ fn listener_inode(table: &str, v6: bool, udp: bool, owned: &BTreeSet<u64>) -> Re
         if !peer.0.is_unspecified() || peer.1 != 0 {
             return Err(invalid("connected resolver listener"));
         }
-        listeners.push(fields[9].parse::<u64>()?);
+        if listener.replace(fields[9].parse::<u64>()?).is_some() {
+            return Err(invalid("ambiguous resolver listener"));
+        }
     }
     // Inspect every matching row before ownership filtering: an owned listener
     // must not hide an unrelated SO_REUSEPORT listener at the same endpoint.
-    if listeners.len() != 1 || listeners[0] == 0 || !owned.contains(&listeners[0]) {
-        return Err(invalid("missing, ambiguous, or foreign resolver listener"));
-    }
-    Ok(listeners[0])
+    listener
+        .filter(|inode| *inode != 0 && owned.contains(inode))
+        .ok_or_else(|| invalid("missing or foreign resolver listener"))
 }
 
 fn capture(
@@ -249,7 +275,7 @@ fn capture(
     .enumerate()
     {
         sockets[i] = listener_inode(
-            &bounded_text(&process.join("net").join(name), 8 * 1024 * 1024)?,
+            BufReader::new(fs::File::open(process.join("net").join(name))?),
             v6,
             udp,
             &owned,
@@ -319,7 +345,12 @@ pub(super) fn observe(policy: &Policy, cgroups: &BTreeMap<String, u64>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::fs::symlink;
+
+    fn listener_inode(table: &str, v6: bool, udp: bool, owned: &BTreeSet<u64>) -> Result<u64> {
+        super::listener_inode(table.as_bytes(), v6, udp, owned)
+    }
 
     fn row(v6: bool, udp: bool, inode: u64) -> String {
         row_at(
@@ -393,6 +424,34 @@ mod tests {
                 assert!(listener_inode("header\n0: truncated\n", v6, udp, &owned).is_err());
             }
         }
+    }
+
+    #[test]
+    fn socket_stream_bounds_rows_and_rejects_errors_after_a_valid_listener() {
+        let owned = BTreeSet::from([123]);
+        let valid = row(false, true, 123);
+        for capacity in [1, 7, 8192] {
+            let reader = BufReader::with_capacity(capacity, valid.as_bytes());
+            assert_eq!(
+                super::listener_inode(reader, false, true, &owned).unwrap(),
+                123
+            );
+        }
+        let unrelated = row(false, true, 999).replace(":14EA", ":BEEF");
+        let oversized = valid.clone()
+            + unrelated.lines().nth(1).unwrap()
+            + &" ".repeat(SOCKET_ROW_LIMIT as usize)
+            + "\n";
+        assert!(listener_inode(&oversized, false, true, &owned).is_err());
+
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("lost socket table evidence"))
+            }
+        }
+        let reader = BufReader::new(valid.as_bytes().chain(FailedRead));
+        assert!(super::listener_inode(reader, false, true, &owned).is_err());
     }
 
     #[test]
@@ -471,6 +530,45 @@ mod tests {
             format!("ActiveState=active\nSubState=running\nMainPID=42\nControlGroup=/{cg}\n");
         let valid = capture(&properties, &policy, &enrolled, &proc, &cgroups).unwrap();
         assert_eq!(valid.sockets, [123, 124, 125, 126]);
+        // These files describe the entire host namespace, not just MainPID's
+        // four sockets. A busy host must still authenticate its exact listeners.
+        for (i, (name, v6, udp)) in [
+            ("tcp", false, false),
+            ("tcp6", true, false),
+            ("udp", false, true),
+            ("udp6", true, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = proc.join("42/net").join(name);
+            let original = fs::read_to_string(&path).unwrap();
+            let noise = row(v6, udp, 999).replace(":14EA", ":BEEF");
+            let noise = noise.lines().nth(1).unwrap().to_owned() + "\n";
+            let mut file = std::io::BufWriter::new(fs::File::create(&path).unwrap());
+            file.write_all(b"header\n").unwrap();
+            for _ in 0..(8 * 1024 * 1024 / noise.len() + 1) {
+                file.write_all(noise.as_bytes()).unwrap();
+            }
+            // Put the required listener at EOF, after more than 8 MiB of peers.
+            file.write_all(original.lines().nth(1).unwrap().as_bytes())
+                .unwrap();
+            file.write_all(b"\n").unwrap();
+            file.flush().unwrap();
+            assert!(fs::metadata(&path).unwrap().len() > 8 * 1024 * 1024);
+            assert_eq!(
+                capture(&properties, &policy, &enrolled, &proc, &cgroups).unwrap(),
+                valid
+            );
+            // Finding a valid socket must not stop the scan before a duplicate.
+            file.write_all(row(v6, udp, 999).lines().nth(1).unwrap().as_bytes())
+                .unwrap();
+            file.write_all(b"\n").unwrap();
+            file.flush().unwrap();
+            assert!(capture(&properties, &policy, &enrolled, &proc, &cgroups).is_err());
+            drop(file);
+            fs::write(&path, row(v6, udp, 123 + i as u64)).unwrap();
+        }
         for (v6, address) in [
             (
                 true,

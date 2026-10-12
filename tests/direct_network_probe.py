@@ -260,7 +260,15 @@ try:
              ['via', 'inet6', 'fe80::99', 'dev', 'uplink', 'onlink', 'metric', '44']),
             ('-4', '192.0.2.0/24', 'via',
              ['metric', '44', 'nexthop', 'via', 'inet6', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
-              'nexthop', 'via', 'inet6', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+               'nexthop', 'via', 'inet6', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-4', '192.0.2.0/24', 'metrics',
+             ['mtu', '1400', 'advmss', '1200', 'metric', '44',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-6', '2001:db8:100::/64', 'metrics',
+             ['mtu', '1400', 'advmss', '1200', 'metric', '44',
+              'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+              'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
         ]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             commands = [('ip', family, '-N', '-j', 'route', 'show', 'table', table)
@@ -279,7 +287,7 @@ try:
             verify(f'{attribute}-denied')
             run('ip', family, 'route', 'del', destination, 'metric', '44')
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
-        print('PASS: real route/nexthop encapsulation and cross-family via deny readiness before effects; existing connections survive')
+        print('PASS: real encapsulation, cross-family via and ECMP MTU/MSS metrics deny readiness before effects; existing connections survive')
         for count in [60, 64, 128]:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
             retained = [run(*command) for command in commands] + [(directory / 'servers').read_text()]

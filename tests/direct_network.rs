@@ -325,6 +325,44 @@ fn route_encapsulation_rejects_eligible_single_and_multipath_snapshots() {
 }
 
 #[test]
+fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for metrics in [
+        serde_json::json!({"mtu":1400,"advmss":1200}),
+        serde_json::json!([{"mtu":1400,"lock":true}]),
+        serde_json::json!({"congctl":"bbr","rto_min":200}),
+        serde_json::json!({}),
+        serde_json::Value::Null,
+        serde_json::json!("malformed"),
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2}
+            ]}),
+        ] {
+            route["metrics"] = metrics.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("route metrics"));
+        }
+    }
+    // Metrics on producer-owned VPN paths do not make them eligible.
+    for route in [
+        serde_json::json!({"dst":"default","dev":"wg-proton","metrics":{"mtu":1400}}),
+        serde_json::json!({"dst":"default","metrics":{"mtu":1400},"nexthops":[
+            {"dev":"enp1s0","gateway":"192.0.2.1"},
+            {"dev":"wg-proton","gateway":"198.51.100.1"}
+        ]}),
+    ] {
+        assert!(
+            select_routes(&policy(), &links, &serde_json::json!([route]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn ecmp_replay_limit_rejects_oversized_groups_without_truncating_supported_groups() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
     for gateway in ["192.0.2.1", "2001:db8::1"] {
