@@ -134,31 +134,50 @@ for table in [51821, 51822]:
 machine.succeed('ip link del container-a')
 machine.succeed('ip link del br-container')
 
+def wait_for_weighted_route(family: str, destination: str, metric: int, second_device: str) -> None:
+    # The inactive table intentionally retains an older complete snapshot.
+    # Assert the path selected by the live rule, not every retained table.
+    code = ('import json,subprocess; '
+            f'rules=json.loads(subprocess.check_output(["ip","{family}","-j","rule","show"])); '
+            'table=next(str(r["table"]) for r in rules if r["priority"]==50); '
+            f'routes=json.loads(subprocess.check_output(["ip","{family}","-j","route","show","table",table])); '
+            f'r=next(r for r in routes if r.get("dst")=="{destination}" and r.get("metric")=={metric}); '
+            f'assert [(h["dev"],h["weight"]) for h in r["nexthops"]]==[("uplink",2),("{second_device}",3)], r; '
+            'assert all("onlink" in h["flags"] for h in r["nexthops"]), r')
+    machine.wait_until_succeeds(f"@PYTHON@ -c '{code}'", timeout=60)
+
+
 # Weighted ECMP must retain the complete eligible path set in each family.
 for family, destination, first, second in [
     ('-4', '192.0.2.0/24', '198.18.0.2', '10.123.0.1'),
     ('-6', '2001:db8:99::/64', 'fe80::1', 'fe80::2'),
 ]:
     machine.succeed(f'ip {family} route add {destination} metric 42 nexthop via {first} dev uplink weight 2 onlink nexthop via {second} dev wg-home weight 3 onlink')
-    machine.wait_until_succeeds(f'ip {family} -j route show table all | @PYTHON@ -c \'import json,sys; r=[r for r in json.load(sys.stdin) if str(r.get("table")) in ["51821","51822"] and r.get("dst")=="{destination}"]; assert r and all([(h["dev"],h["weight"]) for h in x["nexthops"]]==[("uplink",2),("wg-home",3)] for x in r)\'')
+    wait_for_weighted_route(family, destination, 42, 'wg-home')
     machine.succeed(f'ip {family} route del {destination} metric 42')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 check_direct()
 
 # Kernel ECMP link-state flags must reconcile while the usable path and all
 # established application traffic stay intact.
-machine.succeed('ip link add ecmp-status type dummy')
+machine.succeed('ip link add ecmp-status type veth peer name ecmp-peer')
 machine.succeed('ip link set ecmp-status up')
+machine.succeed('ip link set ecmp-peer up')
+machine.succeed('ip address add 198.18.43.1/24 dev ecmp-status')
+machine.succeed('ip -6 address add 2001:db8:43::1/64 dev ecmp-status nodad')
 for family, destination, gateway in [('-4', '192.0.2.0/24', '198.18.0.2'),
-                                     ('-6', '2001:db8:99::/64', 'fe80::1')]:
+                                     ('-6', '2001:db8:99::/64', 'fe80::99')]:
     machine.succeed(f'ip {family} route add {destination} metric 43 nexthop via {gateway} dev uplink weight 2 onlink nexthop via {gateway} dev ecmp-status weight 3 onlink')
-machine.succeed('ip link set ecmp-status down')
+# Drop carrier while retaining IFF_UP. Administrative down makes Linux reject
+# reinstalling authored onlink hops with "Nexthop device is not up".
+machine.succeed('ip link set ecmp-peer down')
 for family, destination in [('-4', '192.0.2.0/24'), ('-6', '2001:db8:99::/64')]:
     machine.succeed(f'ip {family} -j route show table main | @PYTHON@ -c \'import json,sys; r=next(r for r in json.load(sys.stdin) if r.get("dst")=="{destination}"); assert "linkdown" in r["nexthops"][1]["flags"]\'')
-    machine.wait_until_succeeds(f'ip {family} -j route show table all | @PYTHON@ -c \'import json,sys; r=[r for r in json.load(sys.stdin) if str(r.get("table")) in ["51821","51822"] and r.get("dst")=="{destination}"]; assert r and all([(h["dev"],h["weight"]) for h in x["nexthops"]]==[("uplink",2),("ecmp-status",3)] for x in r)\'')
+    wait_for_weighted_route(family, destination, 43, 'ecmp-status')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 check_direct()
 machine.succeed('ip link del ecmp-status')
+machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 
 # Silent, unauthorized sockets cannot hold the privileged routing loop hostage.
 machine.succeed('systemd-run --unit=silent-peers --property=User=nobody @PYTHON@ @NEGATIVE@ silent-peers --seconds 30 --marker /tmp/silent-peers-ready')

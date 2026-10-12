@@ -25,7 +25,7 @@ in
           allowedUDPPorts = [51818 51819];
         };
         networkmanager.enable = true;
-        networkmanager.unmanaged = ["interface-name:eth0" "interface-name:uplink" "interface-name:outer" "interface-name:wg-home" "interface-name:wg-proton" "interface-name:pvpnksintrf0"];
+        networkmanager.unmanaged = ["interface-name:eth0" "interface-name:uplink" "interface-name:outer" "interface-name:wg-home" "interface-name:wg-proton" "interface-name:pvpnksintrf0" "interface-name:ecmp-status" "interface-name:ecmp-peer"];
       };
       services.resolved = {
         enable = true;
