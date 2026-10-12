@@ -285,3 +285,41 @@ fn multipath_kernel_status_flags_do_not_discard_the_route_or_authored_onlink() {
         assert!(!selected[0].nexthops[1].onlink);
     }
 }
+
+#[test]
+fn multipath_encapsulation_rejects_the_snapshot_instead_of_rewriting_forwarding() {
+    let links = serde_json::json!([
+        {"ifname":"enp1s0","link_type":"ether"},
+        {"ifname":"enp2s0","link_type":"ether"}
+    ]);
+    for encapsulation in [
+        serde_json::json!({"encap_type":"mpls","dst":"100"}),
+        serde_json::json!({"encap_type":"seg6","mode":"encap","segs":["2001:db8::1"]}),
+        serde_json::Value::Null,
+    ] {
+        for index in 0..2 {
+            let mut routes = serde_json::json!([{"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2,"flags":["onlink"]},
+                {"dev":"enp2s0","gateway":"198.51.100.1","weight":3}
+            ]}]);
+            routes[0]["nexthops"][index]["encap"] = encapsulation.clone();
+            let error = select_routes(&policy(), &links, &routes).unwrap_err();
+            assert!(error.to_string().contains("encapsulation"));
+        }
+    }
+}
+
+#[test]
+fn route_encapsulation_rejects_eligible_single_and_multipath_snapshots() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for mut route in [
+        serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"}),
+        serde_json::json!({"dst":"default","nexthops":[
+            {"dev":"enp1s0","gateway":"192.0.2.1","weight":2}
+        ]}),
+    ] {
+        route["encap"] = serde_json::json!({"encap_type":"mpls","dst":"100"});
+        let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+        assert!(error.to_string().contains("encapsulation"));
+    }
+}

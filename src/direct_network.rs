@@ -244,6 +244,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             }
             hops.iter()
                 .map(|hop| {
+                    if hop.get("encap").is_some() {
+                        return Err(invalid("unsupported multipath encapsulation"));
+                    }
                     let gateway = hop["gateway"].as_str();
                     let weight = hop
                         .get("weight")
@@ -303,6 +306,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         } else {
             ""
         };
+        if route.get("encap").is_some() {
+            return Err(invalid("unsupported direct route encapsulation"));
+        }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();
         let source = route["prefsrc"].as_str();

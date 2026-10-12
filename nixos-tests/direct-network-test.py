@@ -179,6 +179,32 @@ check_direct()
 machine.succeed('ip link del ecmp-status')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 
+# Unsupported encapsulation must deny admission without stripping forwarding
+# semantics or changing the retained route, nftables or resolver snapshot.
+encap_destination = '2001:db8:100::/64'
+for route in [
+    f'{encap_destination} encap seg6 mode encap segs 2001:db8:20::20 via fe80::99 dev uplink onlink metric 44',
+    f'{encap_destination} metric 44 nexthop encap seg6 mode encap segs 2001:db8:20::20 via fe80::99 dev uplink weight 2 onlink nexthop via fe80::2 dev wg-home weight 3 onlink',
+]:
+    snapshot_commands = [
+        f'ip {family} -N -j route show table {table}'
+        for family in ['-4', '-6'] for table in [51821, 51822]
+    ] + ['ip -4 -j rule show', 'ip -6 -j rule show',
+         'nft --stateless list table inet toolbelt_direct_network',
+         'cat /run/direct-network/servers']
+    retained = [machine.succeed(command) for command in snapshot_commands]
+    machine.succeed(f'ip -6 route add {route}')
+    main = json.loads(machine.succeed('ip -6 -j route show table main'))
+    encapsulated = next(r for r in main if r.get('dst') == encap_destination)
+    assert 'encap' in encapsulated or any('encap' in h for h in encapsulated.get('nexthops', [])), encapsulated
+    status, diagnostics = machine.execute('timeout 20 canix-toolbelt-direct-network ready 2>&1')
+    assert status == 1 and diagnostics.startswith('direct-network: '), (status, diagnostics)
+    assert [machine.succeed(command) for command in snapshot_commands] == retained
+    check_direct()
+    machine.succeed(f'ip -6 route del {encap_destination} metric 44')
+    machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
+    check_direct()
+
 # Silent, unauthorized sockets cannot hold the privileged routing loop hostage.
 machine.succeed('systemd-run --unit=silent-peers --property=User=nobody @PYTHON@ @NEGATIVE@ silent-peers --seconds 30 --marker /tmp/silent-peers-ready')
 machine.wait_for_file('/tmp/silent-peers-ready')

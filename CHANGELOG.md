@@ -34,6 +34,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Keep direct-network routing ownership explicit in both reserved tables and
   address families, preserve foreign routes and complete eligible ECMP paths,
   and reject container-only implicit uplinks and noncanonical cgroup depths.
+- Reject unsupported encapsulation on eligible routes and ECMP nexthops before
+  routing, firewall or DNS updates instead of silently changing forwarding.
 - Retain IPv6 same-prefix, same-metric routes across multiple uplinks without
   replacing foreign routes or blocking the readiness barrier.
 - Explicitly delete retained owned IPv6 unreachable fallbacks before exclusive

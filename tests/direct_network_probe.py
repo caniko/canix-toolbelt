@@ -248,6 +248,31 @@ try:
             run('ip', family, 'route', 'del', destination, 'metric', '43')
         verify('multipath-linkdown')
         print('PASS: production daemon accepts real IPv4/IPv6 ECMP linkdown status and preserves weights/onlink')
+        for route in [
+            ['encap', 'seg6', 'mode', 'encap', 'segs', '2001:db8:20::20',
+             'via', 'fe80::99', 'dev', 'uplink', 'onlink', 'metric', '44'],
+            ['metric', '44', 'nexthop', 'encap', 'seg6', 'mode', 'encap', 'segs', '2001:db8:20::20',
+             'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+             'nexthop', 'via', 'fe80::99', 'dev', 'uplink2', 'weight', '3', 'onlink'],
+        ]:
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+            commands = [('ip', family, '-N', '-j', 'route', 'show', 'table', table)
+                        for family in ['-4', '-6'] for table in ['51821', '51822']]
+            commands += [('ip', family, '-j', 'rule', 'show') for family in ['-4', '-6']]
+            commands += [('nft', '--stateless', 'list', 'table', 'inet', 'toolbelt_direct_network')]
+            retained = [run(*command) for command in commands] + [(directory / 'servers').read_text()]
+            run('ip', '-6', 'route', 'add', '2001:db8:100::/64', *route)
+            main = next(r for r in json.loads(run('ip', '-6', '-j', 'route', 'show', 'table', 'main'))
+                        if r.get('dst') == '2001:db8:100::/64')
+            assert 'encap' in main or any('encap' in h for h in main.get('nexthops', [])), main
+            denied = subprocess.run([binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only'],
+                                    check=False, capture_output=True, text=True, timeout=20)
+            assert denied.returncode == 1 and denied.stderr.startswith('direct-network: '), denied.stderr
+            assert [run(*command) for command in commands] + [(directory / 'servers').read_text()] == retained
+            verify('encapsulation-denied')
+            run('ip', '-6', 'route', 'del', '2001:db8:100::/64', 'metric', '44')
+            run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
+        print('PASS: real route/nexthop encapsulation denies readiness before effects; existing connections survive')
         for transition in ('kill-switch', 'reconnect', 'server-change'):
             run('ip', 'link', 'add', 'pvpnksintrf0', 'type', 'dummy')
             run('ip', 'addr', 'add', '100.85.0.1/24', 'dev', 'pvpnksintrf0')

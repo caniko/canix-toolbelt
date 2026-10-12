@@ -23,6 +23,9 @@ does not silently rewrite a producer's forwarding policy by removing members.
 Kernel-derived nexthop status flags, including `linkdown`, are accepted without
 being replayed as authored flags. The kernel derives current reachability and
 offload state from the actual devices; authored `onlink` remains preserved.
+Encapsulation on an eligible route or any of its nexthops rejects reconciliation
+before route, nftables or DNS updates. Unsupported forwarding semantics must not
+be silently stripped from a replayed route.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
