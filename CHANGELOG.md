@@ -39,6 +39,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Explicitly delete retained owned IPv6 unreachable fallbacks before exclusive
   reinstallation, and emit the resolver unit's empty capability reset so its
   native namespace and descriptor ownership can be authenticated.
+- Preserve conservative autoSafe/deny overlap rejection for store wrappers;
+  backend wildcards can consume slashes and command arguments before another
+  executable suffix, even when the declared executable names differ.
 - Discover ordinary VLAN uplinks through iproute2's named parent field; reject
   foreign-namespace index collisions and retain VLAN route and DNS coverage.
 - Make the unsafe-object preparation fixtures tolerate existing Git object

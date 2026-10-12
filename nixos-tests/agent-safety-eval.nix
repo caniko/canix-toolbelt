@@ -32,8 +32,30 @@
     true);
 
   disjointStoreCommands = builtins.tryEval (builtins.deepSeq (safety.mergeRules {
-      programs.demo.autoSafe = {commands = ["query *"];};
+      programs.demo.autoSafe = {
+        commands = ["query *"];
+        wrappers = {
+          environmentAssignments = false;
+          nixStorePaths = false;
+          resultBinPaths = false;
+        };
+      };
       deny = ["/nix/store/*/bin/other delete *"];
+    })
+    true);
+
+  # Both store globs match this whole command under OpenCode's native matcher:
+  # /nix/store/hash-zed/bin/zed query /bin/other delete x
+  # The path wildcard is not limited to one store directory or the executable.
+  storeArgumentConflict = builtins.tryEval (builtins.deepSeq (safety.mergeRules {
+      programs.zed.autoSafe = {commands = ["query *"];};
+      deny = ["/nix/store/*/bin/other delete *"];
+    })
+    true);
+
+  envStoreArgumentConflict = builtins.tryEval (builtins.deepSeq (safety.mergeRules {
+      programs.zed.autoSafe = {commands = ["query *"];};
+      deny = ["*=* /nix/store/*/bin/other delete *"];
     })
     true);
 
@@ -50,7 +72,17 @@ in
       {
         name = "disjoint-store-commands";
         assertion = disjointStoreCommands.success;
-        message = "the store hash wildcard must not conflate different executable suffixes";
+        message = "an unwrapped command remains disjoint from a store-prefixed deny";
+      }
+      {
+        name = "store-argument-overlap";
+        assertion = !storeArgumentConflict.success;
+        message = "a store wildcard can consume command arguments before a competing executable suffix";
+      }
+      {
+        name = "env-store-argument-overlap";
+        assertion = !envStoreArgumentConflict.success;
+        message = "environment-prefixed store wildcards retain whole-command overlap";
       }
       {
         name = "overlapping-store-commands";
