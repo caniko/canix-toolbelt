@@ -29,6 +29,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   including replacement of restrictive stale temporary files before DNS reload.
 - Compose rooted admission drop-ins through the native systemd package tree and
   retain completed oneshot payload invocation identities in kernel VM evidence.
+- Mount the immutable ext4 readiness fixture read-only without journal replay,
+  and retain bounded native image/dissection diagnostics on startup refusal.
 - Keep disposable foreign DNS peers alive through both service-start refusal
   checks, with bounded lifetime and active-peer assertions before cleanup.
 - Retry malformed pinentry pane observations within the original deadline,

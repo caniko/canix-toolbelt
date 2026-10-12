@@ -133,7 +133,15 @@ in
       };
       systemd.tmpfiles.rules = ["d /run/direct-network-root-state 0777 root root -"];
       systemd.services.rooted-start.serviceConfig = rootedService // {RootDirectory = serviceRoot;};
-      systemd.services.imaged-start.serviceConfig = rootedService // {RootImage = serviceImage;};
+      systemd.services.imaged-start.serviceConfig =
+        rootedService
+        // {
+          RootImage = serviceImage;
+          # This ext4 fixture lives in the immutable store. '+' bypasses sandbox
+          # hardening for admission, so express read-only/no-journal-replay at
+          # the image mount itself rather than through ProtectSystem/Home.
+          RootImageOptions = "root:ro,norecovery";
+        };
       systemd.services.rooted-retry.serviceConfig =
         rootedService
         // {

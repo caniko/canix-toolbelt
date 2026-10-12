@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
@@ -9,6 +10,7 @@ if TYPE_CHECKING:
 # The NixOS driver injects these names when executing this script.
 machine = cast('QemuMachine', globals()['machine'])
 start_guests = cast(Callable[[], None], globals()['start_all'])
+logger = logging.getLogger('direct-network-transitions')
 
 start_guests()
 machine.wait_for_unit('multi-user.target')
@@ -233,7 +235,35 @@ negative_counter = pause_dns_admission_probes()
 for name in ['rooted-start', 'imaged-start']:
     previous = ''
     for _ in range(2):
-        machine.succeed(f'systemctl start {name}.service')
+        if name == 'imaged-start':
+            machine.succeed('systemctl show imaged-start.service -p RootImageOptions --value | grep -Fx root:ro,norecovery')
+            machine.succeed('systemctl log-level debug')
+        try:
+            machine.succeed(f'systemctl start {name}.service')
+        except Exception:
+            # Keep the exact image/dissection/mount refusal. A generic 226/
+            # NAMESPACE result alone cannot distinguish read-only image setup
+            # from a bad bind destination or a native image-policy refusal.
+            for command in [
+                f'systemctl cat {name}.service',
+                f'journalctl -b -u {name}.service --no-pager -n 200',
+                f'systemctl show {name}.service -p RootImage,RootImageOptions,RootDirectory,ReadOnlyPaths,BindPaths,BindReadOnlyPaths,User,Result',
+                'losetup --list --output NAME,RO,BACK-FILE',
+            ]:
+                try:
+                    status, output = machine.execute(command)
+                    print(command, status, output)
+                except Exception:
+                    logger.exception('Unable to retain image diagnostic for %s', command)
+            raise
+        finally:
+            if name == 'imaged-start':
+                # Do not mask the original error if even restoring the manager
+                # log level fails during fixture teardown.
+                try:
+                    machine.execute('systemctl log-level info')
+                except Exception:
+                    logger.exception('Unable to restore manager log level')
         # Inactive oneshots clear the manager's live InvocationID. Retain the
         # actual payload environment instead, without changing its lifecycle.
         current = machine.succeed(f'cat /run/direct-network-root-state/{name}-invocation').strip()
