@@ -26,6 +26,13 @@ offload state from the actual devices; authored `onlink` remains preserved.
 Encapsulation on an eligible route or any of its nexthops rejects reconciliation
 before route, nftables or DNS updates. Unsupported forwarding semantics must not
 be silently stripped from a replayed route.
+Cross-family `via` attributes on eligible routes or nexthops also reject the
+snapshot, including null or malformed attributes. ECMP replay supports at most
+60 nexthops per route. The maximal supported replay has eight arguments and
+28 netlink bytes per hop, leaving space for route attributes under both
+iproute2's 512-argument batch array and its 4096-byte netlink request. Larger groups reject before either
+routing table, policy rules, firewall or DNS state is changed; they are never
+truncated or partially appended.
 NetworkManager IPv6 link-local DNS addresses retain their uplink scope. An
 authored scope must match that uplink; the same address on two uplinks remains
 two distinct upstreams.
@@ -110,3 +117,8 @@ on each start, before its existing pre-start commands. An already-active anchor
 cannot admit new workloads while DNS is unavailable. System-manager prechecks
 run only the narrow readiness client with systemd's `+` prefix so service UIDs
 need no additional user authorization. Established workloads remain running.
+For units using `RootDirectory` or `RootImage`, a dedicated host-root oneshot
+admission dependency replaces the inline precheck. It does not retain a successful
+active state, so each manual start or automatic restart requires fresh admission.
+The unit's existing pre-start commands and payload retain their original root,
+credentials and resource limits; no readiness binary or socket is mounted into it.

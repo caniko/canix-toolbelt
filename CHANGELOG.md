@@ -11,6 +11,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   checks, with bounded lifetime and active-peer assertions before cleanup.
 - Retry malformed pinentry pane observations within the original deadline,
   retaining decode diagnostics and refusing to treat unreadable state as cleanup.
+- Reject ECMP groups above the bounded iproute2 replay capacity and unsupported
+  cross-family gateways before any forwarding, firewall or DNS changes.
+- Admit rooted system services through a fresh host-side readiness dependency,
+  preserving their existing chrooted hooks and automatic-restart checks.
 
 ## [0.5.0] - 2026-10-11
 

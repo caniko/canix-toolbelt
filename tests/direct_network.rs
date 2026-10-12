@@ -323,3 +323,65 @@ fn route_encapsulation_rejects_eligible_single_and_multipath_snapshots() {
         assert!(error.to_string().contains("encapsulation"));
     }
 }
+
+#[test]
+fn ecmp_replay_limit_rejects_oversized_groups_without_truncating_supported_groups() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for gateway in ["192.0.2.1", "2001:db8::1"] {
+        for count in [60, 61, 128, 160, 256] {
+            let hops = (0..count)
+                .map(|index| {
+                    serde_json::json!({
+                        "dev":"enp1s0", "gateway":gateway, "weight":index % 256 + 1,
+                        "flags":["onlink"]
+                    })
+                })
+                .collect::<Vec<_>>();
+            let routes = serde_json::json!([{"dst":"default", "nexthops":hops}]);
+            let result = select_routes(&policy(), &links, &routes);
+            if count == 60 {
+                let selected = result.unwrap();
+                assert_eq!(selected[0].nexthops.len(), count);
+                assert_eq!(selected[0].nexthops[count - 1].weight, count as u64);
+                assert!(selected[0].nexthops.iter().all(|hop| hop.onlink));
+            } else {
+                assert!(result.is_err(), "accepted {count} nexthops with {gateway}");
+            }
+        }
+    }
+}
+
+#[test]
+fn cross_family_via_rejects_eligible_routes_instead_of_becoming_connected() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for via in [
+        serde_json::json!({"family":"inet6","host":"fe80::1"}),
+        serde_json::json!({"family":"inet","host":"192.0.2.1"}),
+        serde_json::Value::Null,
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0"}),
+            serde_json::json!({"dst":"192.0.2.0/24","nexthops":[
+                {"dev":"enp1s0","weight":2,"flags":["onlink"]}
+            ]}),
+        ] {
+            if route.get("nexthops").is_some() {
+                route["nexthops"][0]["via"] = via.clone();
+            } else {
+                route["via"] = via.clone();
+            }
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("cross-family"));
+        }
+    }
+    // A producer-owned VPN path remains omitted as a whole, including its via.
+    let routes = serde_json::json!([{"dst":"default","nexthops":[
+        {"dev":"enp1s0","gateway":"192.0.2.1"},
+        {"dev":"wg-proton","via":{"family":"inet6","host":"fe80::1"}}
+    ]}]);
+    assert!(
+        select_routes(&policy(), &links, &routes)
+            .unwrap()
+            .is_empty()
+    );
+}

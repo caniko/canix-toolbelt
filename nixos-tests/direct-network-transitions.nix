@@ -8,6 +8,26 @@
   systemctlFixture = pkgs.writeScript "direct-network-systemctl-fixture" ("#!${python}\n" + builtins.replaceStrings ["@SYSTEMCTL@"] ["${pkgs.systemd}/bin/systemctl"] (builtins.readFile ./direct-network-systemctl.py));
   nmcliFixture = pkgs.writeScript "direct-network-nmcli-fixture" ("#!${python}\n" + builtins.readFile ./direct-network-nmcli.py);
   package = pkgs.callPackage ../nix/package.nix {directNetwork = true;};
+  serviceRoot = pkgs.runCommand "direct-network-service-root" {} ''
+    mkdir -p "$out/bin" "$out/tmp" "$out/nix/store" "$out/run"
+    ln -s ${pkgs.bash}/bin/bash "$out/bin/sh"
+    touch "$out/inside-root"
+  '';
+  serviceImage = pkgs.runCommand "direct-network-service-root.ext4" {nativeBuildInputs = [pkgs.e2fsprogs];} ''
+    truncate -s 16M "$out"
+    mkfs.ext4 -q -F -d ${serviceRoot} "$out"
+  '';
+  rootedService = {
+    Type = "oneshot";
+    User = "nobody";
+    MemoryMax = "64M";
+    BindReadOnlyPaths = ["/nix/store"];
+    BindPaths = ["/run/direct-network-root-state:/tmp"];
+    # Both commands must retain their alternate root and the readiness socket
+    # deliberately remains unavailable inside it.
+    ExecStartPre = ["/bin/sh -c 'test -e /inside-root && test ! -S /run/direct-network/ready.sock && echo pre > /tmp/%N-pre'"];
+    ExecStart = "/bin/sh -c 'test -e /inside-root && echo payload > /tmp/%N-payload'";
+  };
 in
   pkgs.testers.runNixOSTest {
     name = "direct-network-transitions";
@@ -55,6 +75,9 @@ in
         };
         systemServices.backup = "canix-background.slice";
         systemServices.late-start = "canix-background.slice";
+        systemServices.rooted-start = "canix-background.slice";
+        systemServices.imaged-start = "canix-background.slice";
+        systemServices.rooted-retry = "canix-background.slice";
       };
       home-manager.users.operator = {
         home.stateVersion = "24.11";
@@ -84,6 +107,18 @@ in
         User = "nobody";
         ExecStart = "${pkgs.coreutils}/bin/touch /tmp/direct-network-late-system";
       };
+      systemd.tmpfiles.rules = ["d /run/direct-network-root-state 0777 root root -"];
+      systemd.services.rooted-start.serviceConfig = rootedService // {RootDirectory = serviceRoot;};
+      systemd.services.imaged-start.serviceConfig = rootedService // {RootImage = serviceImage;};
+      systemd.services.rooted-retry.serviceConfig =
+        rootedService
+        // {
+          Type = "exec";
+          RootDirectory = serviceRoot;
+          Restart = "always";
+          RestartSec = "1s";
+          ExecStart = "/bin/sh -c 'test -e /inside-root && echo payload > /tmp/%N-payload && exec ${pkgs.coreutils}/bin/sleep infinity'";
+        };
       home-manager.users.operator.systemd.user.services.late-start.Service = {
         Type = "oneshot";
         ExecStart = "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user";

@@ -217,6 +217,20 @@ dns_pid = machine.succeed('systemctl show direct-network-dns.service -p MainPID 
 for capability in ['CapEff', 'CapPrm', 'CapBnd', 'CapAmb']:
     machine.succeed(f'grep "^{capability}:[[:space:]]*0000000000000000$" /proc/{dns_pid}/status')
 negative_counter = pause_dns_admission_probes()
+# Repeated starts must rerun admission even though the slice anchor stays live.
+# Existing prechecks and payloads still execute inside RootDirectory/RootImage.
+for name in ['rooted-start', 'imaged-start']:
+    previous = ''
+    for _ in range(2):
+        machine.succeed(f'systemctl start {name}.service')
+        current = machine.succeed(f'systemctl show direct-network-admission-{name}.service -p InvocationID --value').strip()
+        assert current and current != previous, (name, current, previous)
+        previous = current
+        machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
+        machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
+        machine.succeed(f'rm /run/direct-network-root-state/{name}-pre /run/direct-network-root-state/{name}-payload')
+machine.succeed('systemctl start rooted-retry.service')
+machine.succeed('test -e /run/direct-network-root-state/rooted-retry-payload')
 machine.succeed('systemctl stop direct-network-dns.service')
 for mode in ['tcp', 'both', 'missing-ipv6']:
     marker = f'/run/foreign-{mode}-ready'
@@ -239,6 +253,16 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed('systemctl is-active direct-network-canix-background-direct.service')
         machine.succeed(userctl + 'is-active direct-network-app-amc-direct.service')
         machine.succeed('systemctl is-active foreign-dns.service')
+        # Automatic restarts also pull in a fresh, non-retained admission job.
+        machine.succeed('rm /run/direct-network-root-state/rooted-retry-pre /run/direct-network-root-state/rooted-retry-payload')
+        machine.succeed('systemctl kill --kill-whom=main --signal=TERM rooted-retry.service')
+        machine.wait_until_succeeds('test "$(systemctl show direct-network-admission-rooted-retry.service -p ExecMainStatus --value)" = 1')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-retry-pre')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-retry-payload')
+        machine.fail('systemctl start rooted-start.service')
+        machine.succeed('test "$(systemctl show direct-network-admission-rooted-start.service -p ExecMainStatus --value)" = 1')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-pre')
+        machine.succeed('test ! -e /run/direct-network-root-state/rooted-start-payload')
         machine.fail('systemctl start late-start.service')
         machine.succeed('systemctl is-active foreign-dns.service')
         machine.fail(userctl + 'start late-start.service')
@@ -247,6 +271,11 @@ for mode in ['tcp', 'both', 'missing-ipv6']:
         machine.succeed('test ! -e /home/operator/direct-network-late-user')
         machine.succeed('systemctl reset-failed late-start.service')
         machine.succeed(userctl + 'reset-failed late-start.service')
+    if mode == 'both':
+        machine.fail('systemctl start imaged-start.service')
+        machine.succeed('test "$(systemctl show direct-network-admission-imaged-start.service -p ExecMainStatus --value)" = 1')
+        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-pre')
+        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-payload')
     machine.succeed('systemctl is-active foreign-dns.service')
     machine.succeed('systemctl stop foreign-dns.service')
     # Successful transient services are unloaded after stop. Wait for their
@@ -257,6 +286,11 @@ machine.succeed('systemctl start direct-network-dns.service')
 machine.wait_until_succeeds('canix-toolbelt-direct-network ready')
 resume_dns_admission_probes(negative_counter)
 check_direct()
+machine.succeed('systemctl reset-failed rooted-start.service imaged-start.service rooted-retry.service direct-network-admission-rooted-start.service direct-network-admission-imaged-start.service direct-network-admission-rooted-retry.service')
+machine.succeed('systemctl start rooted-start.service imaged-start.service rooted-retry.service')
+for name in ['rooted-start', 'imaged-start', 'rooted-retry']:
+    machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
+    machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
 machine.succeed('systemctl start late-start.service')
 machine.succeed(userctl + 'start late-start.service')
 machine.succeed('test -e /tmp/direct-network-late-system')

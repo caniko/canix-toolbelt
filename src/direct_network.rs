@@ -230,8 +230,13 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         let nexthops = if let Some(hops) = route.get("nexthops") {
             let hops = hops
                 .as_array()
-                .filter(|hops| !hops.is_empty() && hops.len() <= 256)
-                .ok_or_else(|| invalid("invalid multipath nexthops"))?;
+                // ip -batch allows 511 arguments. A maximal supported hop
+                // takes eight arguments and 28 netlink bytes (IPv6 gateway).
+                // Sixty leaves room for source/metric/table attributes under
+                // both that limit and the 4096-byte netlink request. Never
+                // truncate a larger group or partially replay it.
+                .filter(|hops| !hops.is_empty() && hops.len() <= 60)
+                .ok_or_else(|| invalid("invalid multipath nexthops (replay limit: 60)"))?;
             if hops.iter().any(|hop| {
                 !hop["dev"]
                     .as_str()
@@ -244,6 +249,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             }
             hops.iter()
                 .map(|hop| {
+                    if hop.get("via").is_some() {
+                        return Err(invalid("unsupported cross-family multipath gateway"));
+                    }
                     if hop.get("encap").is_some() {
                         return Err(invalid("unsupported multipath encapsulation"));
                     }
@@ -308,6 +316,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         };
         if route.get("encap").is_some() {
             return Err(invalid("unsupported direct route encapsulation"));
+        }
+        if route.get("via").is_some() {
+            return Err(invalid("unsupported cross-family direct route gateway"));
         }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();

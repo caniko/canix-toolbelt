@@ -22,6 +22,13 @@
   rootSlices = lib.unique (["system-direct.slice"] ++ cfg.systemSlices ++ map (serviceSlice cfg.systemSlices) (lib.attrValues cfg.systemServices));
   userSlices = user: lib.unique (user.slices ++ map (serviceSlice user.slices) (lib.attrValues user.services));
   anchor = slice: "direct-network-${lib.removeSuffix ".slice" slice}";
+  admission = name: "direct-network-admission-${name}";
+  # RootDirectory/RootImage apply even to '+' commands. A separate, non-retained
+  # oneshot runs in the host root on every start transaction, including retries,
+  # without moving the service's existing hooks out of its configured root.
+  rootedConfig = service:
+    (service.RootDirectory or "") != "" || (service.RootImage or "") != "";
+  rootedService = name: rootedConfig config.systemd.services.${name}.serviceConfig;
   binary = "${cfg.package}/bin/canix-toolbelt-direct-network";
   ready = "${binary} ready";
   policyData = {
@@ -166,6 +173,20 @@ in {
       else content;
   };
 
+  # Inspect the fully merged freeform config only after its definitions are
+  # resolved. Conditional ExecStartPre definitions that read their own sibling
+  # RootDirectory/RootImage fields recurse while merging serviceConfig.
+  options.systemd.services = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
+      options.serviceConfig = lib.mkOption {
+        apply = service:
+          if cfg.enable && builtins.hasAttr name cfg.systemServices && !(rootedConfig service)
+          then service // {ExecStartPre = ["+${ready}"] ++ lib.toList (service.ExecStartPre or []);}
+          else service;
+      };
+    }));
+  };
+
   config = lib.mkIf cfg.enable ({
       assertions = [
         {
@@ -265,16 +286,40 @@ in {
             RestartSec = "2s";
           };
         }))
-        (lib.mapAttrs (_: parent: {
+        (lib.mapAttrs' (name: parent:
+          lib.nameValuePair (admission name) {
+            # Keep generated keys independent of the final services attrset.
+            enable = rootedService name;
+            description = "Admit rooted direct-network service ${name}";
             requires = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             after = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = false;
+              ExecStart = ready;
+              TimeoutStartSec = "20s";
+              CapabilityBoundingSet = "";
+              NoNewPrivileges = true;
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              PrivateTmp = true;
+            };
+          })
+        cfg.systemServices)
+        (lib.mapAttrs (name: parent: let
+            rooted = rootedService name;
+            dependencies =
+              ["${anchor (serviceSlice cfg.systemSlices parent)}.service"]
+              ++ lib.optional rooted "${admission name}.service";
+          in {
+            requires = dependencies;
+            after = dependencies;
             serviceConfig = {
               Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
               # Active anchors retain established workloads across DNS failure.
               # Every new start still needs its own admission barrier. The narrow
               # readiness client runs as root even when User is not enrolled; it
               # cannot mutate the daemon's policy.
-              ExecStartPre = lib.mkBefore ["+${ready}"];
             };
           })
           cfg.systemServices)
