@@ -572,12 +572,18 @@ fn unsafe_or_incomplete_objects_leave_a_persistent_preparation_tombstone() {
     for case in ["alternate", "symlink", "hardlink", "missing-head"] {
         let mut fixture = Fixture::new();
         let objects = fixture.source.join(".git/objects");
+        // Git can populate this fanout through the fixture's real commits.
+        // Force that condition rather than depending on their timestamp-bound
+        // object IDs to happen to exercise it on the hosted runner.
+        if matches!(case, "symlink" | "hardlink") {
+            fs::create_dir_all(objects.join("aa")).unwrap();
+        }
         match case {
             "alternate" => {
                 fs::write(objects.join("info/alternates"), "/protected/objects\n").unwrap()
             }
             "symlink" => {
-                fs::create_dir(objects.join("aa")).unwrap();
+                fs::create_dir_all(objects.join("aa")).unwrap();
                 symlink(
                     fixture.root.path().join("private-sentinel"),
                     objects.join("aa").join("b".repeat(38)),
@@ -585,7 +591,7 @@ fn unsafe_or_incomplete_objects_leave_a_persistent_preparation_tombstone() {
                 .unwrap();
             }
             "hardlink" => {
-                fs::create_dir(objects.join("aa")).unwrap();
+                fs::create_dir_all(objects.join("aa")).unwrap();
                 let protected = fixture.root.path().join("private-sentinel");
                 fs::write(&protected, "SYNTHETIC_PROTECTED_CONTENT").unwrap();
                 fs::hard_link(protected, objects.join("aa").join("b".repeat(38))).unwrap();
