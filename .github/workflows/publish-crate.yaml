@@ -123,6 +123,21 @@ jobs:
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
+          # Ubuntu 24.04 mediates capabilities in newly created user namespaces.
+          # Permit only the Nix-store qualification launcher on this disposable runner;
+          # retain AppArmor and its global unprivileged-userns restriction.
+          # https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] &&
+             [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+            sudo tee /etc/apparmor.d/canix-toolbelt-qualification-unshare >/dev/null <<'APPARMOR'
+          profile canix-toolbelt-qualification-unshare /nix/store/*/bin/unshare flags=(unconfined) {
+            userns,
+          }
+          APPARMOR
+            sudo apparmor_parser --replace /etc/apparmor.d/canix-toolbelt-qualification-unshare
+            sudo grep '^canix-toolbelt-qualification-unshare ' /sys/kernel/security/apparmor/profiles
+          fi
           {
             printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
             printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'

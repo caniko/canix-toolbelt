@@ -82,12 +82,25 @@ pub(crate) fn regular_file(path: &Path) -> io::Result<File> {
 
 /// Hash an opened regular file incrementally. Devices and FIFOs are rejected.
 pub fn sha256_file(path: &Path) -> io::Result<String> {
+    sha256_file_checked(path, &mut || Ok(()))
+}
+
+pub(crate) fn sha256_file_checked(
+    path: &Path,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    check()?;
     let file = regular_file(path)?;
     let before = file.metadata()?;
-    let mut input = (&file).take(before.len());
+    let bound = before
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| invalid("file length cannot be bounded"))?;
+    let mut input = (&file).take(bound);
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
+        check()?;
         let count = input.read(&mut buffer)?;
         if count == 0 {
             break;
@@ -95,7 +108,9 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
         hash.update(&buffer[..count]);
     }
     let after = file.metadata()?;
-    if input.limit() != 0
+    // One extra byte detects pseudo-files that report zero length but expose
+    // content, as well as growth that otherwise hides behind the read bound.
+    if input.limit() != 1
         || before.len() != after.len()
         || before.modified()? != after.modified()?
     {
@@ -180,7 +195,13 @@ pub(crate) fn path_text(path: &Path) -> io::Result<String> {
         .map(|parts| parts.join("/"))
 }
 
-fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -> io::Result<()> {
+fn collect(
+    root: &Path,
+    path: &Path,
+    files: &mut BTreeMap<String, SourceFile>,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    check()?;
     let resolved = contained(root, path)?;
     let metadata = fs::symlink_metadata(root.join(path))?;
     if metadata.is_dir() {
@@ -197,6 +218,7 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
                     .strip_prefix(root)
                     .map_err(|e| invalid(e.to_string()))?,
                 files,
+                check,
             )?;
         }
         return Ok(());
@@ -231,7 +253,7 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
     files.insert(
         key.trim_start_matches("./").to_owned(),
         SourceFile {
-            sha256: sha256_file(&resolved)?,
+            sha256: sha256_file_checked(&resolved, check)?,
             executable,
             link,
         },
@@ -241,13 +263,20 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
 
 /// Capture exact selected bytes; escaping symlinks and special files fail closed.
 pub fn inventory(spec: &InventorySpec) -> io::Result<Inventory> {
+    inventory_checked(spec, &mut || Ok(()))
+}
+
+pub(crate) fn inventory_checked(
+    spec: &InventorySpec,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<Inventory> {
     if spec.paths.is_empty() {
         return Err(invalid("source selection is empty"));
     }
     let root = spec.root.canonicalize()?;
     let mut files = BTreeMap::new();
     for path in &spec.paths {
-        collect(&root, path, &mut files)?;
+        collect(&root, path, &mut files, check)?;
     }
     if files.is_empty() {
         return Err(invalid("source inventory is empty"));

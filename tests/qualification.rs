@@ -93,6 +93,10 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
                 .find(|p| p.is_file())
                 .unwrap(),
             executor: env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor").into(),
+            setpriv: std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|p| p.join("setpriv"))
+                .find(|p| p.is_file())
+                .unwrap(),
         }),
     };
     let receipt = q::execute(&request, &root.path().join("run"), &Default::default()).unwrap();
@@ -125,8 +129,8 @@ fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
 fn failure_source_change_input_change_and_timeout_are_never_acceptance() {
     for (script, timeout, expected) in [
         ("exit 7", 5, q::RunStatus::Failed),
-        ("printf changed > source", 5, q::RunStatus::SourceChanged),
-        ("printf changed > input", 5, q::RunStatus::SourceChanged),
+        ("printf changed > source", 5, q::RunStatus::Failed),
+        ("printf changed > input", 5, q::RunStatus::Failed),
         ("sleep 10", 1, q::RunStatus::TimedOut),
     ] {
         let (root, receipt) = run_fixture(script, timeout);
@@ -142,9 +146,10 @@ fn cancellation_and_existing_attempt_fail_closed() {
     let request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
     assert!(q::execute(&request, &root.path().join("run"), &Default::default()).is_err());
     let cancel = std::sync::atomic::AtomicBool::new(true);
-    let cancelled = q::execute(&request, &root.path().join("cancelled"), &cancel).unwrap();
-    assert_eq!(cancelled.status, q::RunStatus::Cancelled);
-    assert_ne!(receipt.status, cancelled.status);
+    let error = q::execute(&request, &root.path().join("cancelled"), &cancel).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(!root.path().join("cancelled").exists());
+    assert_eq!(receipt.status, q::RunStatus::Passed);
 }
 
 #[test]
@@ -489,8 +494,7 @@ fn hashing_rejects_devices_and_fifos_without_waiting_for_a_writer() {
 #[test]
 fn replacing_input_with_fifo_fails_post_capture_without_hanging() {
     let (_, receipt) = run_fixture("rm input; mkfifo input", 5);
-    assert_eq!(receipt.status, q::RunStatus::SourceChanged);
-    assert!(receipt.error.as_deref().unwrap().contains("regular"));
+    assert_eq!(receipt.status, q::RunStatus::Failed);
 }
 
 #[cfg(target_os = "linux")]
@@ -546,12 +550,12 @@ fn version_probes_retain_both_streams() {
 fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
     for (script, timeout, expected) in [
         (
-            "setsid sh -c 'touch ready; sleep 1; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; printf done",
+            "setsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; sleep 1; printf late; printf changed > source' & while ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done; printf done",
             5,
             q::RunStatus::Failed,
         ),
         (
-            "setsid sh -c 'touch ready; sleep 2; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; sleep 10",
+            "setsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; sleep 2; printf late; printf changed > source' & while ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done; sleep 10",
             1,
             q::RunStatus::TimedOut,
         ),
@@ -565,13 +569,13 @@ fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
     }
     let (root, _) = run_fixture("true", 5);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    request.command[2] = "setsid sh -c 'touch ready; sleep 1; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; sleep 10".into();
+    request.command[2] = "setsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; sleep 1; printf late; printf changed > source' & while ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done; sleep 10".into();
     let cancelled = std::sync::atomic::AtomicBool::new(false);
     let receipt = std::thread::scope(|scope| {
         let task =
             scope.spawn(|| q::execute(&request, &root.path().join("cancel"), &cancelled).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !root.path().join("ready").exists() {
+        while !root.path().join("cancel/work/ready").exists() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -595,7 +599,7 @@ fn version_probes_use_the_same_descendant_containment() {
     let (root, _) = run_fixture("true", 5);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
     let tool = root.path().join("tool");
-    fs::write(&tool, b"#!/bin/sh\nsetsid sh -c 'touch ready; sleep 1; printf changed > source' &\nwhile ! test -f ready; do sleep 0.01; done\nprintf version").unwrap();
+    fs::write(&tool, b"#!/bin/sh\nsetsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; sleep 1; printf changed > source' &\nwhile ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done\nprintf version").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     request.tools.insert("detached".into(), tool);
     let receipt = q::execute(&request, &root.path().join("probe"), &Default::default()).unwrap();
@@ -746,6 +750,7 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
         "environment",
         "unshare",
         "executor",
+        "setpriv",
         "command",
     ] {
         let mut changed = receipt.clone();
@@ -761,7 +766,7 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
                     .environment
                     .insert("RUSTFLAGS".into(), "different".into());
             }
-            "unshare" | "executor" => {
+            "unshare" | "executor" | "setpriv" => {
                 changed.containment.get_mut(mutation).unwrap().path =
                     "/different/containment".into();
             }
@@ -786,6 +791,12 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
 #[test]
 fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
     let root = tempdir().unwrap();
+    let work = root.path().join("work");
+    fs::create_dir(&work).unwrap();
+    let setpriv = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|p| p.join("setpriv"))
+        .find(|p| p.is_file())
+        .unwrap();
     let unshare = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|p| p.join("unshare"))
         .find(|p| p.is_file())
@@ -793,15 +804,136 @@ fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
     let output = std::process::Command::new(unshare)
         .args(["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "--kill-child=KILL", "--forward-signals", "--"])
         .arg(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
+        .arg(&work).arg(setpriv)
         .args(["/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
         .current_dir(root.path()).output().unwrap();
     assert_eq!(
-        output.stdout,
-        b"mounted",
+        output.status.code(),
+        Some(99),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.status.code(), Some(125));
+    assert!(output.stdout.is_empty());
     std::thread::sleep(std::time::Duration::from_millis(1200));
     assert!(!root.path().join("late").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn huge_sparse_post_execution_inputs_respect_the_deadline() {
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "printf started; sleep 0.2".into();
+    request.timeout_seconds = 1;
+    let directory = root.path().join("growth");
+    let started = std::time::Instant::now();
+    let receipt = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &directory, &Default::default()).unwrap());
+        while fs::read(directory.join("stdout.log")).unwrap_or_default() != b"started" {
+            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        fs::OpenOptions::new()
+            .write(true)
+            .open(root.path().join("input"))
+            .unwrap()
+            .set_len(1 << 40)
+            .unwrap();
+        task.join().unwrap()
+    });
+    assert_eq!(receipt.status, q::RunStatus::TimedOut);
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    assert!(q::verify_run(&directory, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transient_source_input_and_alias_writes_are_blocked_but_work_is_writable() {
+    let (root, _) = run_fixture("true", 5);
+    fs::hard_link(root.path().join("source"), root.path().join("alias")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    for (i, script) in [
+        "printf temporary > source || exit 17; cat source; printf original > source",
+        "printf temporary > input || exit 17; cat input; printf pinned > input",
+        "printf temporary > alias || exit 17; cat source; printf original > alias",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        request.command[2] = script.into();
+        let receipt = q::execute(
+            &request,
+            &root.path().join(format!("immutable-{i}")),
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(receipt.status, q::RunStatus::Failed);
+        assert_eq!(receipt.execution_exit, Some(17));
+    }
+    request.command[2] = "printf build > \"$QUALIFICATION_WORK_DIR/artifact\"".into();
+    let directory = root.path().join("writable");
+    let receipt = q::execute(&request, &directory, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed);
+    assert_eq!(fs::read(directory.join("work/artifact")).unwrap(), b"build");
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+    assert_eq!(fs::read(root.path().join("input")).unwrap(), b"pinned");
+}
+
+#[cfg(unix)]
+#[test]
+fn standard_tar_symlinks_use_target_executable_bits() {
+    use std::os::unix::fs::PermissionsExt;
+    for mode in [0o644, 0o755] {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("target"), b"target").unwrap();
+        fs::set_permissions(root.path().join("target"), fs::Permissions::from_mode(mode)).unwrap();
+        std::os::unix::fs::symlink("target", root.path().join("link")).unwrap();
+        let spec = InventorySpec {
+            root: root.path().into(),
+            paths: vec!["target".into(), "link".into()],
+        };
+        let archive = root.path().join("standard.tar");
+        assert!(
+            std::process::Command::new("tar")
+                .arg("-cf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(root.path())
+                .args(["target", "link"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        q::verify_source_archive(&archive, &q::inventory(&spec).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn git_pax_metadata_does_not_shadow_a_real_file_with_its_name() {
+    let root = tempdir().unwrap();
+    fs::write(
+        root.path().join("pax_global_header"),
+        b"real tracked source",
+    )
+    .unwrap();
+    let archive = root.path().join("git.tar");
+    // Git's global comment header layout, independent of operator Git identity
+    // (packaging sandboxes intentionally have no configured author).
+    let mut tar = tar::Builder::new(fs::File::create(&archive).unwrap());
+    let payload = b"52 comment=0123456789012345678901234567890123456789\n";
+    let mut header = tar::Header::new_ustar();
+    header.set_entry_type(tar::EntryType::XGlobalHeader);
+    header.set_mode(0o644);
+    header.set_size(payload.len() as u64);
+    header.set_cksum();
+    tar.append_data(&mut header, "pax_global_header", &payload[..])
+        .unwrap();
+    tar.append_path_with_name(root.path().join("pax_global_header"), "pax_global_header")
+        .unwrap();
+    tar.finish().unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["pax_global_header".into()],
+    };
+    q::verify_source_archive(&archive, &q::inventory(&spec).unwrap()).unwrap();
 }

@@ -50,6 +50,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Detect descendants through kernel child accounting even if a privileged producer
   replaces `/proc`; cross-check retained requests against receipt requirements and
   encode inventory paths component-wise for cross-platform archive verification.
+- Protect execution source/input paths with read-only private mounts and capability
+  removal, retaining only a fresh writable work tree. Schema-3 receipts reject older
+  mutable execution evidence. Bound capture/hashing by the shared deadline and
+  cancellation, derive archived link executability from its target, and exclude
+  Git PAX metadata pseudo-entries from real member duplicate tracking.
 
 ## [0.5.0] - 2026-10-08
 

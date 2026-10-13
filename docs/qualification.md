@@ -26,7 +26,8 @@ Write a `RunRequest` JSON document with explicit roots and inputs:
   "timeoutSeconds": 600,
   "containment": {
     "unshare": "/approved-util-linux/bin/unshare",
-    "executor": "/approved-toolbelt/bin/canix-toolbelt-qualification-executor"
+    "executor": "/approved-toolbelt/bin/canix-toolbelt-qualification-executor",
+    "setpriv": "/approved-util-linux/bin/setpriv"
   }
 }
 ```
@@ -47,7 +48,7 @@ must be explicit overrides. Overrides must not contain credentials; inherited
 credentials are neither supplied nor serialized.
 
 Execution requires Linux user/PID/mount namespaces, a caller-selected util-linux
-`unshare` supporting `--forward-signals`, and the packaged native executor. Both
+`unshare` supporting `--forward-signals`, and the packaged native executor. All
 containment binaries are hashed before execution and rechecked afterward. The
 executor is PID 1 with a namespace-local `/proc`; after reaping the command
 leader, it checks kernel child accounting with `waitpid(-1, WNOHANG)`. Any live or
@@ -62,9 +63,38 @@ completed receipt. Unsupported platforms fail before spawning a command. Missing
 namespace permissions or launcher capabilities fail closed rather than falling
 back to process groups. Inventory/archive/portable verification remain portable.
 
-New execution receipts use schema version 2. Version-1 execution receipts lacked
-this containment guarantee and cannot satisfy `verify-run` or a new sealed gate.
+New execution receipts use schema version 3. Earlier execution receipts lacked
+the read-only execution guarantee and cannot satisfy `verify-run` or a new sealed gate.
 Historical bytes remain evidence; do not rewrite them to the newer version.
+
+The supervisor recursively clones the host mount tree in its private namespace,
+uses kernel mount IDs to identify visible mounts, and remounts them read-only
+without removing existing locked mount flags. It re-enters the working directory
+through that protected tree. Source/input mutations, including writes through
+hardlink aliases and temporary changes later restored, are denied. The producer
+and version probes run through the byte-bound `setpriv` with all capabilities
+removed and `no_new_privs`; the supervisor is non-dumpable. A missing mount-ID or
+read-only-mount capability fails closed before producer execution.
+
+Only the newly created `OUT/work` tree and inherited stdout/stderr descriptors
+are writable. `QUALIFICATION_WORK_DIR` and `TMPDIR` point to that tree; Cargo's
+target directory defaults to `OUT/work/target` unless explicitly selected.
+Explicit output paths must be inside the writable work tree. Dependency caches
+and environment preparation happen before qualification; source-mutating gates
+must be expressed as separate operations rather than passing immutable evidence.
+
+Source traversal, input hashing and executable hashing check cancellation and
+the shared execution deadline between reads. Expiry/cancellation during initial
+capture returns an error before spawning; final capture cannot certify an expired
+run. Tool/log finalization has one additional five-second budget. Successful tool
+version streams are limited to 1 MiB each to bound memory retention.
+
+Ubuntu 24.04 hosted qualification installs an ephemeral AppArmor `userns`
+permission specifically for `/nix/store/*/bin/unshare` through Simit's
+`extra_setup`. The global namespace restriction and AppArmor remain enabled.
+The package's mandatory namespace probe fails closed and reports UID/GID maps
+and the current AppArmor label when admission fails. A successful setup does not
+replace the package tests or the full installable/flake matrix.
 
 The retained request records canonical command, tool, containment and working
 directory selections, plus the complete effective environment. Portable

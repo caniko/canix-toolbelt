@@ -48,6 +48,8 @@ pub struct ContainmentPrograms {
     pub unshare: PathBuf,
     /// Packaged canix-toolbelt-qualification-executor binary.
     pub executor: PathBuf,
+    /// util-linux setpriv used to drop every producer capability and privilege escalation.
+    pub setpriv: PathBuf,
 }
 
 /// Execution state. Only Passed can satisfy a required gate.
@@ -84,7 +86,7 @@ pub struct ToolEvidence {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Receipt {
-    /// Receipt format version, currently 2. Version 1 lacked descendant containment.
+    /// Receipt format version, currently 3. Earlier versions lacked read-only execution.
     pub schema_version: u32,
     /// Effective execution disposition.
     pub status: RunStatus,
@@ -132,6 +134,7 @@ pub struct ProgramIdentity {
 fn program(
     request: &RunRequest,
     environment: &BTreeMap<String, String>,
+    check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<ProgramIdentity> {
     let name = &request.command[0];
     let path = if Path::new(name).components().count() > 1 || Path::new(name).is_absolute() {
@@ -150,7 +153,7 @@ fn program(
             .canonicalize()?
     };
     Ok(ProgramIdentity {
-        sha256: sha256_file(&path)?,
+        sha256: sha256_file_checked(&path, check)?,
         path,
     })
 }
@@ -206,7 +209,10 @@ fn build_environment(request: &RunRequest) -> BTreeMap<String, String> {
     environment
 }
 
-fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, Inventory>)> {
+fn capture(
+    request: &RunRequest,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<(Composition, BTreeMap<String, Inventory>)> {
     if request.sources.is_empty() {
         return Err(invalid(
             "qualification requires a nonempty source selection",
@@ -215,7 +221,7 @@ fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, In
     let inventories = request
         .sources
         .iter()
-        .map(|(name, spec)| Ok((name.clone(), inventory(spec)?)))
+        .map(|(name, spec)| Ok((name.clone(), inventory_checked(spec, check)?)))
         .collect::<io::Result<BTreeMap<_, _>>>()?;
     let sources = inventories
         .iter()
@@ -224,7 +230,7 @@ fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, In
     let inputs = request
         .inputs
         .iter()
-        .map(|(name, path)| Ok((name.clone(), sha256_file(path)?)))
+        .map(|(name, path)| Ok((name.clone(), sha256_file_checked(path, check)?)))
         .collect::<io::Result<_>>()?;
     Ok((
         Composition {
@@ -288,7 +294,10 @@ fn wait(
     }
 }
 
-fn containment(request: &RunRequest) -> io::Result<BTreeMap<String, ProgramIdentity>> {
+fn containment(
+    request: &RunRequest,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<BTreeMap<String, ProgramIdentity>> {
     if !cfg!(target_os = "linux") {
         return Err(invalid(
             "qualification execution requires Linux PID namespace containment",
@@ -298,30 +307,38 @@ fn containment(request: &RunRequest) -> io::Result<BTreeMap<String, ProgramIdent
         .containment
         .as_ref()
         .ok_or_else(|| invalid("explicit containment tools are required"))?;
-    [("unshare", &tools.unshare), ("executor", &tools.executor)]
-        .into_iter()
-        .map(|(name, path)| {
-            let path = path.canonicalize()?;
-            if !is_executable(&path) {
-                return Err(invalid("containment tool is not executable"));
-            }
-            Ok((
-                name.into(),
-                ProgramIdentity {
-                    sha256: sha256_file(&path)?,
-                    path,
-                },
-            ))
-        })
-        .collect()
+    [
+        ("unshare", &tools.unshare),
+        ("executor", &tools.executor),
+        ("setpriv", &tools.setpriv),
+    ]
+    .into_iter()
+    .map(|(name, path)| {
+        let path = path.canonicalize()?;
+        if !is_executable(&path) {
+            return Err(invalid("containment tool is not executable"));
+        }
+        Ok((
+            name.into(),
+            ProgramIdentity {
+                sha256: sha256_file_checked(&path, check)?,
+                path,
+            },
+        ))
+    })
+    .collect()
 }
 
-fn contained_command(tools: &BTreeMap<String, ProgramIdentity>, executable: &Path) -> Command {
+fn contained_command(
+    tools: &BTreeMap<String, ProgramIdentity>,
+    executable: &Path,
+    work: &Path,
+) -> Command {
     let mut command = Command::new(&tools["unshare"].path);
     command
         .args([
             "--user",
-            "--map-current-user",
+            "--map-root-user",
             "--pid",
             "--fork",
             "--mount-proc",
@@ -330,6 +347,8 @@ fn contained_command(tools: &BTreeMap<String, ProgramIdentity>, executable: &Pat
             "--",
         ])
         .arg(&tools["executor"].path)
+        .arg(work)
+        .arg(&tools["setpriv"].path)
         .arg(executable);
     command
 }
@@ -345,7 +364,7 @@ fn tool_version(
 ) -> io::Result<Vec<u8>> {
     let path = directory.join(name);
     let stderr_path = directory.join(format!("{name}.stderr"));
-    let mut command = contained_command(&receipt.containment, program);
+    let mut command = contained_command(&receipt.containment, program, &directory.join("work"));
     command
         .arg("--version")
         .current_dir(&request.cwd)
@@ -367,6 +386,11 @@ fn tool_version(
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
+    for stream in [&path, &stderr_path] {
+        if fs::metadata(stream)?.len() > 1024 * 1024 {
+            return Err(invalid("tool version stream exceeds 1 MiB"));
+        }
+    }
     let mut output = fs::read(path)?;
     output.extend_from_slice(&fs::read(stderr_path)?);
     Ok(output)
@@ -380,7 +404,7 @@ pub fn execute(
     directory: &Path,
     cancelled: &AtomicBool,
 ) -> io::Result<Receipt> {
-    let containment = containment(request)?;
+    let started = Instant::now();
     if request.command.is_empty()
         || request.command[0].is_empty()
         || request.timeout_seconds == 0
@@ -390,6 +414,23 @@ pub fn execute(
             "command and a deadline between 1 and 86400 seconds are required",
         ));
     }
+    let deadline = started + Duration::from_secs(request.timeout_seconds);
+    let mut check = || {
+        if cancelled.load(Ordering::Relaxed) {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "evidence capture cancelled",
+            ))
+        } else if Instant::now() >= deadline {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "evidence capture deadline exceeded",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let containment = containment(request, &mut check)?;
     let cwd = request.cwd.canonicalize()?;
     let parent = directory
         .parent()
@@ -410,7 +451,7 @@ pub fn execute(
             }
         }
     }
-    let (composition, inventories) = capture(request)?;
+    let (composition, inventories) = capture(request, &mut check)?;
     // Retain effective canonical selections so portable verification can compare
     // the request with receipt identities without consulting the original host.
     let mut effective_request = request.clone();
@@ -423,12 +464,44 @@ pub fn execute(
     effective_request.containment = Some(ContainmentPrograms {
         unshare: containment["unshare"].path.clone(),
         executor: containment["executor"].path.clone(),
+        setpriv: containment["setpriv"].path.clone(),
     });
-    let environment = build_environment(request);
+    let work = destination.join("work");
+    // Only a fresh, source-disjoint work tree is writable in the producer's
+    // namespace. Inherited open log descriptors remain writable as well.
+    for spec in request.sources.values() {
+        if work.starts_with(spec.root.canonicalize()?)
+            && spec.paths.iter().any(|p| spec.root.join(p).is_dir())
+        {
+            return Err(invalid("writable work tree overlaps selected source"));
+        }
+    }
+    let mut environment = build_environment(request);
+    environment.insert(
+        "QUALIFICATION_WORK_DIR".into(),
+        work.to_str()
+            .ok_or_else(|| invalid("non-UTF-8 work path"))?
+            .into(),
+    );
+    environment.insert(
+        "TMPDIR".into(),
+        work.to_str()
+            .ok_or_else(|| invalid("non-UTF-8 work path"))?
+            .into(),
+    );
+    if !request.environment.contains_key("CARGO_TARGET_DIR") {
+        environment.insert(
+            "CARGO_TARGET_DIR".into(),
+            work.join("target")
+                .to_str()
+                .ok_or_else(|| invalid("non-UTF-8 target path"))?
+                .into(),
+        );
+    }
     effective_request.environment = environment.clone();
     // Resolve before probes so the retained request binds the path selected from
     // the effective PATH. Byte checks afterward detect changes during execution.
-    let executable = program(request, &environment);
+    let executable = program(request, &environment, &mut check);
     if let Ok(executable) = &executable {
         effective_request.command[0] = executable
             .path
@@ -438,11 +511,11 @@ pub fn execute(
     }
     let request = &effective_request;
     fs::create_dir(&destination)?;
+    fs::create_dir(&work)?;
     write_json(&destination.join("request.json"), request)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
-    let started = Instant::now();
     let mut receipt = Receipt {
-        schema_version: 2,
+        schema_version: 3,
         status: RunStatus::Pending,
         execution_exit: None,
         composition,
@@ -475,7 +548,7 @@ pub fn execute(
                 return Err(invalid("tool labels must be single path components"));
             }
             let path = path.canonicalize()?;
-            let sha256 = sha256_file(&path)?;
+            let sha256 = sha256_file_checked(&path, &mut check)?;
             let output = tool_version(
                 &path,
                 request,
@@ -496,7 +569,7 @@ pub fn execute(
             );
         }
         let executable = executable?;
-        let mut command = contained_command(&receipt.containment, &executable.path);
+        let mut command = contained_command(&receipt.containment, &executable.path, &work);
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
@@ -545,7 +618,7 @@ pub fn execute(
     {
         receipt.status = RunStatus::TimedOut;
     }
-    match capture(request) {
+    match capture(request, &mut check) {
         Ok((after, _)) => {
             if after != receipt.composition {
                 receipt.status = RunStatus::SourceChanged;
@@ -553,28 +626,49 @@ pub fn execute(
             receipt.after = Some(after);
         }
         Err(error) => {
-            receipt.status = RunStatus::SourceChanged;
+            receipt.status = match error.kind() {
+                io::ErrorKind::Interrupted => RunStatus::Cancelled,
+                io::ErrorKind::TimedOut => RunStatus::TimedOut,
+                _ => RunStatus::SourceChanged,
+            };
             receipt.error = Some(error.to_string());
         }
     }
+    // Tool and log finalization share a single finite cleanup budget, including
+    // the failed/cancelled case where the producer's execution deadline elapsed.
+    let finalize_deadline = Instant::now() + Duration::from_secs(5);
+    let mut finalize = || {
+        if Instant::now() < finalize_deadline {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "evidence finalization deadline exceeded",
+            ))
+        }
+    };
     for tool in receipt.tools.values() {
-        if sha256_file(&tool.path).ok().as_ref() != Some(&tool.sha256) {
+        if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
             receipt.status = RunStatus::SourceChanged;
         }
     }
     for tool in receipt.containment.values() {
-        if sha256_file(&tool.path).ok().as_ref() != Some(&tool.sha256) {
+        if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
             receipt.status = RunStatus::SourceChanged;
         }
     }
     if let Some(executable) = &receipt.executable {
-        if sha256_file(&executable.path).ok().as_ref() != Some(&executable.sha256) {
+        if sha256_file_checked(&executable.path, &mut finalize)
+            .ok()
+            .as_ref()
+            != Some(&executable.sha256)
+        {
             receipt.status = RunStatus::SourceChanged;
         }
     }
     receipt.elapsed_ms = started.elapsed().as_millis();
-    receipt.stdout_sha256 = sha256_file(&destination.join("stdout.log"))?;
-    receipt.stderr_sha256 = sha256_file(&destination.join("stderr.log"))?;
+    receipt.stdout_sha256 = sha256_file_checked(&destination.join("stdout.log"), &mut finalize)?;
+    receipt.stderr_sha256 = sha256_file_checked(&destination.join("stderr.log"), &mut finalize)?;
     write_json(&destination.join("receipt.json"), &receipt)?;
     Ok(receipt)
 }
@@ -583,7 +677,7 @@ pub fn execute(
 /// This is portable evidence verification; it does not rerun commands or trust signatures.
 pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Result<Receipt> {
     let receipt: Receipt = read_json(&directory.join("receipt.json"))?;
-    if receipt.schema_version != 2
+    if receipt.schema_version != 3
         || receipt.composition.schema_version != 1
         || receipt.status != RunStatus::Passed
         || receipt.execution_exit != Some(0)
@@ -591,9 +685,10 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         || receipt.error.is_some()
         || receipt.composition.sources.is_empty()
         || receipt.executable.is_none()
-        || receipt.containment.len() != 2
+        || receipt.containment.len() != 3
         || !receipt.containment.contains_key("unshare")
         || !receipt.containment.contains_key("executor")
+        || !receipt.containment.contains_key("setpriv")
         || expected.is_some_and(|expected| expected != &receipt.composition)
     {
         return Err(invalid(
@@ -640,6 +735,7 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
     for (name, path) in [
         ("unshare", &programs.unshare),
         ("executor", &programs.executor),
+        ("setpriv", &programs.setpriv),
     ] {
         if receipt.containment.get(name).map(|identity| &identity.path) != Some(path) {
             return Err(invalid(

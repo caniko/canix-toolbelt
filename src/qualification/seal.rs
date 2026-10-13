@@ -272,13 +272,6 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
     let mut seen_paths = std::collections::BTreeSet::new();
     for entry in tar.entries()? {
         let mut entry = entry?;
-        let path = entry.path()?.into_owned();
-        relative(&path)?;
-        let name = path_text(&path)?;
-        if !seen_paths.insert(path.components().collect::<PathBuf>()) {
-            return Err(invalid("duplicate archive path"));
-        }
-        let executable = entry.header().mode()? & 0o111 != 0;
         let kind = entry.header().entry_type();
         if kind.is_pax_global_extensions() {
             // Git archive adds a commit comment. Never ignore global path/size
@@ -301,6 +294,13 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             }
             continue;
         }
+        let path = entry.path()?.into_owned();
+        relative(&path)?;
+        let name = path_text(&path)?;
+        if !seen_paths.insert(path.components().collect::<PathBuf>()) {
+            return Err(invalid("duplicate archive path"));
+        }
+        let executable = entry.header().mode()? & 0o111 != 0;
         if kind.is_dir() {
             continue;
         }
@@ -343,15 +343,15 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             }
             target = next;
         }
-        let sha256 = files
+        let target_file = files
             .get(target)
             .ok_or_else(|| invalid("archive symlink target is absent"))?
-            .sha256
             .clone();
-        files
+        let file = files
             .get_mut(name)
-            .ok_or_else(|| invalid("archive symlink entry is absent"))?
-            .sha256 = sha256;
+            .ok_or_else(|| invalid("archive symlink entry is absent"))?;
+        file.sha256 = target_file.sha256;
+        file.executable = target_file.executable;
     }
     Ok(files)
 }

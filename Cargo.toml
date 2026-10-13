@@ -42,7 +42,7 @@ review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroi
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
-qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "rustix/process"]
+qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "rustix/process", "rustix/mount"]
 qualification-cli = ["qualification", "dep:clap"]
 
 [[bin]]
