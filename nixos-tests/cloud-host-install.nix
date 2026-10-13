@@ -3,6 +3,7 @@
   pkgs,
   mode,
 }: let
+  testPkgs = import ./cloud-host-kernel.nix {inherit pkgs;};
   system = import "${pkgs.path}/nixos/lib/eval-config.nix" {
     system = "x86_64-linux";
     modules = [
@@ -10,6 +11,7 @@
       ../modules/nixos/hosts/cloud-host.nix
       ./fixtures/cloud-host.nix
       ({lib, ...}: {
+        nixpkgs.pkgs = testPkgs;
         canix-toolbelt.cloudHost.boot.mode = lib.mkForce mode;
         environment.etc."cloud-host-generation".text = lib.mkDefault "base";
         specialisation.updated.configuration.environment.etc."cloud-host-generation".text = "updated";
@@ -128,4 +130,12 @@
     ];
   };
 in
-  system.config.system.build.installTest
+  system.config.system.build.installTest.extend {
+    modules = [
+      {
+        # The test framework reconstructs node packages rather than retaining
+        # hostPkgs overlays. Bind the installer/recovery VM kernel explicitly.
+        nodes.machine.boot.kernelPackages = testPkgs.linuxPackages;
+      }
+    ];
+  }

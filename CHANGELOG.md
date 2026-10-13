@@ -15,6 +15,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Backport upstream CPA/text-poke locking fixes for Linux 6.18.52 in the cloud
+  installation test package set, covering both installer and installed guests
+  to prevent module-loading kernel crashes during BIOS/UEFI qualification.
 - Require native owner/host observation fencing through dispatch; unsupported
   adapters fail before reads or effects, and lost authority invalidates an idle
   context witness. Reject unbound imported pending evidence exchanges and keep
