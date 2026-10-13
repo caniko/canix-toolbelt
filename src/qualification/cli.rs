@@ -87,6 +87,14 @@ pub enum QualificationCommand {
         #[arg(long)]
         inventory: PathBuf,
     },
+    /// Verify historical Python source-tar content maps without extraction
+    VerifyLegacyArchive {
+        /// Historical source tar
+        archive: PathBuf,
+        /// Original path/content-hash JSON map
+        #[arg(long)]
+        index: PathBuf,
+    },
     /// Verify all required gates and seal a new portable handoff
     Seal {
         /// SealRequest JSON
@@ -186,6 +194,10 @@ pub fn dispatch(
                 true,
             )
         }
+        QualificationCommand::VerifyLegacyArchive { archive, index } => result(
+            &serde_json::json!({"filesVerified":verify_legacy_archive(&archive, &read_json(&index)?)?, "scope":"content-only"}),
+            true,
+        ),
         QualificationCommand::Seal { request, out } => {
             result(&seal(&read_json(&request)?, &out)?, true)
         }
