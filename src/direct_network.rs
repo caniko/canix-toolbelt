@@ -353,6 +353,11 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route.get("metrics").is_some() {
             return Err(invalid("unsupported direct route metrics"));
         }
+        // Replaying a sampled remaining lifetime would either drop expiration
+        // or extend it on every reconciliation. Reject before any route effects.
+        if route.get("expires").is_some() {
+            return Err(invalid("unsupported direct route lifetime"));
+        }
         if route.get("flow").is_some() {
             return Err(invalid("unsupported direct route realms"));
         }

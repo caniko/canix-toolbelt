@@ -363,6 +363,43 @@ fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() 
 }
 
 #[test]
+fn route_lifetimes_reject_eligible_snapshots_instead_of_becoming_permanent() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for expires in [
+        serde_json::json!(120),
+        serde_json::json!(0),
+        serde_json::json!(1.25),
+        serde_json::json!("120sec"),
+        serde_json::Value::Null,
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"2001:db8:2::/64","dev":"enp1s0","gateway":"fe80::1"}),
+            serde_json::json!({"dst":"2001:db8:2::/64","nexthops":[
+                {"dev":"enp1s0","gateway":"fe80::1","weight":2}
+            ]}),
+        ] {
+            route["expires"] = expires.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("route lifetime"));
+        }
+    }
+    // Expiration on VPN-owned or mixed paths must not enroll those routes.
+    for route in [
+        serde_json::json!({"dst":"default","dev":"wg-proton","expires":120}),
+        serde_json::json!({"dst":"default","expires":120,"nexthops":[
+            {"dev":"enp1s0","gateway":"fe80::1"},
+            {"dev":"wg-proton","gateway":"fe80::2"}
+        ]}),
+    ] {
+        assert!(
+            select_routes(&policy(), &links, &serde_json::json!([route]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn source_selectors_cannot_become_source_unconditional_or_connected_routes() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
     for key in ["from", "src"] {

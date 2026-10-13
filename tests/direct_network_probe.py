@@ -279,6 +279,12 @@ try:
               'nexthop', 'via', '198.18.0.2', 'dev', 'uplink2', 'weight', '3', 'onlink']),
             ('-6', '2001:db8:100::/64', 'metrics',
              ['mtu', '1400', 'advmss', '1200', 'metric', '44',
+               'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
+               'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
+            ('-6', '2001:db8:100::/64', 'expires',
+             ['expires', '120', 'via', 'fe80::99', 'dev', 'uplink', 'onlink', 'metric', '44']),
+            ('-6', '2001:db8:100::/64', 'expires',
+             ['expires', '120', 'metric', '44',
               'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
               'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink']),
             ('-4', '192.0.2.0/24', 'flow',
@@ -341,7 +347,7 @@ try:
             run(binary, 'ready', '--socket', str(directory / 'ready.sock'), '--routes-only', timeout=20)
         for id in ['112', '110', '111']:
             run('ip', 'nexthop', 'del', 'id', id)
-        print('PASS: real unsupported forwarding policy (encap/via/metrics/realms/TOS/pref/from/nhid/scope) denies readiness before effects; existing connections survive')
+        print('PASS: real unsupported forwarding policy (encap/via/metrics/realms/TOS/pref/from/nhid/scope/expires) denies readiness before effects; existing connections survive')
         run('ip', '-6', 'route', 'add', '2001:db8:103::/64', 'pref', 'medium', 'metric', '47',
             'nexthop', 'via', 'fe80::99', 'dev', 'uplink', 'weight', '2', 'onlink',
             'nexthop', 'via', 'fe80::100', 'dev', 'uplink2', 'weight', '3', 'onlink')
