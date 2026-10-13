@@ -233,19 +233,69 @@ pub fn verify_source_archive(archive: &Path, expected: &Inventory) -> io::Result
     if expected.schema_version != 1 || expected.files.is_empty() {
         return Err(invalid("invalid expected archive inventory"));
     }
+    if archive_inventory(archive)? != expected.files {
+        return Err(invalid("archive inventory differs from qualified source"));
+    }
+    Ok(())
+}
+
+/// Verify the historical Python path/content-hash map against a source tar.
+/// This content-only check does not establish executable-bit or link-text parity.
+pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Result<usize> {
+    if expected.is_empty() {
+        return Err(invalid("legacy archive inventory is empty"));
+    }
+    let actual: ArtifactIndex = archive_inventory(archive)?
+        .into_iter()
+        .map(|(name, file)| (name, file.sha256))
+        .collect();
+    if actual != *expected {
+        return Err(invalid(
+            "legacy archive content differs from qualified source",
+        ));
+    }
+    Ok(actual.len())
+}
+
+fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>> {
     let mut tar = tar::Archive::new(File::open(archive)?);
     let mut files = BTreeMap::new();
     let mut links = BTreeMap::new();
+    let mut seen_paths = std::collections::BTreeSet::new();
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
         relative(&path)?;
         let name = path_text(&path)?;
-        if files.contains_key(&name) {
+        if !seen_paths.insert(path.components().collect::<PathBuf>()) {
             return Err(invalid("duplicate archive path"));
         }
         let executable = entry.header().mode()? & 0o111 != 0;
         let kind = entry.header().entry_type();
+        if kind.is_pax_global_extensions() {
+            // Git archive adds a commit comment. Never ignore global path/size
+            // overrides, which tar readers may apply to every following file.
+            if entry.size() > 1024 {
+                return Err(invalid("oversized Git archive metadata"));
+            }
+            let extensions = entry
+                .pax_extensions()?
+                .ok_or_else(|| invalid("missing Git archive metadata"))?;
+            for extension in extensions {
+                let extension = extension?;
+                let value = extension.value_bytes();
+                if extension.key_bytes() != b"comment"
+                    || !matches!(value.len(), 40 | 64)
+                    || !value.iter().all(u8::is_ascii_hexdigit)
+                {
+                    return Err(invalid("unsupported global archive metadata"));
+                }
+            }
+            continue;
+        }
+        if kind.is_dir() {
+            continue;
+        }
         let mut hash = Sha256::new();
         let link = if kind.is_symlink() {
             let link = entry
@@ -295,8 +345,5 @@ pub fn verify_source_archive(archive: &Path, expected: &Inventory) -> io::Result
             .ok_or_else(|| invalid("archive symlink entry is absent"))?
             .sha256 = sha256;
     }
-    if files != expected.files {
-        return Err(invalid("archive inventory differs from qualified source"));
-    }
-    Ok(())
+    Ok(files)
 }

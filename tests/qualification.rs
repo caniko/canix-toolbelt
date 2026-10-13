@@ -345,3 +345,42 @@ fn successful_parent_with_running_children_is_not_acceptance() {
     );
     assert!(q::verify_run(&root.path().join("run"), None).is_err());
 }
+
+#[test]
+fn legacy_source_archives_accept_git_directories_without_losing_file_verification() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("git-source.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&path).unwrap());
+    let metadata = format!("52 comment={}\n", "0".repeat(40));
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::XGlobalHeader);
+    header.set_size(metadata.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "pax_global_header", metadata.as_bytes())
+        .unwrap();
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Directory);
+    header.set_size(0);
+    header.set_mode(0o755);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "src/", std::io::empty())
+        .unwrap();
+    let mut header = tar::Header::new_gnu();
+    header.set_size(6);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "src/a", &b"hello\n"[..])
+        .unwrap();
+    builder.finish().unwrap();
+    let expected = [(
+        "src/a".into(),
+        "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03".into(),
+    )]
+    .into();
+    assert_eq!(q::verify_legacy_archive(&path, &expected).unwrap(), 1);
+    assert!(q::verify_legacy_archive(&path, &[("src/a".into(), "0".repeat(64))].into()).is_err());
+}

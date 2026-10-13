@@ -71,6 +71,13 @@ provenance to the new contract; external input and signature obligations still
 need their recorded evidence. Original receipts and frozen oracle bytes remain
 unchanged.
 
+`verify-legacy-archive source.tar --index qualified-files.json` compares all tar
+file contents with the original Python path/hash map. Git-exported directory
+entries are supported; link targets are resolved within the archive without
+extraction. The result explicitly reports `content-only`: historical maps do not
+bind executable bits or link text. Qualification adapters that intentionally
+change source bytes must be separately applied and checked by their owning engine.
+
 `export-source --request inventory-spec.json --out source.tar` exports deterministic
 selected bytes. `verify-archive source.tar --inventory inventory.json` verifies
 without extraction. Archives preserve executable bits and relative symlinks;
