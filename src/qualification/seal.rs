@@ -39,7 +39,7 @@ fn gate_label(name: &str) -> io::Result<()> {
 
 fn copy(source: &Path, destination: &Path) -> io::Result<String> {
     use std::io::Write;
-    let mut input = File::open(source)?;
+    let mut input = regular_file(source)?;
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -139,9 +139,19 @@ pub fn verify_seal(
         ));
     }
     verify_index(directory, &seal.artifacts)?;
+    let root = directory.canonicalize()?;
     for (name, hash) in &seal.gates {
         gate_label(name)?;
-        let run = directory.join("gates").join(name);
+        for file in ["request.json", "receipt.json", "stdout.log", "stderr.log"] {
+            let path = format!("gates/{name}/{file}");
+            if !seal.artifacts.contains_key(&path) {
+                return Err(invalid(format!(
+                    "mandatory gate artifact is not indexed: {path}"
+                )));
+            }
+            contained(&root, Path::new(&path))?;
+        }
+        let run = contained(&root, &Path::new("gates").join(name))?;
         if sha256_file(&run.join("receipt.json"))? != *hash {
             return Err(invalid("sealed receipt hash differs"));
         }
@@ -184,11 +194,9 @@ pub fn export_source(spec: &InventorySpec, archive: &Path) -> io::Result<Invento
         if let Some(link) = &source.link {
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
-            header.set_link_name(link)?;
-            header.set_cksum();
-            builder.append_data(&mut header, name, io::empty())?;
+            builder.append_link(&mut header, name, link)?;
         } else {
-            let file = File::open(root.join(name))?;
+            let file = regular_file(&root.join(name))?;
             header.set_size(file.metadata()?.len());
             header.set_cksum();
             builder.append_data(&mut header, name, file)?;

@@ -67,7 +67,7 @@ fn inventory_rejects_escaping_links_and_records_internal_link_identity() {
     assert_eq!(snapshot.files["link"].link.as_deref(), Some("source"));
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Receipt) {
     let root = tempdir().unwrap();
     fs::write(root.path().join("source"), b"original").unwrap();
@@ -87,12 +87,19 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
         environment: Default::default(),
         tools: Default::default(),
         timeout_seconds,
+        containment: Some(q::ContainmentPrograms {
+            unshare: std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|p| p.join("unshare"))
+                .find(|p| p.is_file())
+                .unwrap(),
+            executor: env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor").into(),
+        }),
     };
     let receipt = q::execute(&request, &root.path().join("run"), &Default::default()).unwrap();
     (root, receipt)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
     let (root, receipt) = run_fixture("printf stdout; printf stderr >&2", 5);
@@ -108,7 +115,7 @@ fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
     assert!(q::verify_run(&root.path().join("run"), None).is_err());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn failure_source_change_input_change_and_timeout_are_never_acceptance() {
     for (script, timeout, expected) in [
@@ -123,7 +130,7 @@ fn failure_source_change_input_change_and_timeout_are_never_acceptance() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn cancellation_and_existing_attempt_fail_closed() {
     let (root, receipt) = run_fixture("true", 5);
@@ -204,7 +211,7 @@ fn source_archive_preserves_bytes_and_semantics_and_detects_corruption() {
     assert!(q::verify_source_archive(&root.path().join("source.tar"), &expected).is_err());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     let (root, receipt) = run_fixture("true", 5);
@@ -255,7 +262,7 @@ fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn seal_cannot_substitute_a_different_passing_attempt_for_the_selected_gate() {
     let (root, receipt) = run_fixture("true", 5);
@@ -268,7 +275,7 @@ fn seal_cannot_substitute_a_different_passing_attempt_for_the_selected_gate() {
     assert!(q::seal(&request, &root.path().join("wrong-attempt")).is_err());
 }
 
-#[cfg(all(feature = "cli", unix))]
+#[cfg(all(feature = "cli", target_os = "linux"))]
 #[test]
 fn standalone_cli_runs_verifies_and_reports_failed_legacy_evidence() {
     use std::process::Command;
@@ -333,7 +340,7 @@ fn parent_path_ties_preserve_the_python_cargo_edge_order() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn successful_parent_with_running_children_is_not_acceptance() {
     let (root, receipt) = run_fixture("(sleep 1; printf late) & printf done", 5);
@@ -383,4 +390,300 @@ fn legacy_source_archives_accept_git_directories_without_losing_file_verificatio
     .into();
     assert_eq!(q::verify_legacy_archive(&path, &expected).unwrap(), 1);
     assert!(q::verify_legacy_archive(&path, &[("src/a".into(), "0".repeat(64))].into()).is_err());
+}
+
+#[test]
+fn graph_rejects_packages_without_resolve_nodes() {
+    let metadata = serde_json::json!({
+        "packages":[
+            {"id":"app","name":"app","version":"1.0.0","source":null},
+            {"id":"orphan","name":"orphan","version":"1.0.0","source":null}
+        ],
+        "workspace_members":["app"],
+        "resolve":{"nodes":[{"id":"app","features":[],"deps":[]}]}
+    });
+    assert!(q::graph::Metadata::parse(&serde_json::to_vec(&metadata).unwrap()).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seal_rejects_unindexed_gate_files_and_external_gate_links() {
+    let (root, receipt) = run_fixture("true", 5);
+    let request = q::SealRequest {
+        composition: receipt.composition,
+        gates: [("required".into(), root.path().join("run"))].into(),
+        expected_receipts: [(
+            "required".into(),
+            q::sha256_file(&root.path().join("run/receipt.json")).unwrap(),
+        )]
+        .into(),
+        artifacts: [("dummy".into(), root.path().join("source"))].into(),
+    };
+    let handoff = root.path().join("sealed");
+    let seal = q::seal(&request, &handoff).unwrap();
+    for file in ["request.json", "receipt.json", "stdout.log", "stderr.log"] {
+        let mut document = serde_json::to_value(&seal).unwrap();
+        document["artifacts"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&format!("gates/required/{file}"));
+        fs::write(handoff.join("seal.json"), q::json_bytes(&document).unwrap()).unwrap();
+        assert!(
+            q::verify_seal(&handoff, &request.composition, &request.expected_receipts).is_err(),
+            "missing {file}"
+        );
+    }
+    let mut document = serde_json::to_value(&seal).unwrap();
+    document["artifacts"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|name, _| !name.starts_with("gates/"));
+    fs::write(handoff.join("seal.json"), q::json_bytes(&document).unwrap()).unwrap();
+    fs::remove_dir_all(handoff.join("gates/required")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("run"), handoff.join("gates/required")).unwrap();
+    assert!(q::verify_seal(&handoff, &request.composition, &request.expected_receipts).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn source_archive_roundtrips_long_link_targets_deterministically() {
+    let root = tempdir().unwrap();
+    let target = format!("{}/file", "nested".repeat(20));
+    fs::create_dir_all(root.path().join(&target).parent().unwrap()).unwrap();
+    fs::write(root.path().join(&target), b"long link contents").unwrap();
+    std::os::unix::fs::symlink(&target, root.path().join("link")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec![target.into(), "link".into()],
+    };
+    let first = root.path().join("first.tar");
+    let second = root.path().join("second.tar");
+    let expected = q::export_source(&spec, &first).unwrap();
+    q::export_source(&spec, &second).unwrap();
+    q::verify_source_archive(&first, &expected).unwrap();
+    assert_eq!(fs::read(first).unwrap(), fs::read(second).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn hashing_rejects_devices_and_fifos_without_waiting_for_a_writer() {
+    assert!(q::sha256_file(std::path::Path::new("/dev/zero")).is_err());
+    let root = tempdir().unwrap();
+    let fifo = root.path().join("fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(q::sha256_file(&fifo).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn replacing_input_with_fifo_fails_post_capture_without_hanging() {
+    let (_, receipt) = run_fixture("rm input; mkfifo input", 5);
+    assert_eq!(receipt.status, q::RunStatus::SourceChanged);
+    assert!(receipt.error.as_deref().unwrap().contains("regular"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn path_search_skips_nonexecutable_files_and_records_the_executed_binary() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    fs::create_dir(root.path().join("first")).unwrap();
+    fs::create_dir(root.path().join("second")).unwrap();
+    fs::write(root.path().join("first/tool"), b"not executable").unwrap();
+    let executable = root.path().join("second/tool");
+    fs::write(&executable, b"#!/bin/sh\nprintf selected").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    request.command = vec!["tool".into()];
+    request
+        .environment
+        .insert("PATH".into(), "first:second".into());
+    let receipt = q::execute(&request, &root.path().join("search"), &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{:?}", receipt.error);
+    assert_eq!(
+        receipt.executable.unwrap().path,
+        executable.canonicalize().unwrap()
+    );
+    assert_eq!(
+        fs::read(root.path().join("search/stdout.log")).unwrap(),
+        b"selected"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn version_probes_retain_both_streams() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("tool");
+    fs::write(
+        &tool,
+        b"#!/bin/sh\nprintf stdout-version; printf stderr-version >&2",
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools.insert("tool".into(), tool);
+    let receipt = q::execute(&request, &root.path().join("versions"), &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{:?}", receipt.error);
+    assert!(receipt.tools["tool"].version.contains("stdout-version"));
+    assert!(receipt.tools["tool"].version.contains("stderr-version"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
+    for (script, timeout, expected) in [
+        (
+            "setsid sh -c 'touch ready; sleep 1; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; printf done",
+            5,
+            q::RunStatus::Failed,
+        ),
+        (
+            "setsid sh -c 'touch ready; sleep 2; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; sleep 10",
+            1,
+            q::RunStatus::TimedOut,
+        ),
+    ] {
+        let (root, receipt) = run_fixture(script, timeout);
+        assert_eq!(receipt.status, expected, "{:?}", receipt.error);
+        let logs = fs::read(root.path().join("run/stdout.log")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+        assert_eq!(fs::read(root.path().join("run/stdout.log")).unwrap(), logs);
+    }
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "setsid sh -c 'touch ready; sleep 1; printf late; printf changed > source' & while ! test -f ready; do sleep 0.01; done; sleep 10".into();
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let receipt = std::thread::scope(|scope| {
+        let task =
+            scope.spawn(|| q::execute(&request, &root.path().join("cancel"), &cancelled).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !root.path().join("ready").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        task.join().unwrap()
+    });
+    assert_eq!(receipt.status, q::RunStatus::Cancelled);
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+    assert!(
+        fs::read(root.path().join("cancel/stdout.log"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn version_probes_use_the_same_descendant_containment() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("tool");
+    fs::write(&tool, b"#!/bin/sh\nsetsid sh -c 'touch ready; sleep 1; printf changed > source' &\nwhile ! test -f ready; do sleep 0.01; done\nprintf version").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools.insert("detached".into(), tool);
+    let receipt = q::execute(&request, &root.path().join("probe"), &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Failed);
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+}
+
+#[cfg(all(feature = "cli", target_os = "linux"))]
+#[test]
+fn inherited_unrecorded_build_settings_are_cleared_and_explicit_settings_are_bound() {
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "printf '%s:%s:%s:%s' \"${CC-cleared}\" \"${RUSTUP_TOOLCHAIN-cleared}\" \"${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER-cleared}\" \"${QUALIFICATION_SENTINEL-cleared}\"".into();
+    request
+        .environment
+        .insert("CC".into(), "explicit-compiler".into());
+    let path = root.path().join("environment-request.json");
+    fs::write(&path, q::json_bytes(&request).unwrap()).unwrap();
+    let destination = root.path().join("environment-run");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_canix-toolbelt"))
+        .args(["qualification", "run", "--request"])
+        .arg(path)
+        .arg("--out")
+        .arg(&destination)
+        .env("CC", "inherited-compiler")
+        .env("RUSTUP_TOOLCHAIN", "unrecorded-toolchain")
+        .env(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "unrecorded-linker",
+        )
+        .env("QUALIFICATION_SENTINEL", "unrecorded-value")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: q::Receipt = q::read_json(&destination.join("receipt.json")).unwrap();
+    assert_eq!(receipt.environment["CC"], "explicit-compiler");
+    assert!(!receipt.environment.contains_key("RUSTUP_TOOLCHAIN"));
+    assert_eq!(
+        fs::read(destination.join("stdout.log")).unwrap(),
+        b"explicit-compiler:cleared:cleared:cleared"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn missing_containment_and_uncontained_legacy_receipts_fail_closed() {
+    let (root, receipt) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.containment = None;
+    assert!(
+        q::execute(
+            &request,
+            &root.path().join("uncontained"),
+            &Default::default()
+        )
+        .is_err()
+    );
+    assert!(!root.path().join("uncontained").exists());
+    let mut document = serde_json::to_value(receipt).unwrap();
+    document["schemaVersion"] = 1.into();
+    document.as_object_mut().unwrap().remove("containment");
+    fs::write(
+        root.path().join("run/receipt.json"),
+        q::json_bytes(&document).unwrap(),
+    )
+    .unwrap();
+    assert!(q::verify_run(&root.path().join("run"), None).is_err());
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn execution_is_rejected_before_spawn_without_native_containment() {
+    let root = tempdir().unwrap();
+    let request = q::RunRequest {
+        cwd: root.path().into(),
+        sources: Default::default(),
+        inputs: Default::default(),
+        command: vec!["never-spawn".into()],
+        environment: Default::default(),
+        tools: Default::default(),
+        timeout_seconds: 1,
+        containment: None,
+    };
+    assert!(
+        q::execute(&request, &root.path().join("run"), &Default::default())
+            .unwrap_err()
+            .to_string()
+            .contains("Linux PID namespace")
+    );
+    assert!(!root.path().join("run").exists());
 }

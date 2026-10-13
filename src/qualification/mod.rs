@@ -59,17 +59,47 @@ pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// Hash a file incrementally, without loading an archive or log into memory.
+pub(crate) fn regular_file(path: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Validate the opened descriptor, not a racy path stat. In particular,
+        // opening a FIFO must never wait for a writer before we can reject it.
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    #[cfg(not(unix))]
+    if !fs::metadata(path)?.is_file() {
+        return Err(invalid("not a regular file"));
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid(format!("not a regular file: {}", path.display())));
+    }
+    Ok(file)
+}
+
+/// Hash an opened regular file incrementally. Devices and FIFOs are rejected.
 pub fn sha256_file(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
+    let file = regular_file(path)?;
+    let before = file.metadata()?;
+    let mut input = (&file).take(before.len());
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
-        let count = file.read(&mut buffer)?;
+        let count = input.read(&mut buffer)?;
         if count == 0 {
             break;
         }
         hash.update(&buffer[..count]);
+    }
+    let after = file.metadata()?;
+    if input.limit() != 0
+        || before.len() != after.len()
+        || before.modified()? != after.modified()?
+    {
+        return Err(invalid("file changed while hashing"));
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -87,7 +117,7 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> io::Error {
 
 /// Load a typed JSON document without interpreting any embedded commands.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
-    serde_json::from_reader(File::open(path)?).map_err(invalid_json)
+    serde_json::from_reader(regular_file(path)?).map_err(invalid_json)
 }
 
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {

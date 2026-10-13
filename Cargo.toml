@@ -42,13 +42,18 @@ review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroi
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
-qualification = ["dep:sha2", "dep:tar", "rustix/process"]
+qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "rustix/process"]
 qualification-cli = ["qualification", "dep:clap"]
 
 [[bin]]
 name = "canix-toolbelt"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "canix-toolbelt-qualification-executor"
+path = "src/bin/qualification-executor.rs"
+required-features = ["qualification"]
 
 [[bin]]
 name = "canix-toolbelt-direct-network"

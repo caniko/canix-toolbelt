@@ -37,6 +37,17 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Separate `qualification-cli` parsing/dispatch feature for library consumers
   that supply their own presentation without enabling the review frontend.
 
+### Fixed
+
+- Contain qualification commands and version probes in Linux PID namespaces with
+  a native init supervisor. Reject escaped/background descendants, unsupported
+  execution platforms and version-1 receipt acceptance; bind both containment
+  binaries and the complete cleared/allowlisted/explicit execution environment.
+- Reject FIFO/device inputs through the opened file descriptor, skip nonexecutable
+  PATH entries, retain both version-output streams, require indexed and contained
+  sealed gate evidence, reject incomplete Cargo resolve graphs, and export long
+  symlink targets with deterministic GNU extended headers.
+
 ## [0.5.0] - 2026-10-08
 
 ### Changed

@@ -101,6 +101,9 @@ impl Metadata {
                 "metadata contains duplicate IDs or no workspace roots",
             ));
         }
+        if packages.keys().ne(nodes.keys()) {
+            return Err(invalid("every package must have exactly one resolve node"));
+        }
         for node in nodes.values() {
             if !packages.contains_key(&node.id)
                 || node

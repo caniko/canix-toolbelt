@@ -23,7 +23,11 @@ Write a `RunRequest` JSON document with explicit roots and inputs:
   "command": ["cargo", "test", "--locked", "--jobs", "2"],
   "environment": { "CARGO_BUILD_JOBS": "2" },
   "tools": { "rustc": "/approved-toolchain/bin/rustc" },
-  "timeoutSeconds": 600
+  "timeoutSeconds": 600,
+  "containment": {
+    "unshare": "/approved-util-linux/bin/unshare",
+    "executor": "/approved-toolbelt/bin/canix-toolbelt-qualification-executor"
+  }
 }
 ```
 
@@ -35,9 +39,30 @@ canix-toolbelt qualification verify-run /state/runs/test-1 --expected compositio
 Run inside the already approved project environment. The library does not load
 direnv, approve shells, acquire Nix evaluation/activation leases or select a
 toolchain. Nix operations must be guarded Canix commands. Supply all dependency
-source roots and environment configuration read by the command. Relevant inherited
-Cargo/Rust environment is retained; explicit overrides are recorded verbatim and
-must not contain credentials. Inherited credentials are not serialized.
+source roots and environment configuration read by the command. Execution clears
+the inherited environment and supplies only the build/locale/home allowlist plus
+explicit overrides. The receipt records the complete supplied environment.
+Settings such as `CC`, `RUSTUP_TOOLCHAIN`, and target-specific linker variables
+must be explicit overrides. Overrides must not contain credentials; inherited
+credentials are neither supplied nor serialized.
+
+Execution requires Linux user/PID/mount namespaces, a caller-selected util-linux
+`unshare` supporting `--forward-signals`, and the packaged native executor. Both
+containment binaries are hashed before execution and rechecked afterward. The
+executor is PID 1 with a namespace-local `/proc`; it rejects any descendants left
+after the command leader exits. Namespace init's exit causes the kernel to kill
+and drain all remaining processes, including `setsid`/`setpgid` descendants,
+before the launcher is reaped. Version probes use the same boundary and retain
+both stdout and stderr in the tool-version evidence. Cancellation/timeout asks
+init to exit and allows at most five seconds per cleanup attempt; unconfirmed
+cleanup leaves pending evidence and returns an error without final hashes or a
+completed receipt. Unsupported platforms fail before spawning a command. Missing
+namespace permissions or launcher capabilities fail closed rather than falling
+back to process groups. Inventory/archive/portable verification remain portable.
+
+New execution receipts use schema version 2. Version-1 execution receipts lacked
+this containment guarantee and cannot satisfy `verify-run` or a new sealed gate.
+Historical bytes remain evidence; do not rewrite them to the newer version.
 
 `inventory --root ROOT --git` selects tracked and unignored untracked files via
 NUL-delimited Git output. Gitlinks require separate source selections. Explicit

@@ -35,6 +35,19 @@ pub struct RunRequest {
     pub tools: BTreeMap<String, PathBuf>,
     /// Required finite deadline in seconds.
     pub timeout_seconds: u64,
+    /// Explicit namespace launcher and native supervisor. Required for execution.
+    #[serde(default)]
+    pub containment: Option<ContainmentPrograms>,
+}
+
+/// Caller-selected Linux containment tools; both binaries are byte-bound in receipts.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainmentPrograms {
+    /// util-linux unshare supporting --forward-signals and --kill-child.
+    pub unshare: PathBuf,
+    /// Packaged canix-toolbelt-qualification-executor binary.
+    pub executor: PathBuf,
 }
 
 /// Execution state. Only Passed can satisfy a required gate.
@@ -71,7 +84,7 @@ pub struct ToolEvidence {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Receipt {
-    /// Receipt format version, currently 1.
+    /// Receipt format version, currently 2. Version 1 lacked descendant containment.
     pub schema_version: u32,
     /// Effective execution disposition.
     pub status: RunStatus,
@@ -93,7 +106,10 @@ pub struct Receipt {
     pub tools: BTreeMap<String, ToolEvidence>,
     /// Canonical program actually executed and its byte identity, if resolution succeeded.
     pub executable: Option<ProgramIdentity>,
-    /// Relevant inherited build environment; credentials are intentionally excluded.
+    /// Namespace launcher and native supervisor identities, when selected.
+    #[serde(default)]
+    pub containment: BTreeMap<String, ProgramIdentity>,
+    /// Complete environment actually supplied after clearing inherited variables.
     pub environment: BTreeMap<String, String>,
     /// UNIX start time in milliseconds.
     pub started_unix_ms: u128,
@@ -113,20 +129,18 @@ pub struct ProgramIdentity {
     pub sha256: String,
 }
 
-fn program(request: &RunRequest) -> io::Result<ProgramIdentity> {
+fn program(
+    request: &RunRequest,
+    environment: &BTreeMap<String, String>,
+) -> io::Result<ProgramIdentity> {
     let name = &request.command[0];
     let path = if Path::new(name).components().count() > 1 || Path::new(name).is_absolute() {
         request.cwd.join(name).canonicalize()?
     } else {
-        let search = request
-            .environment
-            .get("PATH")
-            .cloned()
-            .or_else(|| std::env::var("PATH").ok())
-            .unwrap_or_default();
+        let search = environment.get("PATH").cloned().unwrap_or_default();
         std::env::split_paths(&search)
             .map(|part| request.cwd.join(part).join(name))
-            .find(|path| path.is_file())
+            .find(|path| is_executable(path))
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
@@ -141,8 +155,19 @@ fn program(request: &RunRequest) -> io::Result<ProgramIdentity> {
     })
 }
 
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    }
+    #[cfg(not(unix))]
+    path.is_file()
+}
+
 fn build_environment(request: &RunRequest) -> BTreeMap<String, String> {
-    [
+    let mut environment: BTreeMap<_, _> = [
         "PATH",
         "CARGO_HOME",
         "CARGO_TARGET_DIR",
@@ -160,6 +185,12 @@ fn build_environment(request: &RunRequest) -> BTreeMap<String, String> {
         "JAVA_HOME",
         "LD_LIBRARY_PATH",
         "TMPDIR",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LC_ALL",
+        "TZ",
     ]
     .into_iter()
     .filter_map(|name| {
@@ -170,7 +201,9 @@ fn build_environment(request: &RunRequest) -> BTreeMap<String, String> {
             .or_else(|| std::env::var(name).ok())
             .map(|value| (name.into(), value))
     })
-    .collect()
+    .collect();
+    environment.extend(request.environment.clone());
+    environment
 }
 
 fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, Inventory>)> {
@@ -204,15 +237,27 @@ fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, In
 }
 
 fn stop(child: &mut Child) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-            // The child owns a fresh process group; stop descendants, too.
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(());
         }
+        #[cfg(target_os = "linux")]
+        if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+            // Retry until init has installed its signal handler. unshare forwards
+            // TERM, then reaps init only after the kernel drains its namespace.
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::CONT);
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        }
+        if Instant::now() >= cleanup_deadline {
+            // No final capture or receipt may follow unconfirmed cleanup.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "could not confirm PID namespace cleanup",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    let _ = child.kill();
-    child.wait().map(|_| ())
 }
 
 fn wait(
@@ -230,13 +275,6 @@ fn wait(
             return Ok((RunStatus::TimedOut, None));
         }
         if let Some(status) = child.try_wait()? {
-            #[cfg(unix)]
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                if rustix::process::test_kill_process_group(pid).is_ok() {
-                    stop(child)?;
-                    return Ok((RunStatus::Failed, status.code()));
-                }
-            }
             return Ok((
                 if status.success() {
                     RunStatus::Passed
@@ -250,24 +288,72 @@ fn wait(
     }
 }
 
-fn bounded_output(
+fn containment(request: &RunRequest) -> io::Result<BTreeMap<String, ProgramIdentity>> {
+    if !cfg!(target_os = "linux") {
+        return Err(invalid(
+            "qualification execution requires Linux PID namespace containment",
+        ));
+    }
+    let tools = request
+        .containment
+        .as_ref()
+        .ok_or_else(|| invalid("explicit containment tools are required"))?;
+    [("unshare", &tools.unshare), ("executor", &tools.executor)]
+        .into_iter()
+        .map(|(name, path)| {
+            let path = path.canonicalize()?;
+            if !is_executable(&path) {
+                return Err(invalid("containment tool is not executable"));
+            }
+            Ok((
+                name.into(),
+                ProgramIdentity {
+                    sha256: sha256_file(&path)?,
+                    path,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn contained_command(tools: &BTreeMap<String, ProgramIdentity>, executable: &Path) -> Command {
+    let mut command = Command::new(&tools["unshare"].path);
+    command
+        .args([
+            "--user",
+            "--map-current-user",
+            "--pid",
+            "--fork",
+            "--mount-proc",
+            "--kill-child=KILL",
+            "--forward-signals",
+            "--",
+        ])
+        .arg(&tools["executor"].path)
+        .arg(executable);
+    command
+}
+
+fn tool_version(
     program: &Path,
-    args: &[&str],
     request: &RunRequest,
     cancelled: &AtomicBool,
     directory: &Path,
     name: &str,
     deadline: Instant,
+    receipt: &Receipt,
 ) -> io::Result<Vec<u8>> {
     let path = directory.join(name);
-    let mut command = Command::new(program);
+    let stderr_path = directory.join(format!("{name}.stderr"));
+    let mut command = contained_command(&receipt.containment, program);
     command
-        .args(args)
+        .arg("--version")
         .current_dir(&request.cwd)
-        .envs(&request.environment)
+        .env_clear()
+        .envs(&receipt.environment)
         .stdin(Stdio::null())
         .stdout(File::create(&path)?)
-        .stderr(Stdio::null());
+        .stderr(File::create(&stderr_path)?);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -276,22 +362,25 @@ fn bounded_output(
     let mut child = command.spawn()?;
     let result = wait(&mut child, deadline, cancelled);
     if result.is_err() {
-        let _ = stop(&mut child);
+        stop(&mut child)?;
     }
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
-    fs::read(path)
+    let mut output = fs::read(path)?;
+    output.extend_from_slice(&fs::read(stderr_path)?);
+    Ok(output)
 }
 
 /// Execute once into a newly created evidence directory. Existing evidence is never reused.
-/// Inherited environment is supplied by the approved caller; explicit overrides are retained.
+/// Inherited environment is cleared; retained allowlisted settings and explicit overrides are supplied.
 /// The state directory must be outside all selected source directories.
 pub fn execute(
     request: &RunRequest,
     directory: &Path,
     cancelled: &AtomicBool,
 ) -> io::Result<Receipt> {
+    let containment = containment(request)?;
     if request.command.is_empty()
         || request.command[0].is_empty()
         || request.timeout_seconds == 0
@@ -327,7 +416,7 @@ pub fn execute(
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
     let started = Instant::now();
     let mut receipt = Receipt {
-        schema_version: 1,
+        schema_version: 2,
         status: RunStatus::Pending,
         execution_exit: None,
         composition,
@@ -338,6 +427,7 @@ pub fn execute(
         stderr_sha256: String::new(),
         tools: BTreeMap::new(),
         executable: None,
+        containment,
         environment: build_environment(request),
         started_unix_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -360,14 +450,14 @@ pub fn execute(
             }
             let path = path.canonicalize()?;
             let sha256 = sha256_file(&path)?;
-            let output = bounded_output(
+            let output = tool_version(
                 &path,
-                &["--version"],
                 request,
                 cancelled,
                 &destination,
                 &format!("tool-{name}.log"),
                 started + Duration::from_secs(request.timeout_seconds),
+                &receipt,
             )?;
             let version = String::from_utf8(output).map_err(|e| invalid(e.to_string()))?;
             receipt.tools.insert(
@@ -379,13 +469,14 @@ pub fn execute(
                 },
             );
         }
-        let executable = program(request)?;
-        let mut command = Command::new(&executable.path);
+        let executable = program(request, &receipt.environment)?;
+        let mut command = contained_command(&receipt.containment, &executable.path);
         receipt.executable = Some(executable);
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
-            .envs(&request.environment)
+            .env_clear()
+            .envs(&receipt.environment)
             .stdin(Stdio::null())
             .stdout(out)
             .stderr(err);
@@ -401,10 +492,14 @@ pub fn execute(
             cancelled,
         );
         if outcome.is_err() {
-            let _ = stop(&mut child);
+            stop(&mut child)?;
         }
         outcome
     })();
+    let outcome = match outcome {
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => return Err(error),
+        other => other,
+    };
     match outcome {
         Ok((status, exit)) => {
             receipt.status = status;
@@ -442,6 +537,11 @@ pub fn execute(
             receipt.status = RunStatus::SourceChanged;
         }
     }
+    for tool in receipt.containment.values() {
+        if sha256_file(&tool.path).ok().as_ref() != Some(&tool.sha256) {
+            receipt.status = RunStatus::SourceChanged;
+        }
+    }
     if let Some(executable) = &receipt.executable {
         if sha256_file(&executable.path).ok().as_ref() != Some(&executable.sha256) {
             receipt.status = RunStatus::SourceChanged;
@@ -458,7 +558,7 @@ pub fn execute(
 /// This is portable evidence verification; it does not rerun commands or trust signatures.
 pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Result<Receipt> {
     let receipt: Receipt = read_json(&directory.join("receipt.json"))?;
-    if receipt.schema_version != 1
+    if receipt.schema_version != 2
         || receipt.composition.schema_version != 1
         || receipt.status != RunStatus::Passed
         || receipt.execution_exit != Some(0)
@@ -466,6 +566,9 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         || receipt.error.is_some()
         || receipt.composition.sources.is_empty()
         || receipt.executable.is_none()
+        || receipt.containment.len() != 2
+        || !receipt.containment.contains_key("unshare")
+        || !receipt.containment.contains_key("executor")
         || expected.is_some_and(|expected| expected != &receipt.composition)
     {
         return Err(invalid(
