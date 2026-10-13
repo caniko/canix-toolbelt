@@ -211,6 +211,11 @@ fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     let request = q::SealRequest {
         composition: receipt.composition.clone(),
         gates: [("required".into(), root.path().join("run"))].into(),
+        expected_receipts: [(
+            "required".into(),
+            q::sha256_file(&root.path().join("run/receipt.json")).unwrap(),
+        )]
+        .into(),
         artifacts: [("source".into(), root.path().join("source"))].into(),
     };
     let seal = q::seal(&request, &root.path().join("sealed")).unwrap();
@@ -218,14 +223,14 @@ fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     q::verify_seal(
         &root.path().join("sealed"),
         &request.composition,
-        &["required".into()],
+        &request.expected_receipts,
     )
     .unwrap();
     assert!(
         q::verify_seal(
             &root.path().join("sealed"),
             &request.composition,
-            &["absent".into()]
+            &[("absent".into(), "0".repeat(64))].into()
         )
         .is_err()
     );
@@ -244,10 +249,23 @@ fn seals_require_matching_compositions_and_preserve_the_gate_set() {
         q::verify_seal(
             &root.path().join("sealed"),
             &request.composition,
-            &["required".into()]
+            &request.expected_receipts
         )
         .is_err()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn seal_cannot_substitute_a_different_passing_attempt_for_the_selected_gate() {
+    let (root, receipt) = run_fixture("true", 5);
+    let request = q::SealRequest {
+        composition: receipt.composition,
+        gates: [("required".into(), root.path().join("run"))].into(),
+        expected_receipts: [("required".into(), "0".repeat(64))].into(),
+        artifacts: Default::default(),
+    };
+    assert!(q::seal(&request, &root.path().join("wrong-attempt")).is_err());
 }
 
 #[cfg(all(feature = "cli", unix))]
@@ -313,4 +331,17 @@ fn parent_path_ties_preserve_the_python_cargo_edge_order() {
         graph.parents("dependency", None).unwrap()[0].path,
         ["root@1.0.0", "z-first@1.0.0", "parent@1.0.0"]
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_parent_with_running_children_is_not_acceptance() {
+    let (root, receipt) = run_fixture("(sleep 1; printf late) & printf done", 5);
+    assert_eq!(receipt.status, q::RunStatus::Failed);
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert_eq!(
+        fs::read(root.path().join("run/stdout.log")).unwrap(),
+        b"done"
+    );
+    assert!(q::verify_run(&root.path().join("run"), None).is_err());
 }

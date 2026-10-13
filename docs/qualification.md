@@ -49,8 +49,10 @@ fails rather than silently dropping that file.
 
 Execution creates a new directory and a pending marker before spawning. Existing
 evidence is never reused. stdout/stderr stream to files. A finite deadline is
-required. Cancellation/deadline stops and reaps the Unix process group. The final
-receipt distinguishes passed, failed, cancelled, timed-out and source-changed;
+required. Cancellation/deadline stops the Unix process group and reaps its leader.
+The receipt rejects a producer that exits while descendants are still running,
+so background children cannot turn a partial command into accepted evidence.
+It distinguishes passed, failed, cancelled, timed-out and source-changed;
 it retains the actual program, explicit tool bytes/versions, request identity,
 before/after composition and logs. Missing final receipts do not pass. A zero
 child exit cannot pass if source, inputs or tool bytes changed.
@@ -77,11 +79,13 @@ links and special archive members fail closed. The exporter rechecks source afte
 writing. Existing archive paths are never overwritten.
 
 `seal --request seal-request.json --out /state/handoff` takes an explicit
-`composition`, nonempty `gates` map of labels to execution directories and optional
+`composition`, nonempty `gates` map of labels to execution directories, independently
+selected `expectedReceipts` label-to-receipt-hash map and optional
 `artifacts` map of names to files. Every gate must pass on that composition. It
 copies receipts, requests, logs and selected artifacts, with a hash index.
-`verify-seal /state/handoff --expected composition.json --gate test --gate lint`
-requires the exact externally specified gate set, so omission cannot turn a failed
+`verify-seal /state/handoff --expected composition.json --requirements gates.json`
+requires the exact externally specified gate set and selected attempt hashes,
+so omission or substitution of an older passing attempt cannot turn a failed
 required check into acceptance. Seals are integrity records, not signatures or
 deployment authorizations. Archive-to-source verification remains an explicit
 operation; arbitrary artifacts do not gain source identity merely by being sealed.

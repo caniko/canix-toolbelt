@@ -225,7 +225,18 @@ fn wait(
             stop(child)?;
             return Ok((RunStatus::Cancelled, None));
         }
+        if Instant::now() >= deadline {
+            stop(child)?;
+            return Ok((RunStatus::TimedOut, None));
+        }
         if let Some(status) = child.try_wait()? {
+            #[cfg(unix)]
+            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+                if rustix::process::test_kill_process_group(pid).is_ok() {
+                    stop(child)?;
+                    return Ok((RunStatus::Failed, status.code()));
+                }
+            }
             return Ok((
                 if status.success() {
                     RunStatus::Passed
@@ -234,10 +245,6 @@ fn wait(
                 },
                 status.code(),
             ));
-        }
-        if Instant::now() >= deadline {
-            stop(child)?;
-            return Ok((RunStatus::TimedOut, None));
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -402,6 +409,9 @@ pub fn execute(
         Ok((status, exit)) => {
             receipt.status = status;
             receipt.execution_exit = exit;
+            if status == RunStatus::Failed && exit == Some(0) {
+                receipt.error = Some("producer exited while descendants were still running".into());
+            }
         }
         Err(error) => {
             receipt.status = RunStatus::Failed;

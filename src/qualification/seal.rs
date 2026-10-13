@@ -8,6 +8,8 @@ pub struct SealRequest {
     pub composition: Composition,
     /// Required labels and completed execution directories. Must be nonempty.
     pub gates: BTreeMap<String, PathBuf>,
+    /// Independently selected required label-to-receipt hashes. No passing substitutes.
+    pub expected_receipts: ArtifactIndex,
     /// Additional files to retain; names are root-relative within artifacts/.
     #[serde(default)]
     pub artifacts: BTreeMap<String, PathBuf>,
@@ -58,9 +60,19 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
     if request.gates.is_empty() {
         return Err(invalid("a seal requires a nonempty explicit gate set"));
     }
+    if request.gates.keys().ne(request.expected_receipts.keys()) {
+        return Err(invalid(
+            "gate selection differs from the required receipt set",
+        ));
+    }
     for (name, run) in &request.gates {
         gate_label(name)?;
         verify_run(run, Some(&request.composition))?;
+        if sha256_file(&run.join("receipt.json"))? != request.expected_receipts[name] {
+            return Err(invalid(format!(
+                "required attempt differs for gate: {name}"
+            )));
+        }
     }
     for name in request.artifacts.keys() {
         relative(Path::new(name))?;
@@ -101,6 +113,9 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
         gates,
         artifacts,
     };
+    if seal.gates != request.expected_receipts {
+        return Err(invalid("required receipt changed during seal"));
+    }
     verify_index(directory, &seal.artifacts)?;
     write_json(&directory.join("seal.json"), &seal)?;
     Ok(seal)
@@ -111,15 +126,13 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
 pub fn verify_seal(
     directory: &Path,
     expected: &Composition,
-    required: &[String],
+    required: &ArtifactIndex,
 ) -> io::Result<Seal> {
     let seal: Seal = read_json(&directory.join("seal.json"))?;
-    let labels: std::collections::BTreeSet<_> = required.iter().collect();
     if seal.schema_version != 1
         || &seal.composition != expected
-        || labels.is_empty()
-        || labels.len() != required.len()
-        || labels != seal.gates.keys().collect()
+        || required.is_empty()
+        || required != &seal.gates
     {
         return Err(invalid(
             "seal has a different composition or required gate set",

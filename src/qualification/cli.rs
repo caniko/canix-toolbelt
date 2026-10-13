@@ -103,9 +103,9 @@ pub enum QualificationCommand {
         /// Expected Composition JSON
         #[arg(long)]
         expected: PathBuf,
-        /// Exact required gate set
-        #[arg(long = "gate", required = true)]
-        gates: Vec<String>,
+        /// Independently selected gate-label/receipt-hash JSON map
+        #[arg(long)]
+        requirements: PathBuf,
     },
 }
 
@@ -192,9 +192,13 @@ pub fn dispatch(
         QualificationCommand::VerifySeal {
             directory,
             expected,
-            gates,
+            requirements,
         } => result(
-            &verify_seal(&directory, &read_json(&expected)?, &gates)?,
+            &verify_seal(
+                &directory,
+                &read_json(&expected)?,
+                &read_json(&requirements)?,
+            )?,
             true,
         ),
     }
