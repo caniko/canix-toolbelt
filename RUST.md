@@ -206,6 +206,17 @@ Legacy serialized records still decode; incomplete historical journals cannot
 authorize a new dispatch. The independent Linux worker and reusable Nix
 interfaces are documented in the repository's `docs/roborev.md`.
 
+## Source-bound qualification
+
+The optional `qualification` library captures explicit source/input inventories,
+runs finite-deadline argument vectors, verifies retained receipts and indexes,
+compares Cargo dependency graphs, exports deterministic source archives and seals
+required gate sets. `qualification-cli` adds value-returning Clap dispatch without
+enabling review; the independent CLI includes it through `cli`. Consumers supply
+their own roots, environment, gate policy and presentation. See
+[the qualification contract](docs/qualification.md) for requests, failure semantics
+and compatibility with retained Python evidence.
+
 ## Dependency contract
 
 Fleetix owns generic fleet operations. Toolbelt composes architecture conventions

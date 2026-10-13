@@ -21,6 +21,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   inline admission. `RootDirectoryStartOnly=true` remains an authored host-control
   opt-in, not an automatic fallback for unprepared images.
 
+### Added
+
+- Reusable source-bound Rust qualification operations and an independent
+  `qualification` CLI: inventories, bounded execution receipts, legacy evidence
+  verification, Cargo graph comparison, deterministic source export and
+  composition-bound handoff sealing.
+
+
 ## [0.5.0] - 2026-10-11
 
 ### Changed

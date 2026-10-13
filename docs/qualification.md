@@ -1,0 +1,113 @@
+# Source-bound qualification
+
+The optional `qualification` feature exposes reusable Rust operations for source
+inventories, command receipts, portable verification, Cargo graph comparison,
+source export and handoff sealing. Enable `cli,qualification` for the independent
+`canix-toolbelt qualification` frontend. Frontends call the library directly and
+own their output envelopes and exit handling.
+
+## Run a gate
+
+Write a `RunRequest` JSON document with explicit roots and inputs:
+
+```json
+{
+  "cwd": "/checkout",
+  "sources": {
+    "consumer": { "root": "/checkout", "paths": ["src", "Cargo.toml"] }
+  },
+  "inputs": {
+    "lock": "/checkout/Cargo.lock",
+    "cargoConfig": "/approved-cargo-home/config.toml"
+  },
+  "command": ["cargo", "test", "--locked", "--jobs", "2"],
+  "environment": { "CARGO_BUILD_JOBS": "2" },
+  "tools": { "rustc": "/approved-toolchain/bin/rustc" },
+  "timeoutSeconds": 600
+}
+```
+
+```text
+canix-toolbelt qualification run --request gate.json --out /state/runs/test-1
+canix-toolbelt qualification verify-run /state/runs/test-1 --expected composition.json
+```
+
+Run inside the already approved project environment. The library does not load
+direnv, approve shells, acquire Nix evaluation/activation leases or select a
+toolchain. Nix operations must be guarded Canix commands. Supply all dependency
+source roots and environment configuration read by the command. Relevant inherited
+Cargo/Rust environment is retained; explicit overrides are recorded verbatim and
+must not contain credentials. Inherited credentials are not serialized.
+
+`inventory --root ROOT --git` selects tracked and unignored untracked files via
+NUL-delimited Git output. Gitlinks require separate source selections. Explicit
+inventory paths recursively include everything beneath selected directories;
+there are no inferred build-directory exclusions. Source identities bind content,
+relative link text and executable bits. Escaping links, non-UTF-8 names, special
+files and empty inventories are rejected. Selection of a deleted tracked file
+fails rather than silently dropping that file.
+
+Execution creates a new directory and a pending marker before spawning. Existing
+evidence is never reused. stdout/stderr stream to files. A finite deadline is
+required. Cancellation/deadline stops and reaps the Unix process group. The final
+receipt distinguishes passed, failed, cancelled, timed-out and source-changed;
+it retains the actual program, explicit tool bytes/versions, request identity,
+before/after composition and logs. Missing final receipts do not pass. A zero
+child exit cannot pass if source, inputs or tool bytes changed.
+
+## Verify and seal
+
+`verify-run` checks completed status, source inventories, request and log hashes,
+and optionally the externally supplied composition. `verify-index` checks the
+original Python artifact-index format (a relative-path/SHA-256 map). It rejects
+path traversal and symlink escapes. Extra unindexed files are not evidence.
+
+`verify-legacy-run` verifies historical Python `source.json`, separate or combined
+logs and an optional retained lock. Its exit is nonzero for non-acceptable
+executions. Legacy verification does not upgrade historical environment/tool/input
+provenance to the new contract; external input and signature obligations still
+need their recorded evidence. Original receipts and frozen oracle bytes remain
+unchanged.
+
+`export-source --request inventory-spec.json --out source.tar` exports deterministic
+selected bytes. `verify-archive source.tar --inventory inventory.json` verifies
+without extraction. Archives preserve executable bits and relative symlinks;
+every link target must be included. Duplicate entries, hard links, escaping/cyclic
+links and special archive members fail closed. The exporter rechecks source after
+writing. Existing archive paths are never overwritten.
+
+`seal --request seal-request.json --out /state/handoff` takes an explicit
+`composition`, nonempty `gates` map of labels to execution directories and optional
+`artifacts` map of names to files. Every gate must pass on that composition. It
+copies receipts, requests, logs and selected artifacts, with a hash index.
+`verify-seal /state/handoff --expected composition.json --gate test --gate lint`
+requires the exact externally specified gate set, so omission cannot turn a failed
+required check into acceptance. Seals are integrity records, not signatures or
+deployment authorizations. Archive-to-source verification remains an explicit
+operation; arbitrary artifacts do not gain source identity merely by being sealed.
+
+## Cargo graph evidence
+
+`parents metadata.json syn --version 2.0.119` preserves immediate parents,
+features, dependency kinds, target expressions and shortest workspace paths in
+the retained Python parent-report format. Unreachable resolved parents have an
+empty path. `graph-delta before.json after.json` compares full name/version/source
+identities, including a source change at an unchanged version. Missing resolve
+graphs, duplicate IDs and unknown references fail closed.
+
+Cargo target expressions are graph facts, not target compilation or runtime
+acceptance. None of these commands changes dependency policy, selects releases,
+collects a passing subset of required gates or asserts full Atlas acceptance.
+
+## Python migration coverage
+
+| Historical helper capability | Permanent Rust operation |
+| --- | --- |
+| `qualify.py`, `qualified-run.py`, `graph_run.py`: run, log, bind source/lock/tool inputs | `execute`, `verify_run` |
+| `verify_handoff.py`: artifact hashes and portable run integrity | `verify_index`, `verify_legacy_run`, `verify_source_archive` |
+| `graph.py`, `seal_join.py`: parents, shortest paths, distribution changes | `graph::Metadata::parents`, `graph::Metadata::delta` |
+| `seal.py`, `seal_join.py`: source export and gate-bound handoff | `export_source`, `seal`, `verify_seal` |
+
+Application-specific patch selection, Git signature/bundle qualification and
+platform/UI gates stay with their existing owners. Retain the old evidence as
+fixtures; do not rerun or replace the Python helpers to use the Rust operations.
