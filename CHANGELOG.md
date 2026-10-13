@@ -26,6 +26,17 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   them, and retain generated README badges alongside the workflow preparation
   patch for complete declared-generator imports.
 
+## [0.6.0] - 2026-10-13
+
+### Added
+
+- Reusable source-bound Rust qualification operations and an independent
+  `qualification` CLI: inventories, bounded execution receipts, legacy evidence
+  verification, Cargo graph comparison, deterministic source export and
+  composition-bound handoff sealing.
+- Separate `qualification-cli` parsing/dispatch feature for library consumers
+  that supply their own presentation without enabling the review frontend.
+
 ## [0.5.0] - 2026-10-08
 
 ### Changed
