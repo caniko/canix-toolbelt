@@ -189,15 +189,15 @@ class PinentryIntegration(unittest.TestCase):
                        input=b"decrypted fixture\n", env=cls.age_env, check=True, timeout=15, capture_output=True)
 
     @classmethod
-    def command(cls, args, **kwargs):
-        return subprocess.run(args, env=cls.env, text=True, capture_output=True, check=True, timeout=15, **kwargs)
+    def command(cls, args, timeout=15, **kwargs):
+        return subprocess.run(args, env=cls.env, text=True, capture_output=True, check=True, timeout=timeout, **kwargs)
 
     @classmethod
-    def zellij(cls, *args, target=True):
+    def zellij(cls, *args, target=True, timeout=15):
         command = [ZELLIJ, "--config", str(cls.config)]
         if target:
             command += ["--session", cls.session]
-        return cls.command(command + list(args)).stdout
+        return cls.command(command + list(args), timeout=timeout).stdout
 
     @classmethod
     def attach_client(cls):
@@ -220,7 +220,15 @@ class PinentryIntegration(unittest.TestCase):
 
     @classmethod
     def panes(cls):
-        return json.loads(cls.zellij("action", "list-panes", "--json"))
+        # Zellij can exit successfully without a snapshot while concurrent panes
+        # change. Retry only that read-only observation, never prompt actions.
+        deadline = time.monotonic() + 5
+        while (remaining := deadline - time.monotonic()) > 0:
+            snapshot = cls.zellij("action", "list-panes", "--json", timeout=remaining)
+            if snapshot.strip():
+                return json.loads(snapshot)
+            time.sleep(min(0.05, remaining))
+        raise AssertionError("Zellij returned empty pane snapshots until the discovery deadline")
 
     @classmethod
     def wait_for(cls, condition):
@@ -647,9 +655,13 @@ class FixtureObservationWait(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
             context = SimpleNamespace(queries=[], root=Path(directory), zellij=Mock(return_value="{incomplete"))
             context.panes = lambda: PinentryIntegration.panes.__func__(context)
-            with patch.object(time, "monotonic", side_effect=[0, 1, 16]), patch.object(time, "sleep"), self.assertRaisesRegex(AssertionError, "invalid pane JSON.*incomplete"):
+            clock = SimpleNamespace(now=0)
+            with patch.object(time, "monotonic", side_effect=lambda: clock.now), \
+                 patch.object(time, "sleep", side_effect=lambda _: setattr(clock, "now", clock.now + 16)), \
+                 self.assertRaisesRegex(AssertionError, "deadline=15.*invalid pane JSON.*incomplete"):
                 PinentryIntegration.wait_for.__func__(context, context.panes)
             self.assertEqual(context.zellij.call_count, 2)
+            self.assertEqual(clock.now, 16)
 
     def test_invalid_pane_json_never_proves_a_live_prompt_closed(self):
         with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
@@ -657,9 +669,13 @@ class FixtureObservationWait(unittest.TestCase):
             context = SimpleNamespace(queries=[], root=Path(directory), zellij=Mock(side_effect=["{incomplete", live, live]))
             context.panes = lambda: PinentryIntegration.panes.__func__(context)
             closed = lambda: all(p["title"] != "Hardware key PIN" for p in context.panes())
-            with patch.object(time, "monotonic", side_effect=[0, 1, 2, 16]), patch.object(time, "sleep"), self.assertRaisesRegex(AssertionError, "timed out waiting for fixture state"):
+            clock = SimpleNamespace(now=0)
+            with patch.object(time, "monotonic", side_effect=lambda: clock.now), \
+                 patch.object(time, "sleep", side_effect=lambda _: setattr(clock, "now", clock.now + 8)), \
+                 self.assertRaisesRegex(AssertionError, "timed out waiting for fixture state.*deadline=15"):
                 PinentryIntegration.wait_for.__func__(context, closed)
             self.assertEqual(context.zellij.call_count, 3)
+            self.assertEqual(clock.now, 16)
 
     def test_transient_read_failure_preserves_the_pending_condition(self):
         context = SimpleNamespace(queries=[], panes=list)
@@ -676,6 +692,31 @@ class FixtureObservationWait(unittest.TestCase):
             with patch.object(time, "monotonic", side_effect=[0, 1, 16]), patch.object(time, "sleep"), self.assertRaisesRegex(AssertionError, "fixture observation timeout"):
                 PinentryIntegration.wait_for.__func__(context, observation)
             self.assertEqual(observation.call_count, 1)
+
+
+class PaneDiscoveryTests(unittest.TestCase):
+    def test_empty_successful_response_recovers_to_a_real_snapshot(self):
+        expected = [{"id": 7, "title": "Hardware key PIN"}]
+        with patch.object(PinentryIntegration, "zellij", side_effect=["", "\n", json.dumps(expected)]):
+            self.assertEqual(PinentryIntegration.panes(), expected)
+
+    def test_persistent_empty_response_fails_instead_of_claiming_no_panes(self):
+        with patch.object(PinentryIntegration, "zellij", return_value=""), \
+             patch.object(time, "monotonic", side_effect=[0, 0, 6]), \
+             patch.object(time, "sleep"), \
+             self.assertRaisesRegex(AssertionError, "empty.*pane.*snapshot"):
+            PinentryIntegration.panes()
+
+    def test_nonempty_invalid_json_is_not_retried_or_hidden(self):
+        with patch.object(PinentryIntegration, "zellij", return_value="invalid JSON"), \
+             self.assertRaises(json.JSONDecodeError):
+            PinentryIntegration.panes()
+
+    def test_failed_discovery_command_remains_a_failure(self):
+        error = subprocess.CalledProcessError(1, [ZELLIJ, "action", "list-panes"])
+        with patch.object(PinentryIntegration, "zellij", side_effect=error), \
+             self.assertRaises(subprocess.CalledProcessError):
+            PinentryIntegration.panes()
 
 
 if __name__ == "__main__":
