@@ -63,8 +63,8 @@ completed receipt. Unsupported platforms fail before spawning a command. Missing
 namespace permissions or launcher capabilities fail closed rather than falling
 back to process groups. Inventory/archive/portable verification remain portable.
 
-New execution receipts use schema version 3. Earlier execution receipts lacked
-the read-only execution guarantee and cannot satisfy `verify-run` or a new sealed gate.
+New execution receipts use schema version 4. Earlier execution receipts lacked
+descriptor hygiene and native status evidence and cannot satisfy `verify-run` or a new sealed gate.
 Historical bytes remain evidence; do not rewrite them to the newer version.
 
 The supervisor recursively clones the host mount tree in its private namespace,
@@ -75,6 +75,21 @@ hardlink aliases and temporary changes later restored, are denied. The producer
 and version probes run through the byte-bound `setpriv` with all capabilities
 removed and `no_new_privs`; the supervisor is non-dumpable. A missing mount-ID or
 read-only-mount capability fails closed before producer execution.
+
+Before any files or signal registrations are created, the freshly exec'd
+single-threaded supervisor invokes Linux `close_range(3, UINT_MAX, 0)`. This
+closes inherited non-CLOEXEC handles regardless of their number; unsupported or
+denied descriptor closing fails closed. An inherited writable descriptor cannot
+bypass the new read-only mounts. The syscall has one locally audited unsafe
+boundary because the safe Rust APIs cannot close arbitrary inherited handles.
+
+The caller opens a private `execution.json` report on the host side and passes
+its writable descriptor as the supervisor's stdin. Producer stdin is replaced
+with `/dev/null`, and non-dumpability denies access through `/proc/1/fd`.
+After kernel child accounting, the supervisor records the original producer
+exit code or termination signal and whether descendants drained. The report is
+hash-bound in the receipt and mandatory in direct/sealed portable verification;
+launcher exit 125 cannot disguise a producer signal as an ordinary exit 125.
 
 Only the newly created `OUT/work` tree and inherited stdout/stderr descriptors
 are writable. `QUALIFICATION_WORK_DIR` and `TMPDIR` point to that tree; Cargo's
@@ -88,6 +103,16 @@ the shared execution deadline between reads. Expiry/cancellation during initial
 capture returns an error before spawning; final capture cannot certify an expired
 run. Tool/log finalization has one additional five-second budget. Successful tool
 version streams are limited to 1 MiB each to bound memory retention.
+Finalization also checks cancellation between reads and immediately before
+receipt publication. Interrupted hashing retains a cancelled, non-accepting
+receipt with available partial evidence; missing final hashes cannot verify.
+Wall-clock and monotonic start times are sampled together before initial capture.
+
+Direct `verify-run` requires the request, receipt, native execution report and
+both logs to resolve inside the canonical run directory before reading them.
+Archive verification rejects special files through descriptor-based regular-file
+admission and normalizes leading `./` member prefixes while still rejecting
+duplicate real members and retaining symlink target text.
 
 Ubuntu 24.04 hosted qualification installs an ephemeral AppArmor `userns`
 permission specifically for `/nix/store/*/bin/unshare` through Simit's

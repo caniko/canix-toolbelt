@@ -172,6 +172,7 @@ dependencies = [
  "clap",
  "fleetix",
  "fs2",
+ "libc",
  "miette",
  "rustix",
  "serde",

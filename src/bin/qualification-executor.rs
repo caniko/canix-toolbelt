@@ -1,5 +1,5 @@
 //! Private PID-namespace init for qualification. Not an operator frontend.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 #[cfg(target_os = "linux")]
 fn supervise() -> std::io::Result<i32> {
@@ -18,6 +18,7 @@ fn supervise() -> std::io::Result<i32> {
             "executor requires a fresh PID namespace and proc mount",
         ));
     }
+    close_inherited_descriptors()?;
     // The producer shares our mapped uid. Deny ptrace/proc-fd access to this
     // privileged supervisor rather than relying on host Yama configuration.
     rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)?;
@@ -49,6 +50,9 @@ fn supervise() -> std::io::Result<i32> {
         ])
         .arg(program)
         .args(args)
+        // fd 0 is a private report channel opened by the host caller. Never let
+        // the producer inherit it or reach it through the supervisor's proc fds.
+        .stdin(std::process::Stdio::null())
         .spawn()?;
     let status = loop {
         if cancelled.load(Ordering::Relaxed) {
@@ -64,10 +68,46 @@ fn supervise() -> std::io::Result<i32> {
     // replace. A live child, zombie, or unknown wait error invalidates completion.
     // Exiting init makes the kernel kill/drain the whole namespace before the
     // launcher can reap us. wait() uses waitpid(-1), covering all process groups.
-    match rustix::process::wait(rustix::process::WaitOptions::NOHANG) {
-        Err(rustix::io::Errno::CHILD) => Ok(status.code().unwrap_or(125)),
-        Ok(_) => Ok(125),
-        Err(error) => Err(error.into()),
+    let drained = match rustix::process::wait(rustix::process::WaitOptions::NOHANG) {
+        Err(rustix::io::Errno::CHILD) => true,
+        Ok(_) => false,
+        Err(error) => return Err(error.into()),
+    };
+    use std::os::unix::process::ExitStatusExt;
+    let execution = canix_toolbelt::qualification::ExecutionReport {
+        exit_code: status.code(),
+        signal: status.signal(),
+        descendants_drained: drained,
+    };
+    let bytes = canix_toolbelt::qualification::json_bytes(&execution)?;
+    let mut remaining = bytes.as_slice();
+    while !remaining.is_empty() {
+        let count = rustix::io::write(rustix::stdio::stdin(), remaining)?;
+        if count == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::WriteZero));
+        }
+        remaining = &remaining[count..];
+    }
+    rustix::fs::fsync(rustix::stdio::stdin())?;
+    Ok(if drained {
+        status.code().unwrap_or(125)
+    } else {
+        125
+    })
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn close_inherited_descriptors() -> std::io::Result<()> {
+    // SAFETY: this runs once in freshly exec'd, single-threaded PID 1 before any
+    // Rust-owned file, signal registration or child exists. No OwnedFd values
+    // refer to the inherited descriptors. Preserve only stdin/stdout/stderr;
+    // closing arbitrary caller handles here cannot invalidate caller memory.
+    // No /proc enumeration race or RLIMIT-based bound can leave high FDs open.
+    if unsafe { libc::close_range(3, u32::MAX, 0) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 

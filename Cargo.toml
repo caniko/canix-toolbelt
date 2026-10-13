@@ -42,7 +42,7 @@ review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroi
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
-qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "rustix/process", "rustix/mount"]
+qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "dep:libc", "rustix/process", "rustix/mount", "rustix/stdio"]
 qualification-cli = ["qualification", "dep:clap"]
 
 [[bin]]
@@ -72,6 +72,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 serde_json = "1"
 rustix = { version = "1", features = ["fs"] }
 signal-hook = { version = "0.4", optional = true }
+libc = { version = "0.2", optional = true }
 ureq = { version = "3", features = ["json"], optional = true }
 sha2 = { version = "0.10", optional = true }
 fs2 = { version = "0.4", optional = true }

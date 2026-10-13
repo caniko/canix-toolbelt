@@ -1,5 +1,5 @@
 use super::*;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,7 +40,7 @@ pub struct RunRequest {
     pub containment: Option<ContainmentPrograms>,
 }
 
-/// Caller-selected Linux containment tools; both binaries are byte-bound in receipts.
+/// Caller-selected Linux containment tools; all binaries are byte-bound in receipts.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContainmentPrograms {
@@ -86,12 +86,16 @@ pub struct ToolEvidence {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Receipt {
-    /// Receipt format version, currently 3. Earlier versions lacked read-only execution.
+    /// Receipt format version, currently 4. Earlier versions lacked descriptor hygiene.
     pub schema_version: u32,
     /// Effective execution disposition.
     pub status: RunStatus,
     /// Child exit code; absent for signals or spawn failures.
     pub execution_exit: Option<i32>,
+    /// Original producer termination signal, distinct from an ordinary exit code.
+    pub execution_signal: Option<i32>,
+    /// Native supervisor report identity; present after confirmed leader completion.
+    pub execution_report_sha256: Option<String>,
     /// Before-execution source/input identity.
     pub composition: Composition,
     /// After-execution identity; absent when capture fails.
@@ -129,6 +133,18 @@ pub struct ProgramIdentity {
     pub path: PathBuf,
     /// Executable SHA-256.
     pub sha256: String,
+}
+
+/// Private native supervisor output, retained independently of launcher exit status.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionReport {
+    /// Original producer exit code, absent for signal termination.
+    pub exit_code: Option<i32>,
+    /// Original producer termination signal, absent for ordinary exits.
+    pub signal: Option<i32>,
+    /// Kernel child accounting confirmed ECHILD after reaping the leader.
+    pub descendants_drained: bool,
 }
 
 fn program(
@@ -370,7 +386,12 @@ fn tool_version(
         .current_dir(&request.cwd)
         .env_clear()
         .envs(&receipt.environment)
-        .stdin(Stdio::null())
+        .stdin(
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(format!("{name}.execution.json")))?,
+        )
         .stdout(File::create(&path)?)
         .stderr(File::create(&stderr_path)?);
     #[cfg(unix)]
@@ -405,6 +426,10 @@ pub fn execute(
     cancelled: &AtomicBool,
 ) -> io::Result<Receipt> {
     let started = Instant::now();
+    let started_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| invalid(e.to_string()))?
+        .as_millis();
     if request.command.is_empty()
         || request.command[0].is_empty()
         || request.timeout_seconds == 0
@@ -515,9 +540,11 @@ pub fn execute(
     write_json(&destination.join("request.json"), request)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
     let mut receipt = Receipt {
-        schema_version: 3,
+        schema_version: 4,
         status: RunStatus::Pending,
         execution_exit: None,
+        execution_signal: None,
+        execution_report_sha256: None,
         composition,
         after: None,
         inventories,
@@ -528,10 +555,7 @@ pub fn execute(
         executable: executable.as_ref().ok().cloned(),
         containment,
         environment,
-        started_unix_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| invalid(e.to_string()))?
-            .as_millis(),
+        started_unix_ms,
         elapsed_ms: 0,
         error: None,
     };
@@ -575,7 +599,12 @@ pub fn execute(
             .current_dir(&cwd)
             .env_clear()
             .envs(&receipt.environment)
-            .stdin(Stdio::null())
+            .stdin(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(destination.join("execution.json"))?,
+            )
             .stdout(out)
             .stderr(err);
         #[cfg(unix)]
@@ -611,6 +640,22 @@ pub fn execute(
             receipt.error = Some(error.to_string());
         }
     }
+    let execution_path = destination.join("execution.json");
+    if execution_path.metadata().is_ok_and(|meta| meta.len() != 0) {
+        let report: ExecutionReport = read_json(&execution_path)?;
+        receipt.execution_exit = report.exit_code;
+        receipt.execution_signal = report.signal;
+        if receipt.status == RunStatus::Passed
+            && (report.exit_code != Some(0)
+                || report.signal.is_some()
+                || !report.descendants_drained)
+        {
+            receipt.status = RunStatus::Failed;
+            receipt.error = Some("native execution report did not confirm producer success".into());
+        }
+    } else if receipt.status == RunStatus::Passed {
+        return Err(invalid("native executor did not retain execution status"));
+    }
     if cancelled.load(Ordering::Relaxed) {
         receipt.status = RunStatus::Cancelled;
     } else if receipt.status == RunStatus::Failed
@@ -638,7 +683,12 @@ pub fn execute(
     // the failed/cancelled case where the producer's execution deadline elapsed.
     let finalize_deadline = Instant::now() + Duration::from_secs(5);
     let mut finalize = || {
-        if Instant::now() < finalize_deadline {
+        if cancelled.load(Ordering::Relaxed) {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "evidence finalization cancelled",
+            ))
+        } else if Instant::now() < finalize_deadline {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -647,28 +697,52 @@ pub fn execute(
             ))
         }
     };
-    for tool in receipt.tools.values() {
-        if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
-            receipt.status = RunStatus::SourceChanged;
+    let finalization = (|| -> io::Result<()> {
+        for tool in receipt.tools.values() {
+            if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
+                receipt.status = RunStatus::SourceChanged;
+            }
         }
+        for tool in receipt.containment.values() {
+            if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
+                receipt.status = RunStatus::SourceChanged;
+            }
+        }
+        if let Some(executable) = &receipt.executable {
+            if sha256_file_checked(&executable.path, &mut finalize)
+                .ok()
+                .as_ref()
+                != Some(&executable.sha256)
+            {
+                receipt.status = RunStatus::SourceChanged;
+            }
+        }
+        if execution_path.exists() {
+            receipt.execution_report_sha256 =
+                Some(sha256_file_checked(&execution_path, &mut finalize)?);
+        }
+        receipt.stdout_sha256 =
+            sha256_file_checked(&destination.join("stdout.log"), &mut finalize)?;
+        receipt.stderr_sha256 =
+            sha256_file_checked(&destination.join("stderr.log"), &mut finalize)?;
+        finalize()?;
+        Ok(())
+    })();
+    if let Err(error) = finalization {
+        receipt.status = match error.kind() {
+            io::ErrorKind::Interrupted => RunStatus::Cancelled,
+            io::ErrorKind::TimedOut => RunStatus::TimedOut,
+            _ => RunStatus::Failed,
+        };
+        receipt.error = Some(error.to_string());
     }
-    for tool in receipt.containment.values() {
-        if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
-            receipt.status = RunStatus::SourceChanged;
-        }
-    }
-    if let Some(executable) = &receipt.executable {
-        if sha256_file_checked(&executable.path, &mut finalize)
-            .ok()
-            .as_ref()
-            != Some(&executable.sha256)
-        {
-            receipt.status = RunStatus::SourceChanged;
-        }
+    if receipt.status == RunStatus::Passed && Instant::now() >= deadline {
+        receipt.status = RunStatus::TimedOut;
     }
     receipt.elapsed_ms = started.elapsed().as_millis();
-    receipt.stdout_sha256 = sha256_file_checked(&destination.join("stdout.log"), &mut finalize)?;
-    receipt.stderr_sha256 = sha256_file_checked(&destination.join("stderr.log"), &mut finalize)?;
+    if cancelled.load(Ordering::Relaxed) {
+        receipt.status = RunStatus::Cancelled;
+    }
     write_json(&destination.join("receipt.json"), &receipt)?;
     Ok(receipt)
 }
@@ -676,11 +750,23 @@ pub fn execute(
 /// Verify completed receipt integrity and, when supplied, the required immutable composition.
 /// This is portable evidence verification; it does not rerun commands or trust signatures.
 pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Result<Receipt> {
+    let root = directory.canonicalize()?;
+    for name in [
+        "receipt.json",
+        "request.json",
+        "execution.json",
+        "stdout.log",
+        "stderr.log",
+    ] {
+        contained(&root, Path::new(name))?;
+    }
+    let directory = &root;
     let receipt: Receipt = read_json(&directory.join("receipt.json"))?;
-    if receipt.schema_version != 3
+    if receipt.schema_version != 4
         || receipt.composition.schema_version != 1
         || receipt.status != RunStatus::Passed
         || receipt.execution_exit != Some(0)
+        || receipt.execution_signal.is_some()
         || receipt.after.as_ref() != Some(&receipt.composition)
         || receipt.error.is_some()
         || receipt.composition.sources.is_empty()
@@ -694,6 +780,14 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         return Err(invalid(
             "receipt is incomplete, failed, changed, or belongs to another composition",
         ));
+    }
+    let report_path = directory.join("execution.json");
+    if Some(sha256_file(&report_path)?) != receipt.execution_report_sha256 {
+        return Err(invalid("native execution report identity differs"));
+    }
+    let report: ExecutionReport = read_json(&report_path)?;
+    if report.exit_code != Some(0) || report.signal.is_some() || !report.descendants_drained {
+        return Err(invalid("native execution report did not confirm success"));
     }
     for (name, inventory) in &receipt.inventories {
         if inventory.schema_version != 1

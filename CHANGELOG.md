@@ -55,6 +55,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   mutable execution evidence. Bound capture/hashing by the shared deadline and
   cancellation, derive archived link executability from its target, and exclude
   Git PAX metadata pseudo-entries from real member duplicate tracking.
+- Close inherited producer descriptors and bind original exit/signal status in a
+  private native execution report. Schema-4 receipts require that evidence and
+  contain mandatory artifacts during direct verification. Honor cancellation
+  during final hashing, include initial capture in wall-clock timelines, reject
+  special archive inputs and normalize standard tar `./` member prefixes.
 
 ## [0.5.0] - 2026-10-08
 

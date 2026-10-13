@@ -84,7 +84,13 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
     let mut gates = ArtifactIndex::new();
     for (name, run) in &request.gates {
         fs::create_dir(directory.join("gates").join(name))?;
-        for file in ["request.json", "receipt.json", "stdout.log", "stderr.log"] {
+        for file in [
+            "request.json",
+            "receipt.json",
+            "execution.json",
+            "stdout.log",
+            "stderr.log",
+        ] {
             let relative = format!("gates/{name}/{file}");
             let hash = copy(&run.join(file), &directory.join(&relative))?;
             if file == "receipt.json" {
@@ -142,7 +148,13 @@ pub fn verify_seal(
     let root = directory.canonicalize()?;
     for (name, hash) in &seal.gates {
         gate_label(name)?;
-        for file in ["request.json", "receipt.json", "stdout.log", "stderr.log"] {
+        for file in [
+            "request.json",
+            "receipt.json",
+            "execution.json",
+            "stdout.log",
+            "stderr.log",
+        ] {
             let path = format!("gates/{name}/{file}");
             if !seal.artifacts.contains_key(&path) {
                 return Err(invalid(format!(
@@ -266,7 +278,7 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
 }
 
 fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>> {
-    let mut tar = tar::Archive::new(File::open(archive)?);
+    let mut tar = tar::Archive::new(regular_file(archive)?);
     let mut files = BTreeMap::new();
     let mut links = BTreeMap::new();
     let mut seen_paths = std::collections::BTreeSet::new();
@@ -296,8 +308,8 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
         }
         let path = entry.path()?.into_owned();
         relative(&path)?;
-        let name = path_text(&path)?;
-        if !seen_paths.insert(path.components().collect::<PathBuf>()) {
+        let name = path_text(&path)?.trim_start_matches("./").to_owned();
+        if !seen_paths.insert(name.clone()) {
             return Err(invalid("duplicate archive path"));
         }
         let executable = entry.header().mode()? & 0o111 != 0;

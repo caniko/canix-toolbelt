@@ -805,6 +805,7 @@ fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
         .args(["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "--kill-child=KILL", "--forward-signals", "--"])
         .arg(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
         .arg(&work).arg(setpriv)
+        .stdin(fs::File::create(root.path().join("execution.json")).unwrap())
         .args(["/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
         .current_dir(root.path()).output().unwrap();
     assert_eq!(
@@ -936,4 +937,225 @@ fn git_pax_metadata_does_not_shadow_a_real_file_with_its_name() {
         paths: vec!["pax_global_header".into()],
     };
     q::verify_source_archive(&archive, &q::inventory(&spec).unwrap()).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inherited_writable_descriptors_cannot_bypass_read_only_execution() {
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let source = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join("source"))
+        .unwrap();
+    rustix::io::fcntl_setfd(&source, rustix::io::FdFlags::empty()).unwrap();
+    use std::os::fd::AsRawFd;
+    request.command[2] = format!(
+        "printf temporary > /proc/self/fd/{0} || exit 17; printf original > /proc/self/fd/{0}",
+        source.as_raw_fd()
+    );
+    let directory = root.path().join("inherited-fd");
+    let receipt = q::execute(&request, &directory, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Failed);
+    assert_eq!(receipt.execution_exit, Some(17));
+    assert!(q::verify_run(&directory, None).is_err());
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+    // Version probes use the same startup descriptor hygiene, rather than a
+    // separate unrestricted subprocess path.
+    let probe = root.path().join("probe");
+    fs::write(&probe, format!("#!/bin/sh\n{}\n", request.command[2])).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+    request.command[2] = "true".into();
+    request.tools.insert("probe".into(), probe);
+    let receipt = q::execute(
+        &request,
+        &root.path().join("inherited-probe-fd"),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Failed);
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+}
+
+#[cfg(unix)]
+#[test]
+fn archive_verifiers_reject_devices_and_unopened_fifos() {
+    let root = tempdir().unwrap();
+    let fifo = root.path().join("fifo");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    let expected = q::Inventory {
+        schema_version: 1,
+        files: [(
+            "source".into(),
+            q::SourceFile {
+                sha256: "0".repeat(64),
+                executable: false,
+                link: None,
+            },
+        )]
+        .into(),
+    };
+    for path in [&fifo, std::path::Path::new("/dev/zero")] {
+        assert!(q::verify_source_archive(path, &expected).is_err());
+        assert!(
+            q::verify_legacy_archive(path, &[("source".into(), "0".repeat(64))].into()).is_err()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn standard_tar_dot_root_roundtrips_files_and_links() {
+    let root = tempdir().unwrap();
+    let out = tempdir().unwrap();
+    fs::write(root.path().join("source"), b"source").unwrap();
+    std::os::unix::fs::symlink("./source", root.path().join("link")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["source".into(), "link".into()],
+    };
+    let archive = out.path().join("standard.tar");
+    assert!(
+        std::process::Command::new("tar")
+            .arg("-cf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(root.path())
+            .arg(".")
+            .status()
+            .unwrap()
+            .success()
+    );
+    q::verify_source_archive(&archive, &q::inventory(&spec).unwrap()).unwrap();
+    let duplicate = out.path().join("duplicate.tar");
+    assert!(
+        std::process::Command::new("tar")
+            .arg("-cf")
+            .arg(&duplicate)
+            .arg("-C")
+            .arg(root.path())
+            .args(["source", "./source", "link"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(q::verify_source_archive(&duplicate, &q::inventory(&spec).unwrap()).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn direct_run_verification_rejects_external_mandatory_artifacts() {
+    let (root, _) = run_fixture("true", 5);
+    let run = root.path().join("run");
+    for name in [
+        "receipt.json",
+        "request.json",
+        "execution.json",
+        "stdout.log",
+        "stderr.log",
+    ] {
+        let backup = root.path().join(format!("external-{name}"));
+        fs::rename(run.join(name), &backup).unwrap();
+        std::os::unix::fs::symlink(&backup, run.join(name)).unwrap();
+        assert!(
+            q::verify_run(&run, None).is_err(),
+            "accepted external {name}"
+        );
+        fs::remove_file(run.join(name)).unwrap();
+        fs::rename(backup, run.join(name)).unwrap();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn signal_termination_is_not_an_ordinary_exit_125() {
+    let (_, signalled) = run_fixture("kill -TERM $$", 5);
+    let (_, ordinary) = run_fixture("exit 125", 5);
+    assert_eq!(signalled.status, q::RunStatus::Failed);
+    assert_eq!(signalled.execution_exit, None);
+    assert_eq!(signalled.execution_signal, Some(15));
+    assert_eq!(ordinary.execution_exit, Some(125));
+    assert_eq!(ordinary.execution_signal, None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wall_clock_start_includes_initial_evidence_capture() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let bulk = root.path().join("bulk");
+    fs::File::create(&bulk)
+        .unwrap()
+        .set_len(128 * 1024 * 1024)
+        .unwrap();
+    request.inputs.insert("bulk".into(), bulk);
+    request.timeout_seconds = 30;
+    let receipt = q::execute(&request, &root.path().join("timeline"), &Default::default()).unwrap();
+    let finished = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    assert_eq!(receipt.status, q::RunStatus::Passed);
+    assert!(
+        finished - receipt.started_unix_ms + 20 >= receipt.elapsed_ms,
+        "wall-clock start {} and elapsed {} disagree with finish {finished}",
+        receipt.started_unix_ms,
+        receipt.elapsed_ms
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cancellation_during_log_finalization_never_commits_passed_evidence() {
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "truncate -s 512M /proc/self/fd/1".into();
+    request.timeout_seconds = 30;
+    let run = root.path().join("final-cancel");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let receipt = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &run, &cancel).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // A complete native report means the producer has exited. Small source
+        // recapture finishes before the retained sparse log finishes hashing.
+        while q::read_json::<q::ExecutionReport>(&run.join("execution.json")).is_err() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        task.join().unwrap()
+    });
+    assert!(
+        receipt.after.is_some(),
+        "cancelled before final capture completed"
+    );
+    assert_eq!(receipt.status, q::RunStatus::Cancelled);
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_execution_report_is_bound_and_cannot_claim_success_for_a_signal() {
+    let (root, mut receipt) = run_fixture("true", 5);
+    let run = root.path().join("run");
+    let report_path = run.join("execution.json");
+    let mut report: q::ExecutionReport = q::read_json(&report_path).unwrap();
+    report.exit_code = None;
+    report.signal = Some(15);
+    fs::write(&report_path, q::json_bytes(&report).unwrap()).unwrap();
+    assert!(q::verify_run(&run, None).is_err());
+    // Even replacing the digest cannot turn a signalled native status into a
+    // zero-exit receipt or substitute launcher success for producer success.
+    receipt.execution_report_sha256 = Some(q::sha256_file(&report_path).unwrap());
+    fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
+    assert!(q::verify_run(&run, None).is_err());
 }
