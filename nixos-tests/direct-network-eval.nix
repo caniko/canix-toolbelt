@@ -39,6 +39,12 @@
             ExecStart = "/bin/true";
             ExecStartPre = ["/bin/test -e /inside-image"];
           };
+          systemd.services.host-controls.serviceConfig = {
+            RootImage = "/srv/unprepared.img";
+            RootDirectoryStartOnly = true;
+            ExecStart = "/bin/true";
+            ExecStartPre = "${pkgs.coreutils}/bin/true";
+          };
           systemd.services.reset.serviceConfig = {
             ExecStart = "${pkgs.coreutils}/bin/true";
             ExecStartPre = ["/bin/false" "" "/bin/false" " " "/bin/true"];
@@ -77,6 +83,12 @@
               ExecStart = "/bin/true";
               ExecStartPre = ["/bin/test -e /inside-image"];
             };
+            systemd.user.services.host-controls.Service = {
+              RootImage = "/srv/user-unprepared.img";
+              RootDirectoryStartOnly = "yes";
+              ExecStart = "/bin/true";
+              ExecStartPre = "${pkgs.coreutils}/bin/true";
+            };
             systemd.user.services.reset.Service = {
               ExecStart = "${pkgs.coreutils}/bin/true";
               ExecStartPre = ["/bin/false" "" "/bin/false" " " "/bin/true"];
@@ -93,6 +105,7 @@
             systemServices.backup = "canix-background.slice";
             systemServices.rooted = "canix-background.slice";
             systemServices.imaged = "canix-background.slice";
+            systemServices.host-controls = "canix-background.slice";
             systemServices.reset = "canix-background.slice";
             systemServices.scalar-reset = "canix-background.slice";
             users.operator = {
@@ -100,6 +113,7 @@
               services.backend-list = "app-amc.slice";
               services.rooted = "app-amc.slice";
               services.imaged = "app-amc.slice";
+              services.host-controls = "app-amc.slice";
               services.reset = "app-amc.slice";
               services.scalar-reset = "app-amc.slice";
               slices = ["agent-tools.slice"];
@@ -145,6 +159,8 @@ in
   assert config.systemd.services.rooted.serviceConfig.RootDirectory == "/srv/rooted";
   assert config.systemd.services.imaged.serviceConfig.RootImage == "/srv/root.img";
   assert !(config.systemd.services.rooted.serviceConfig.RootDirectoryStartOnly or false);
+  assert config.systemd.services.host-controls.serviceConfig.RootDirectoryStartOnly;
+  assert config.systemd.services.host-controls.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
   assert config.systemd.services.rooted.serviceConfig.User == "nobody";
   assert config.systemd.services.rooted.serviceConfig.ExecStartPost == "/bin/test -e /inside-root";
   assert config.systemd.services.rooted.serviceConfig.BindReadOnlyPaths == ["/srv/rooted-data:/data"];
@@ -173,6 +189,9 @@ in
   assert home.systemd.user.services.rooted.Service.BindReadOnlyPaths == ["/srv/user-data:/data"];
   assert home.systemd.user.services.rooted.Service.MemoryMax == "64M";
   assert home.systemd.user.services.rooted.Service.Restart == "on-failure";
+  assert home.systemd.user.services.host-controls.Service.RootDirectoryStartOnly == "yes";
+  assert home.systemd.user.services.host-controls.Service.ExecStartPre == ["${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
+  assert !(home.xdg.configFile ? "systemd/user/host-controls.service.d/50-direct-network-rooted-admission.conf");
   assert !(home.xdg.configFile ? "systemd/user/backend.service.d/50-direct-network-rooted-admission.conf");
   assert home.xdg.configFile."systemd/user/imaged.service.d/50-direct-network-rooted-admission.conf".source == home.xdg.configFile."systemd/user/rooted.service.d/50-direct-network-rooted-admission.conf".source;
   assert home.systemd.user.services.desktop.Service.ExecStartPre == "${pkgs.coreutils}/bin/true";
@@ -194,6 +213,7 @@ in
       test -e "$units/rooted.service"
       test -e "$units/imaged.service"
       test ! -e "$units/backup.service.d/50-direct-network-rooted-admission.conf"
+      test ! -e "$units/host-controls.service.d/50-direct-network-rooted-admission.conf"
       grep -Fx '[Service]' "$dropin"
       grep -Fx 'BindReadOnlyPaths=/run/direct-network' "$dropin"
       ! grep -Fx 'BindReadOnlyPaths=/nix/store' "$dropin"

@@ -25,8 +25,11 @@
   # RootDirectory/RootImage apply even to '+' commands. Keep readiness inline so
   # denial follows the payload's Restart= policy, and supply only the client's
   # runtime closure plus the live host socket directory inside alternate roots.
+  # Author-selected RootDirectoryStartOnly keeps all control commands on the
+  # host, so adding these binds would unnecessarily require image mount points.
   rootedConfig = service:
-    (service.RootDirectory or "") != "" || (service.RootImage or "") != "";
+    ((service.RootDirectory or "") != "" || (service.RootImage or "") != "")
+    && !(builtins.elem (lib.toLower (toString (service.RootDirectoryStartOnly or false))) ["1" "yes" "true" "on"]);
   rootedService = name: rootedConfig config.systemd.services.${name}.serviceConfig;
   binary = "${cfg.package}/bin/canix-toolbelt-direct-network";
   ready = "${binary} ready";

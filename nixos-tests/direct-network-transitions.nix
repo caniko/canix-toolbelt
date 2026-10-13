@@ -8,30 +8,40 @@
   systemctlFixture = pkgs.writeScript "direct-network-systemctl-fixture" ("#!${python}\n" + builtins.replaceStrings ["@SYSTEMCTL@"] ["${pkgs.systemd}/bin/systemctl"] (builtins.readFile ./direct-network-systemctl.py));
   nmcliFixture = pkgs.writeScript "direct-network-nmcli-fixture" ("#!${python}\n" + builtins.readFile ./direct-network-nmcli.py);
   package = pkgs.callPackage ../nix/package.nix {directNetwork = true;};
-  serviceRoot = pkgs.runCommand "direct-network-service-root" {} ''
-    mkdir -p "$out/bin" "$out/tmp" "$out/nix/store" "$out/run/direct-network" "$out/run/systemd/journal" "$out/run/host" "$out/dev" "$out/proc" "$out/sys"
-    # Only the fixture's shell/utility closure is in the image. The readiness
-    # client and its live socket must be supplied by the enrolled module.
-    while IFS= read -r path; do
-      cp -a "$path" "$out/nix/store/"
-    done < ${(pkgs.closureInfo {rootPaths = [pkgs.bash pkgs.coreutils];})}/store-paths
-    # Immutable roots must already contain bind mount points. Keep additional
-    # readiness contents absent so their read-only binds are still exercised.
-    while IFS= read -r path; do
-      if [ ! -e "$out$path" ]; then
-        if [ -d "$path" ]; then
-          mkdir -p "$out$path"
-        else
-          touch "$out$path"
-        fi
-      fi
-    done < ${(pkgs.closureInfo {rootPaths = [package];})}/store-paths
-    ln -s ${pkgs.bash}/bin/bash "$out/bin/sh"
-    touch "$out/inside-root"
-  '';
+  mkServiceRoot = readinessTargets:
+    pkgs.runCommand "direct-network-service-root${pkgs.lib.optionalString (!readinessTargets) "-unprepared"}" {} ''
+      mkdir -p "$out/bin" "$out/tmp" "$out/nix/store" "$out/run/systemd/journal" "$out/run/host" "$out/dev" "$out/proc" "$out/sys"
+      # Only the fixture's shell/utility closure is in the image. The readiness
+      # client and its live socket must be supplied by the enrolled module.
+      while IFS= read -r path; do
+        cp -a "$path" "$out/nix/store/"
+      done < ${(pkgs.closureInfo {rootPaths = [pkgs.bash pkgs.coreutils];})}/store-paths
+      ${pkgs.lib.optionalString readinessTargets ''
+        mkdir -p "$out/run/direct-network"
+        # Rooted control commands need bind mount points in immutable roots. The
+        # host-control fixture deliberately has none of these readiness targets.
+        while IFS= read -r path; do
+          if [ ! -e "$out$path" ]; then
+            if [ -d "$path" ]; then
+              mkdir -p "$out$path"
+            else
+              touch "$out$path"
+            fi
+          fi
+        done < ${(pkgs.closureInfo {rootPaths = [package];})}/store-paths
+      ''}
+      ln -s ${pkgs.bash}/bin/bash "$out/bin/sh"
+      touch "$out/inside-root"
+    '';
+  serviceRoot = mkServiceRoot true;
+  unpreparedRoot = mkServiceRoot false;
   serviceImage = pkgs.runCommand "direct-network-service-root.ext4" {nativeBuildInputs = [pkgs.e2fsprogs];} ''
     truncate -s 256M "$out"
     mkfs.ext4 -q -F -d ${serviceRoot} "$out"
+  '';
+  unpreparedImage = pkgs.runCommand "direct-network-service-root-unprepared.ext4" {nativeBuildInputs = [pkgs.e2fsprogs];} ''
+    truncate -s 256M "$out"
+    mkfs.ext4 -q -F -d ${unpreparedRoot} "$out"
   '';
   rootedService = {
     Type = "oneshot";
@@ -44,6 +54,17 @@
     ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo \"$INVOCATION_ID\" > /tmp/%N-invocation && echo payload > /tmp/%N-payload'";
     ExecStartPost = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo post > /tmp/%N-post'";
   };
+  hostControlService =
+    rootedService
+    // {
+      RootImage = unpreparedImage;
+      RootImageOptions = "root:ro,norecovery";
+      RootDirectoryStartOnly = true;
+      # Authored hooks explicitly use host paths, while ExecStart stays imaged.
+      ExecStartPre = ["${pkgs.bash}/bin/bash -c 'test ! -e /inside-root && test -S /run/direct-network/ready.sock && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo pre > /run/direct-network-root-state/%N-pre'"];
+      ExecStart = "/bin/sh -c 'test -e /inside-root && test ! -e /run/direct-network && test ! -e ${package} && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo \"$INVOCATION_ID\" > /tmp/%N-invocation && echo payload > /tmp/%N-payload'";
+      ExecStartPost = "${pkgs.bash}/bin/bash -c 'test ! -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo post > /run/direct-network-root-state/%N-post'";
+    };
 in
   pkgs.testers.runNixOSTest {
     name = "direct-network-transitions";
@@ -99,6 +120,7 @@ in
         systemServices.late-start = "canix-background.slice";
         systemServices.rooted-start = "canix-background.slice";
         systemServices.imaged-start = "canix-background.slice";
+        systemServices.host-controls-start = "canix-background.slice";
         systemServices.rooted-retry = "canix-background.slice";
       };
       home-manager.users.operator = {
@@ -152,6 +174,7 @@ in
           ExecStart = "/bin/sh -c 'test -e /inside-root && test \"$(${pkgs.coreutils}/bin/id -u)\" = 65534 && echo payload > /tmp/%N-payload && exec ${pkgs.coreutils}/bin/sleep infinity'";
         };
       systemd.services.rooted-retry.unitConfig.StartLimitIntervalSec = 0;
+      systemd.services.host-controls-start.serviceConfig = hostControlService;
       home-manager.users.operator.systemd.user.services.late-start.Service = {
         Type = "oneshot";
         ExecStartPre = ["${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/false" "" "${pkgs.coreutils}/bin/touch /home/operator/direct-network-late-user-pre"];

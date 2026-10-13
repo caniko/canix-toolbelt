@@ -10,6 +10,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Reject expiration on eligible direct routes before replay can make them
   permanent or extend their lifetime during reconciliation. Preserve omission
   of VPN/container-only and mixed routes.
+- Honor authored `RootDirectoryStartOnly` on enrolled services without adding
+  readiness binds to their images. Host-control admission supports immutable
+  images without pre-created readiness targets, while retaining imaged payloads.
 
 ## [0.5.0] - 2026-10-11
 

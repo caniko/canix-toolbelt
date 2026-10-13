@@ -231,13 +231,16 @@ machine.succeed(f'systemd-run --wait --pipe --collect --unit=resolver-privilege-
 machine.succeed('systemctl stop resolver-root-peer.service')
 negative_counter = pause_dns_admission_probes()
 # Repeated starts must rerun admission even though the slice anchor stays live.
-# Existing prechecks and payloads still execute inside RootDirectory/RootImage.
-for name in ['rooted-start', 'imaged-start']:
+# Authored hooks retain their root policy; payloads always retain their root.
+for name in ['rooted-start', 'imaged-start', 'host-controls-start']:
     previous = ''
     for _ in range(2):
-        if name == 'imaged-start':
-            machine.succeed('systemctl show imaged-start.service -p RootImageOptions --value | grep -Fx root:ro,norecovery')
+        if name in ['imaged-start', 'host-controls-start']:
+            machine.succeed(f'systemctl show {name}.service -p RootImageOptions --value | grep -Fx root:ro,norecovery')
             machine.succeed('systemctl log-level debug')
+        if name == 'host-controls-start':
+            machine.succeed('systemctl show host-controls-start.service -p RootDirectoryStartOnly --value | grep -Fx yes')
+            machine.succeed('test ! -e /etc/systemd/system/host-controls-start.service.d/50-direct-network-rooted-admission.conf')
         try:
             machine.succeed(f'systemctl start {name}.service')
         except Exception:
@@ -257,7 +260,7 @@ for name in ['rooted-start', 'imaged-start']:
                     logger.exception('Unable to retain image diagnostic for %s', command)
             raise
         finally:
-            if name == 'imaged-start':
+            if name in ['imaged-start', 'host-controls-start']:
                 # Do not mask the original error if even restoring the manager
                 # log level fails during fixture teardown.
                 try:
@@ -348,12 +351,12 @@ for mode, peer_user in [('tcp', 'root'), ('both', 'root'), ('missing-ipv6', 'roo
         machine.succeed('systemctl reset-failed late-start.service')
         machine.succeed(userctl + 'reset-failed late-start.service')
     if mode == 'both':
-        image_status, image_output = machine.execute('systemctl start imaged-start.service')
-        assert image_status == 1, (image_status, image_output)
-        machine.succeed('test "$(systemctl show imaged-start.service -p Result --value)" = exit-code')
-        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-pre')
-        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-payload')
-        machine.succeed('test ! -e /run/direct-network-root-state/imaged-start-invocation')
+        for image_name in ['imaged-start', 'host-controls-start']:
+            image_status, image_output = machine.execute(f'systemctl start {image_name}.service')
+            assert image_status == 1, (image_name, image_status, image_output)
+            machine.succeed(f'test "$(systemctl show {image_name}.service -p Result --value)" = exit-code')
+            for phase in ['pre', 'payload', 'invocation']:
+                machine.succeed(f'test ! -e /run/direct-network-root-state/{image_name}-{phase}')
         rooted_user_status, rooted_user_output = machine.execute(userctl + 'start rooted-user-start.service')
         assert rooted_user_status == 1, (rooted_user_status, rooted_user_output)
         for phase in ['pre', 'payload', 'post']:
@@ -373,9 +376,9 @@ check_direct()
 machine.wait_until_succeeds('test -e /run/direct-network-root-state/rooted-retry-payload', timeout=45)
 machine.wait_until_succeeds('grep -Fx post /run/direct-network-root-state/rooted-retry-post')
 machine.succeed('systemctl is-active rooted-retry.service')
-machine.succeed('systemctl reset-failed rooted-start.service imaged-start.service')
-machine.succeed('systemctl start rooted-start.service imaged-start.service')
-for name in ['rooted-start', 'imaged-start', 'rooted-retry']:
+machine.succeed('systemctl reset-failed rooted-start.service imaged-start.service host-controls-start.service')
+machine.succeed('systemctl start rooted-start.service imaged-start.service host-controls-start.service')
+for name in ['rooted-start', 'imaged-start', 'host-controls-start', 'rooted-retry']:
     machine.succeed(f'grep -Fx pre /run/direct-network-root-state/{name}-pre')
     machine.succeed(f'grep -Fx payload /run/direct-network-root-state/{name}-payload')
     machine.succeed(f'grep -Fx post /run/direct-network-root-state/{name}-post')
