@@ -5,6 +5,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject expiration on eligible direct routes before replay can make them
+  permanent or extend their lifetime during reconciliation. Preserve omission
+  of VPN/container-only and mixed routes.
+
 ## [0.5.0] - 2026-10-11
 
 ### Changed

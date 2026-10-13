@@ -39,6 +39,9 @@ Route-level `metrics` (such as path MTU, advertised MSS and congestion-control
 options) also reject an eligible snapshot before effects, for both single-path
 and ECMP routes. The ordinary route preference `metric` remains supported;
 unsupported path options are never silently dropped during replay.
+Eligible routes carrying `expires` also reject before any effects: copying a
+sampled remaining lifetime would make a route permanent or extend its expiration
+on every reconciliation. VPN/container-only and mixed paths remain omitted.
 Route or nexthop `flow` attributes (realms used by traffic-control classification)
 also reject an eligible snapshot before effects rather than losing that policy.
 An eligible route with a `tos` selector rejects before effects, preventing replay
