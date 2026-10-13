@@ -113,6 +113,19 @@ both logs to resolve inside the canonical run directory before reading them.
 Archive verification rejects special files through descriptor-based regular-file
 admission and normalizes leading `./` member prefixes while still rejecting
 duplicate real members and retaining symlink target text.
+The returned archive SHA-256 is calculated from the same opened byte stream used
+for verification, including bytes after tar EOF; replacing the path cannot pair
+a verified inventory with the digest of a replacement file. Changed descriptor
+length or modification time invalidates verification. The seal and historical
+receipt metadata themselves must also resolve inside their portable roots.
+
+Source export retains real directories traversed by relative link targets,
+including components cancelled by `..`, so `empty/../target` still resolves after
+extraction. Verification rejects archives missing those directories or treating
+a file/symlink as a required directory. Directory-symlink traversal is rejected
+because lexical cancellation would not preserve its filesystem semantics.
+Non-run CLI operations retain default SIGINT/SIGTERM termination; `run` alone
+installs cooperative handlers to drain its PID namespace and retain cancellation.
 
 Ubuntu 24.04 hosted qualification installs an ephemeral AppArmor `userns`
 permission specifically for `/nix/store/*/bin/unshare` through Simit's
@@ -120,6 +133,11 @@ permission specifically for `/nix/store/*/bin/unshare` through Simit's
 The package's mandatory namespace probe fails closed and reports UID/GID maps
 and the current AppArmor label when admission fails. A successful setup does not
 replace the package tests or the full installable/flake matrix.
+Native test concurrency is capped at two through Simit's `extra_env`, matching
+the hosted build-core budget while retaining all tests and their finite deadlines.
+The PID-1 binary shares only the minimal execution-report wire module with the
+library, avoiding the full operator dependency graph in its repeatedly hashed
+debug executable.
 
 The retained request records canonical command, tool, containment and working
 directory selections, plus the complete effective environment. Portable

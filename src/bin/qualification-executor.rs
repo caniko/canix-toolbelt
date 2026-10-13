@@ -1,6 +1,12 @@
 //! Private PID-namespace init for qualification. Not an operator frontend.
 #![deny(unsafe_code)]
 
+// Keep PID 1 independent of the full operator/library dependency graph. Its
+// binary is byte-hashed for each run; even debug builds must remain small.
+#[cfg(target_os = "linux")]
+#[path = "../qualification/execution.rs"]
+mod execution;
+
 #[cfg(target_os = "linux")]
 fn supervise() -> std::io::Result<i32> {
     use std::process::Command;
@@ -74,12 +80,13 @@ fn supervise() -> std::io::Result<i32> {
         Err(error) => return Err(error.into()),
     };
     use std::os::unix::process::ExitStatusExt;
-    let execution = canix_toolbelt::qualification::ExecutionReport {
+    let execution = execution::ExecutionReport {
         exit_code: status.code(),
         signal: status.signal(),
         descendants_drained: drained,
     };
-    let bytes = canix_toolbelt::qualification::json_bytes(&execution)?;
+    let mut bytes = serde_json::to_vec_pretty(&execution)?;
+    bytes.push(b'\n');
     let mut remaining = bytes.as_slice();
     while !remaining.is_empty() {
         let count = rustix::io::write(rustix::stdio::stdin(), remaining)?;

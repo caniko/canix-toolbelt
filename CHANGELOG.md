@@ -60,6 +60,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   contain mandatory artifacts during direct verification. Honor cancellation
   during final hashing, include initial capture in wall-clock timelines, reject
   special archive inputs and normalize standard tar `./` member prefixes.
+- Contain seal/historical receipt metadata, retain real directories traversed by
+  source symlinks, bind verified archive hashes to one descriptor and preserve
+  default termination signals for non-run commands. Keep the PID-1 report wire
+  contract independent of the operator library and budget hosted fixture concurrency.
 
 ## [0.5.0] - 2026-10-08
 

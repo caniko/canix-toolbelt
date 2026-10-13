@@ -32,7 +32,8 @@ pub struct LegacyVerification {
 /// Verify retained Python source/log/lock bytes without promoting their provenance contract.
 /// Optional historical external-input/tool hashes need their own artifact-index verification.
 pub fn verify_legacy_run(directory: &Path) -> io::Result<LegacyVerification> {
-    let receipt: LegacyReceipt = read_json(&directory.join("receipt.json"))?;
+    let root = directory.canonicalize()?;
+    let receipt: LegacyReceipt = read_json(&contained(&root, Path::new("receipt.json"))?)?;
     let mut index = ArtifactIndex::from([("source.json".into(), receipt.source_sha256.clone())]);
     match (
         receipt.stdout_sha256,
@@ -55,7 +56,7 @@ pub fn verify_legacy_run(directory: &Path) -> io::Result<LegacyVerification> {
     if let Some(hash) = receipt.lock_sha256 {
         index.insert("Cargo.lock".into(), hash);
     }
-    let artifacts_verified = verify_index(directory, &index)?;
+    let artifacts_verified = verify_index(&root, &index)?;
     Ok(LegacyVerification {
         acceptable: receipt.exit == 0
             && receipt.execution_exit.is_none_or(|exit| exit == 0)

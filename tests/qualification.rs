@@ -99,7 +99,15 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
                 .unwrap(),
         }),
     };
-    let receipt = q::execute(&request, &root.path().join("run"), &Default::default()).unwrap();
+    let receipt = q::execute(&request, &root.path().join("run"), &Default::default())
+        .unwrap_or_else(|error| {
+            panic!(
+                "fixture capture failed: {error}; timeout={timeout_seconds}s; executor bytes={}",
+                fs::metadata(&request.containment.as_ref().unwrap().executor)
+                    .unwrap()
+                    .len()
+            )
+        });
     (root, receipt)
 }
 
@@ -110,7 +118,12 @@ fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
     assert_eq!(
         receipt.status,
         q::RunStatus::Passed,
-        "stderr: {}",
+        "error: {:?}; elapsed: {}ms; executor bytes: {}; stderr: {}",
+        receipt.error,
+        receipt.elapsed_ms,
+        fs::metadata(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
+            .unwrap()
+            .len(),
         fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
     );
     assert_eq!(
@@ -1158,4 +1171,136 @@ fn native_execution_report_is_bound_and_cannot_claim_success_for_a_signal() {
     receipt.execution_report_sha256 = Some(q::sha256_file(&report_path).unwrap());
     fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
     assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn source_archives_preserve_link_resolution_directories() {
+    let root = tempdir().unwrap();
+    let out = tempdir().unwrap();
+    fs::write(root.path().join("target"), b"original").unwrap();
+    fs::create_dir(root.path().join("empty")).unwrap();
+    std::os::unix::fs::symlink("empty/../target", root.path().join("link")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["target".into(), "link".into()],
+    };
+    let archive = out.path().join("source.tar");
+    let expected = q::export_source(&spec, &archive).unwrap();
+    let extracted = out.path().join("extracted");
+    fs::create_dir(&extracted).unwrap();
+    tar::Archive::new(fs::File::open(&archive).unwrap())
+        .unpack(&extracted)
+        .unwrap();
+    assert_eq!(fs::read(extracted.join("link")).unwrap(), b"original");
+    assert!(extracted.join("empty").is_dir());
+    let broken = out.path().join("missing-dir.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&broken).unwrap());
+    builder
+        .append_path_with_name(root.path().join("target"), "target")
+        .unwrap();
+    builder
+        .append_path_with_name(root.path().join("link"), "link")
+        .unwrap();
+    builder.finish().unwrap();
+    assert!(q::verify_source_archive(&broken, &expected).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_receipt_metadata_cannot_live_outside_the_run() {
+    let root = tempdir().unwrap();
+    let external = tempdir().unwrap();
+    fs::write(root.path().join("source.json"), b"{}").unwrap();
+    fs::write(root.path().join("output.log"), b"output").unwrap();
+    let receipt = serde_json::json!({"exit":0, "sourceUnchanged":true,
+        "sourceSha256":q::sha256_file(&root.path().join("source.json")).unwrap(),
+        "logSha256":q::sha256_file(&root.path().join("output.log")).unwrap()});
+    let path = root.path().join("receipt.json");
+    fs::write(&path, q::json_bytes(&receipt).unwrap()).unwrap();
+    assert!(q::verify_legacy_run(root.path()).unwrap().acceptable);
+    fs::rename(&path, external.path().join("receipt.json")).unwrap();
+    std::os::unix::fs::symlink(external.path().join("receipt.json"), &path).unwrap();
+    assert!(q::verify_legacy_run(root.path()).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn seal_metadata_cannot_live_outside_the_handoff() {
+    let (root, receipt) = run_fixture("true", 5);
+    let request = q::SealRequest {
+        composition: receipt.composition.clone(),
+        gates: [("test".into(), root.path().join("run"))].into(),
+        expected_receipts: [(
+            "test".into(),
+            q::sha256_file(&root.path().join("run/receipt.json")).unwrap(),
+        )]
+        .into(),
+        artifacts: Default::default(),
+    };
+    let handoff = root.path().join("handoff");
+    q::seal(&request, &handoff).unwrap();
+    q::verify_seal(&handoff, &request.composition, &request.expected_receipts).unwrap();
+    let external = root.path().join("external-seal.json");
+    fs::rename(handoff.join("seal.json"), &external).unwrap();
+    std::os::unix::fs::symlink(external, handoff.join("seal.json")).unwrap();
+    assert!(q::verify_seal(&handoff, &request.composition, &request.expected_receipts).is_err());
+}
+
+#[cfg(all(target_os = "linux", feature = "qualification-cli"))]
+#[test]
+fn non_run_cli_operations_keep_default_termination_signals() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempdir().unwrap();
+    let fifo = root.path().join("metadata");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    for signal in [rustix::process::Signal::INT, rustix::process::Signal::TERM] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_canix-toolbelt"))
+            .args(["qualification", "parents"])
+            .arg(&fifo)
+            .arg("app")
+            .spawn()
+            .unwrap();
+        // Opening a writer proves the command reached its blocking metadata
+        // read after dispatch and signal setup, rather than signalling startup.
+        let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let writer = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+                .open(&fifo)
+            {
+                Ok(file) => break file,
+                Err(_) => {
+                    assert!(std::time::Instant::now() < ready_deadline);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        };
+        rustix::process::kill_process(
+            rustix::process::Pid::from_raw(child.id() as i32).unwrap(),
+            signal,
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("non-run command ignored {signal:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(signal.as_raw()));
+        drop(writer);
+    }
 }

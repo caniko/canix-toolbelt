@@ -12,6 +12,8 @@ use std::path::{Component, Path, PathBuf};
 
 mod receipt;
 pub use receipt::*;
+mod execution;
+pub use execution::ExecutionReport;
 pub mod graph;
 mod legacy;
 pub use legacy::*;

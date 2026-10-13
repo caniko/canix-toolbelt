@@ -68,8 +68,13 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         #[cfg(feature = "qualification")]
         Command::Qualification(command) => {
             let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-                signal_hook::flag::register(signal, std::sync::Arc::clone(&cancelled))?;
+            if matches!(
+                &command,
+                canix_toolbelt::qualification::cli::QualificationCommand::Run { .. }
+            ) {
+                for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+                    signal_hook::flag::register(signal, std::sync::Arc::clone(&cancelled))?;
+                }
             }
             let result = canix_toolbelt::qualification::cli::dispatch(command, &cancelled)?;
             serde_json::to_writer_pretty(std::io::stdout().lock(), &result.value)?;

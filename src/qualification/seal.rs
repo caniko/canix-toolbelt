@@ -134,7 +134,9 @@ pub fn verify_seal(
     expected: &Composition,
     required: &ArtifactIndex,
 ) -> io::Result<Seal> {
-    let seal: Seal = read_json(&directory.join("seal.json"))?;
+    let root = directory.canonicalize()?;
+    let directory = &root;
+    let seal: Seal = read_json(&contained(&root, Path::new("seal.json"))?)?;
     if seal.schema_version != 1
         || &seal.composition != expected
         || required.is_empty()
@@ -145,7 +147,6 @@ pub fn verify_seal(
         ));
     }
     verify_index(directory, &seal.artifacts)?;
-    let root = directory.canonicalize()?;
     for (name, hash) in &seal.gates {
         gate_label(name)?;
         for file in [
@@ -192,11 +193,39 @@ pub fn export_source(spec: &InventorySpec, archive: &Path) -> io::Result<Invento
             return Err(invalid("archive is inside selected source"));
         }
     }
+    let mut directories = std::collections::BTreeSet::new();
+    for (name, source) in &before.files {
+        add_parent_directories(name, &mut directories)?;
+        if let Some(link) = &source.link {
+            let (_, traversed) = link_walk(name, Path::new(link))?;
+            directories.extend(traversed);
+        }
+    }
+    for name in &directories {
+        // Lexical link walking is valid only for real directories. A directory
+        // symlink can change the meaning of a following '..'; reject that case.
+        if !fs::symlink_metadata(root.join(name))?.is_dir() {
+            return Err(invalid(
+                "source link traverses a non-directory or directory symlink",
+            ));
+        }
+    }
     let output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&destination)?;
     let mut builder = tar::Builder::new(output);
+    for name in &directories {
+        let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_mode(0o755);
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_cksum();
+        builder.append_data(&mut header, name, io::empty())?;
+    }
     for (name, source) in &before.files {
         let mut header = tar::Header::new_gnu();
         header.set_uid(0);
@@ -222,7 +251,19 @@ pub fn export_source(spec: &InventorySpec, archive: &Path) -> io::Result<Invento
     Ok(before)
 }
 
-fn normalized_link(name: &str, link: &Path) -> io::Result<String> {
+fn add_parent_directories(
+    name: &str,
+    directories: &mut std::collections::BTreeSet<String>,
+) -> io::Result<()> {
+    let mut parent = Path::new(name).parent();
+    while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
+        directories.insert(path_text(path)?);
+        parent = path.parent();
+    }
+    Ok(())
+}
+
+fn link_walk(name: &str, link: &Path) -> io::Result<(String, std::collections::BTreeSet<String>)> {
     if link.is_absolute() {
         return Err(invalid("absolute archive link"));
     }
@@ -232,9 +273,17 @@ fn normalized_link(name: &str, link: &Path) -> io::Result<String> {
         .components()
         .map(|p| p.as_os_str().to_owned())
         .collect();
-    for part in link.components() {
+    let mut directories = std::collections::BTreeSet::new();
+    add_parent_directories(name, &mut directories)?;
+    let mut components = link.components().peekable();
+    while let Some(part) = components.next() {
         match part {
-            Component::Normal(part) => parts.push(part.to_owned()),
+            Component::Normal(part) => {
+                parts.push(part.to_owned());
+                if components.peek().is_some() {
+                    directories.insert(path_text(&parts.iter().collect::<PathBuf>())?);
+                }
+            }
             Component::CurDir => {}
             Component::ParentDir => {
                 if parts.pop().is_none() {
@@ -244,19 +293,25 @@ fn normalized_link(name: &str, link: &Path) -> io::Result<String> {
             _ => return Err(invalid("invalid archive link")),
         }
     }
-    path_text(&parts.iter().collect::<PathBuf>())
+    Ok((path_text(&parts.iter().collect::<PathBuf>())?, directories))
 }
 
 /// Verify tar source bytes and filesystem semantics without extracting untrusted paths.
 /// Duplicate paths, hard links, devices, escaping links, and cyclic links are rejected.
 pub fn verify_source_archive(archive: &Path, expected: &Inventory) -> io::Result<()> {
+    verify_source_archive_sha256(archive, expected).map(|_| ())
+}
+
+/// Verify inventory and hash the exact byte stream parsed from one regular-file descriptor.
+pub fn verify_source_archive_sha256(archive: &Path, expected: &Inventory) -> io::Result<String> {
     if expected.schema_version != 1 || expected.files.is_empty() {
         return Err(invalid("invalid expected archive inventory"));
     }
-    if archive_inventory(archive)? != expected.files {
+    let (files, hash) = archive_inventory(archive)?;
+    if files != expected.files {
         return Err(invalid("archive inventory differs from qualified source"));
     }
-    Ok(())
+    Ok(hash)
 }
 
 /// Verify the historical Python path/content-hash map against a source tar.
@@ -266,6 +321,7 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
         return Err(invalid("legacy archive inventory is empty"));
     }
     let actual: ArtifactIndex = archive_inventory(archive)?
+        .0
         .into_iter()
         .map(|(name, file)| (name, file.sha256))
         .collect();
@@ -277,10 +333,38 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
     Ok(actual.len())
 }
 
-fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>> {
-    let mut tar = tar::Archive::new(regular_file(archive)?);
+fn archive_inventory(archive: &Path) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
+    archive_inventory_from_file(regular_file(archive)?)
+}
+
+fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
+    struct HashingReader<R> {
+        input: R,
+        hash: Sha256,
+        count: u64,
+    }
+    impl<R: Read> Read for HashingReader<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = self.input.read(buffer)?;
+            self.hash.update(&buffer[..count]);
+            self.count += count as u64;
+            Ok(count)
+        }
+    }
+    let before = file.metadata()?;
+    let bound = before
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| invalid("archive length cannot be bounded"))?;
+    let mut reader = HashingReader {
+        input: (&file).take(bound),
+        hash: Sha256::new(),
+        count: 0,
+    };
+    let mut tar = tar::Archive::new(&mut reader);
     let mut files = BTreeMap::new();
     let mut links = BTreeMap::new();
+    let mut directories = std::collections::BTreeSet::new();
     let mut seen_paths = std::collections::BTreeSet::new();
     for entry in tar.entries()? {
         let mut entry = entry?;
@@ -313,7 +397,9 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             return Err(invalid("duplicate archive path"));
         }
         let executable = entry.header().mode()? & 0o111 != 0;
+        add_parent_directories(&name, &mut directories)?;
         if kind.is_dir() {
+            directories.insert(name);
             continue;
         }
         let mut hash = Sha256::new();
@@ -322,7 +408,7 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
                 .link_name()?
                 .ok_or_else(|| invalid("missing archive link target"))?
                 .into_owned();
-            links.insert(name.clone(), normalized_link(&name, &link)?);
+            links.insert(name.clone(), link.clone());
             Some(path_text(&link)?)
         } else if kind.is_file() {
             let mut buffer = [0; 65536];
@@ -346,6 +432,21 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             },
         );
     }
+    if files.keys().any(|name| directories.contains(name)) {
+        return Err(invalid("archive file is also required as a directory"));
+    }
+    let links: BTreeMap<_, _> = links
+        .iter()
+        .map(|(name, link)| {
+            let (target, traversed) = link_walk(name, link)?;
+            if !traversed.is_subset(&directories) {
+                return Err(invalid(
+                    "archive omits a directory required by a link target",
+                ));
+            }
+            Ok((name.clone(), target))
+        })
+        .collect::<io::Result<_>>()?;
     for (name, target) in &links {
         let mut target = target;
         let mut seen = std::collections::BTreeSet::new();
@@ -365,5 +466,54 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
         file.sha256 = target_file.sha256;
         file.executable = target_file.executable;
     }
-    Ok(files)
+    io::copy(tar.into_inner(), &mut io::sink())?;
+    let after = file.metadata()?;
+    if reader.count != before.len()
+        || before.len() != after.len()
+        || before.modified()? != after.modified()?
+    {
+        return Err(invalid("archive changed during verification"));
+    }
+    Ok((files, format!("{:x}", reader.hash.finalize())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_archive_hash_stays_bound_when_the_path_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("source.tar");
+        let mut builder = tar::Builder::new(File::create(&path).unwrap());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(8);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "source", &b"original"[..])
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        // Include bytes after tar EOF: the returned identity covers the entire
+        // archive descriptor, including padding not interpreted as source.
+        use std::io::Write;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"trailing bytes")
+            .unwrap();
+        let original_hash = sha256_file(&path).unwrap();
+        let file = regular_file(&path).unwrap();
+        fs::rename(&path, root.path().join("original.tar")).unwrap();
+        fs::write(&path, b"replacement that was not verified").unwrap();
+        let (files, verified_hash) = archive_inventory_from_file(file).unwrap();
+        assert_eq!(verified_hash, original_hash);
+        assert_ne!(verified_hash, sha256_file(&path).unwrap());
+        assert_eq!(
+            files["source"].sha256,
+            format!("{:x}", Sha256::digest(b"original"))
+        );
+    }
 }

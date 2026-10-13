@@ -78,6 +78,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: |
           set -eu
           test "${RUNNER_ENVIRONMENT:-}" = github-hosted
@@ -135,6 +136,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: nix develop -c cargo publish --dry-run --locked --manifest-path "$RUNNER_TEMP/verified-canix-toolbelt/Cargo.toml"
       - name: Required gate crate-release
         timeout-minutes: 30
@@ -144,6 +146,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2
       - name: Required gate operator-regressions
         timeout-minutes: 30
@@ -153,6 +156,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh
       - name: Required gate generated-parity
         timeout-minutes: 30
@@ -162,6 +166,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
       - name: Required gate supported-systems
         timeout-minutes: 30
@@ -171,6 +176,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
       - name: Required gate roborev-worker
         timeout-minutes: 30
@@ -180,6 +186,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
   publish-canix-toolbelt:
     needs: [verify-canix-toolbelt]

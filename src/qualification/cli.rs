@@ -188,9 +188,9 @@ pub fn dispatch(
             result(&export_source(&read_json(&request)?, &out)?, true)
         }
         QualificationCommand::VerifyArchive { archive, inventory } => {
-            verify_source_archive(&archive, &read_json(&inventory)?)?;
+            let hash = verify_source_archive_sha256(&archive, &read_json(&inventory)?)?;
             result(
-                &serde_json::json!({"archiveSha256":sha256_file(&archive)?, "verified":true}),
+                &serde_json::json!({"archiveSha256":hash, "verified":true}),
                 true,
             )
         }
