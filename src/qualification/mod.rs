@@ -159,9 +159,25 @@ pub(crate) fn contained(root: &Path, path: &Path) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn path_text(path: &Path) -> io::Result<String> {
-    path.to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| invalid("non-UTF-8 paths cannot be represented in a portable inventory"))
+    path.components()
+        .map(|part| match part {
+            Component::Normal(name) => {
+                let text = name.to_str().ok_or_else(|| {
+                    invalid("non-UTF-8 paths cannot be represented in a portable inventory")
+                })?;
+                // Backslashes in Unix filenames are separators on Windows and
+                // cannot be encoded unambiguously by this portable wire format.
+                if text.contains('\\') {
+                    return Err(invalid("backslash in a portable path component"));
+                }
+                Ok(text.to_owned())
+            }
+            Component::CurDir => Ok(".".into()),
+            Component::ParentDir => Ok("..".into()),
+            _ => Err(invalid("absolute paths are not portable inventory paths")),
+        })
+        .collect::<io::Result<Vec<_>>>()
+        .map(|parts| parts.join("/"))
 }
 
 fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -> io::Result<()> {

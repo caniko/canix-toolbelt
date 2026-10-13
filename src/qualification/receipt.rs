@@ -411,6 +411,32 @@ pub fn execute(
         }
     }
     let (composition, inventories) = capture(request)?;
+    // Retain effective canonical selections so portable verification can compare
+    // the request with receipt identities without consulting the original host.
+    let mut effective_request = request.clone();
+    effective_request.cwd = cwd.clone();
+    effective_request.tools = request
+        .tools
+        .iter()
+        .map(|(name, path)| Ok((name.clone(), path.canonicalize()?)))
+        .collect::<io::Result<_>>()?;
+    effective_request.containment = Some(ContainmentPrograms {
+        unshare: containment["unshare"].path.clone(),
+        executor: containment["executor"].path.clone(),
+    });
+    let environment = build_environment(request);
+    effective_request.environment = environment.clone();
+    // Resolve before probes so the retained request binds the path selected from
+    // the effective PATH. Byte checks afterward detect changes during execution.
+    let executable = program(request, &environment);
+    if let Ok(executable) = &executable {
+        effective_request.command[0] = executable
+            .path
+            .to_str()
+            .ok_or_else(|| invalid("non-UTF-8 executable path"))?
+            .to_owned();
+    }
+    let request = &effective_request;
     fs::create_dir(&destination)?;
     write_json(&destination.join("request.json"), request)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
@@ -426,9 +452,9 @@ pub fn execute(
         stdout_sha256: String::new(),
         stderr_sha256: String::new(),
         tools: BTreeMap::new(),
-        executable: None,
+        executable: executable.as_ref().ok().cloned(),
         containment,
-        environment: build_environment(request),
+        environment,
         started_unix_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| invalid(e.to_string()))?
@@ -469,9 +495,8 @@ pub fn execute(
                 },
             );
         }
-        let executable = program(request, &receipt.environment)?;
+        let executable = executable?;
         let mut command = contained_command(&receipt.containment, &executable.path);
-        receipt.executable = Some(executable);
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
@@ -594,6 +619,44 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         if sha256_file(&directory.join(name))? != *hash {
             return Err(invalid(format!("receipt artifact changed: {name}")));
         }
+    }
+    let request: RunRequest = read_json(&directory.join("request.json"))?;
+    if request.command.is_empty()
+        || request.command[0].is_empty()
+        || !(1..=86400).contains(&request.timeout_seconds)
+        || request.tools.keys().ne(receipt.tools.keys())
+        || request.sources.keys().ne(receipt.inventories.keys())
+        || request.inputs.keys().ne(receipt.composition.inputs.keys())
+        || request.environment != receipt.environment
+    {
+        return Err(invalid("receipt requirements differ from retained request"));
+    }
+    let programs = request
+        .containment
+        .as_ref()
+        .ok_or_else(|| invalid("retained request lacks containment"))?;
+    // Retained requests carry canonical selections. Verification is portable and
+    // never resolves them on the machine reading the evidence.
+    for (name, path) in [
+        ("unshare", &programs.unshare),
+        ("executor", &programs.executor),
+    ] {
+        if receipt.containment.get(name).map(|identity| &identity.path) != Some(path) {
+            return Err(invalid(
+                "receipt containment selection differs from retained request",
+            ));
+        }
+    }
+    if receipt.executable.as_ref().map(|identity| &identity.path)
+        != Some(&PathBuf::from(&request.command[0]))
+        || request
+            .tools
+            .iter()
+            .any(|(name, path)| receipt.tools.get(name).map(|tool| &tool.path) != Some(path))
+    {
+        return Err(invalid(
+            "receipt tool selection differs from retained request",
+        ));
     }
     Ok(receipt)
 }

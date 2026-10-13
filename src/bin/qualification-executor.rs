@@ -36,21 +36,16 @@ fn supervise() -> std::io::Result<i32> {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    // Once the leader has been reaped, every remaining process (including an
-    // orphan reparented to PID 1, setsid/setpgid children and nested namespaces)
-    // is an incomplete execution. Exiting namespace init makes the kernel kill
-    // and wait for every remaining member before unshare can reap this process.
-    for entry in std::fs::read_dir("/proc")? {
-        let name = entry?.file_name();
-        if name
-            .to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-            .is_some_and(|pid| pid != 1)
-        {
-            return Ok(125);
-        }
+    // After reaping the leader, orphans have been reparented to PID 1. Consult
+    // kernel child accounting, not /proc, whose mount a privileged producer can
+    // replace. A live child, zombie, or unknown wait error invalidates completion.
+    // Exiting init makes the kernel kill/drain the whole namespace before the
+    // launcher can reap us. wait() uses waitpid(-1), covering all process groups.
+    match rustix::process::wait(rustix::process::WaitOptions::NOHANG) {
+        Err(rustix::io::Errno::CHILD) => Ok(status.code().unwrap_or(125)),
+        Ok(_) => Ok(125),
+        Err(error) => Err(error.into()),
     }
-    Ok(status.code().unwrap_or(125))
 }
 
 fn main() -> std::process::ExitCode {

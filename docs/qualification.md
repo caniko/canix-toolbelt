@@ -49,8 +49,10 @@ credentials are neither supplied nor serialized.
 Execution requires Linux user/PID/mount namespaces, a caller-selected util-linux
 `unshare` supporting `--forward-signals`, and the packaged native executor. Both
 containment binaries are hashed before execution and rechecked afterward. The
-executor is PID 1 with a namespace-local `/proc`; it rejects any descendants left
-after the command leader exits. Namespace init's exit causes the kernel to kill
+executor is PID 1 with a namespace-local `/proc`; after reaping the command
+leader, it checks kernel child accounting with `waitpid(-1, WNOHANG)`. Any live or
+zombie child invalidates completion, even if a privileged producer remounts
+`/proc`. Namespace init's exit causes the kernel to kill
 and drain all remaining processes, including `setsid`/`setpgid` descendants,
 before the launcher is reaped. Version probes use the same boundary and retain
 both stdout and stderr in the tool-version evidence. Cancellation/timeout asks
@@ -63,6 +65,15 @@ back to process groups. Inventory/archive/portable verification remain portable.
 New execution receipts use schema version 2. Version-1 execution receipts lacked
 this containment guarantee and cannot satisfy `verify-run` or a new sealed gate.
 Historical bytes remain evidence; do not rewrite them to the newer version.
+
+The retained request records canonical command, tool, containment and working
+directory selections, plus the complete effective environment. Portable
+verification parses that hash-bound request and checks tool/source/input labels,
+executable paths, containment paths and exact environment equality against the
+receipt, without resolving original host paths.
+Inventory keys and relative symlink targets use `/` between path components on
+every platform; Unix filenames containing literal backslashes are rejected as
+ambiguous in this portable format.
 
 `inventory --root ROOT --git` selects tracked and unignored untracked files via
 NUL-delimited Git output. Gitlinks require separate source selections. Explicit

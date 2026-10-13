@@ -47,6 +47,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   PATH entries, retain both version-output streams, require indexed and contained
   sealed gate evidence, reject incomplete Cargo resolve graphs, and export long
   symlink targets with deterministic GNU extended headers.
+- Detect descendants through kernel child accounting even if a privileged producer
+  replaces `/proc`; cross-check retained requests against receipt requirements and
+  encode inventory paths component-wise for cross-platform archive verification.
 
 ## [0.5.0] - 2026-10-08
 

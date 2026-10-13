@@ -103,7 +103,12 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
 #[test]
 fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
     let (root, receipt) = run_fixture("printf stdout; printf stderr >&2", 5);
-    assert_eq!(receipt.status, q::RunStatus::Passed);
+    assert_eq!(
+        receipt.status,
+        q::RunStatus::Passed,
+        "stderr: {}",
+        fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
+    );
     assert_eq!(
         q::verify_run(&root.path().join("run"), Some(&receipt.composition)).unwrap(),
         receipt
@@ -686,4 +691,117 @@ fn execution_is_rejected_before_spawn_without_native_containment() {
             .contains("Linux PID namespace")
     );
     assert!(!root.path().join("run").exists());
+}
+
+#[test]
+fn recursive_inventory_uses_portable_component_paths() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src/nested")).unwrap();
+    fs::write(root.path().join("src/nested/file"), b"portable").unwrap();
+    let recursive = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["src".into()],
+    };
+    let explicit = InventorySpec {
+        paths: vec!["src/nested/file".into()],
+        ..recursive.clone()
+    };
+    let snapshot = q::inventory(&recursive).unwrap();
+    assert_eq!(snapshot, q::inventory(&explicit).unwrap());
+    assert!(snapshot.files.contains_key("src/nested/file"));
+    let archive = root.path().join("source.tar");
+    q::export_source(&recursive, &archive).unwrap();
+    q::verify_source_archive(&archive, &snapshot).unwrap();
+    #[cfg(windows)]
+    assert_eq!(
+        snapshot,
+        q::inventory(&InventorySpec {
+            paths: vec![r"src\nested\file".into()],
+            ..recursive
+        })
+        .unwrap()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("tool");
+    fs::write(&tool, b"#!/bin/sh\nprintf version").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools.insert("shell".into(), tool);
+    request
+        .environment
+        .insert("RUSTFLAGS".into(), "explicit".into());
+    let directory = root.path().join("requirements");
+    let receipt = q::execute(&request, &directory, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed);
+    q::verify_run(&directory, None).unwrap();
+    for mutation in [
+        "tool",
+        "tool-path",
+        "environment",
+        "unshare",
+        "executor",
+        "command",
+    ] {
+        let mut changed = receipt.clone();
+        match mutation {
+            "tool" => {
+                changed.tools.clear();
+            }
+            "tool-path" => {
+                changed.tools.get_mut("shell").unwrap().path = "/different/tool".into();
+            }
+            "environment" => {
+                changed
+                    .environment
+                    .insert("RUSTFLAGS".into(), "different".into());
+            }
+            "unshare" | "executor" => {
+                changed.containment.get_mut(mutation).unwrap().path =
+                    "/different/containment".into();
+            }
+            "command" => {
+                changed.executable.as_mut().unwrap().path = "/different/command".into();
+            }
+            _ => unreachable!(),
+        }
+        fs::write(
+            directory.join("receipt.json"),
+            q::json_bytes(&changed).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            q::verify_run(&directory, None).is_err(),
+            "accepted {mutation}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
+    let root = tempdir().unwrap();
+    let unshare = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|p| p.join("unshare"))
+        .find(|p| p.is_file())
+        .unwrap();
+    let output = std::process::Command::new(unshare)
+        .args(["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "--kill-child=KILL", "--forward-signals", "--"])
+        .arg(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
+        .args(["/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
+        .current_dir(root.path()).output().unwrap();
+    assert_eq!(
+        output.stdout,
+        b"mounted",
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(125));
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(!root.path().join("late").exists());
 }
