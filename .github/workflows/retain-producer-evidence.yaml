@@ -16,7 +16,10 @@ concurrency:
 jobs:
   retain:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # The producer matrix admits two builds at a time. Its queue can outlive a
+    # two-hour observer even when the original jobs succeed; retain those jobs
+    # within GitHub's bounded six-hour hosted-job budget.
+    timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
