@@ -310,6 +310,113 @@ fn multipath_encapsulation_rejects_the_snapshot_instead_of_rewriting_forwarding(
 }
 
 #[test]
+fn destination_rewrites_reject_eligible_routes_and_each_multipath_hop() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for rewrite in [
+        serde_json::json!("192.0.2.10"),
+        serde_json::json!("2001:db8::10"),
+        serde_json::Value::Null,
+        serde_json::json!({"malformed":true}),
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"enp1s0"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2},
+                {"dev":"enp1s0","gateway":"192.0.2.2","weight":3}
+            ]}),
+        ] {
+            route["to"] = rewrite.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("destination rewrite"));
+        }
+        for index in 0..2 {
+            let mut route = serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2},
+                {"dev":"enp1s0","gateway":"192.0.2.2","weight":3}
+            ]});
+            route["nexthops"][index]["to"] = rewrite.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("destination rewrite"));
+        }
+    }
+    for route in [
+        serde_json::json!({"dst":"default","dev":"wg-proton","to":"192.0.2.10"}),
+        serde_json::json!({"dst":"default","to":"192.0.2.10","nexthops":[
+            {"dev":"enp1s0","to":"192.0.2.11"},
+            {"dev":"wg-proton"}
+        ]}),
+        serde_json::json!({"dst":"default","nexthops":[
+            {"dev":"wg-proton","to":"192.0.2.10"},
+            {"dev":"enp1s0"}
+        ]}),
+    ] {
+        assert!(
+            select_routes(&policy(), &links, &serde_json::json!([route]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn single_path_flags_reject_authored_pervasive_and_malformed_values() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for flags in [
+        serde_json::json!(["pervasive"]),
+        serde_json::json!(["onlink", "pervasive"]),
+        serde_json::json!(["future-authored-flag"]),
+        serde_json::json!([null]),
+        serde_json::json!("onlink"),
+        serde_json::Value::Null,
+    ] {
+        let route = serde_json::json!({"dst":"default","dev":"enp1s0","flags":flags});
+        let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+        assert!(error.to_string().contains("route flags"));
+        let omitted = serde_json::json!([
+            {"dst":"default","dev":"wg-proton","flags":flags},
+            {"dst":"default","flags":flags,"nexthops":[
+                {"dev":"enp1s0"}, {"dev":"wg-proton"}
+            ]}
+        ]);
+        assert!(
+            select_routes(&policy(), &links, &omitted)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn single_path_kernel_status_flags_preserve_authored_onlink() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for status in [
+        "dead",
+        "linkdown",
+        "unresolved",
+        "offload",
+        "trap",
+        "notify",
+        "rt_offload",
+        "rt_trap",
+        "rt_offload_failed",
+    ] {
+        for onlink in [false, true] {
+            let flags = if onlink {
+                vec![status, "onlink"]
+            } else {
+                vec![status]
+            };
+            let routes = serde_json::json!([
+                {"dst":"default","dev":"enp1s0","gateway":"192.0.2.1","flags":flags}
+            ]);
+            let selected = select_routes(&policy(), &links, &routes).unwrap();
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].onlink, onlink);
+        }
+    }
+}
+
+#[test]
 fn route_encapsulation_rejects_eligible_single_and_multipath_snapshots() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
     for mut route in [

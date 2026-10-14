@@ -240,6 +240,28 @@ fn direct_devices(policy: &Policy, links: &Value) -> Result<BTreeSet<String>> {
     Ok(devices)
 }
 
+fn supported_route_flags(flags: &Value) -> bool {
+    flags.as_array().is_some_and(|flags| {
+        flags.iter().all(|flag| {
+            matches!(
+                flag.as_str(),
+                Some(
+                    "onlink"
+                        | "dead"
+                        | "linkdown"
+                        | "unresolved"
+                        | "offload"
+                        | "trap"
+                        | "notify"
+                        | "rt_offload"
+                        | "rt_trap"
+                        | "rt_offload_failed"
+                )
+            )
+        })
+    })
+}
+
 /// Select direct routes, rejecting VPN/dummy/container interfaces and malformed data.
 pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<Vec<Route>> {
     let devices = direct_devices(policy, links)?;
@@ -276,6 +298,9 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             }
             hops.iter()
                 .map(|hop| {
+                    if hop.get("to").is_some() {
+                        return Err(invalid("unsupported multipath destination rewrite"));
+                    }
                     if hop.get("flow").is_some() {
                         return Err(invalid("unsupported multipath realms"));
                     }
@@ -294,27 +319,10 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
                     if gateway.is_some_and(|ip| ip.parse::<IpAddr>().is_err()) {
                         return Err(invalid("invalid multipath gateway"));
                     }
-                    if hop.get("flags").is_some_and(|flags| {
-                        !flags.as_array().is_some_and(|flags| {
-                            flags.iter().all(|flag| {
-                                matches!(
-                                    flag.as_str(),
-                                    Some(
-                                        "onlink"
-                                            | "dead"
-                                            | "linkdown"
-                                            | "unresolved"
-                                            | "offload"
-                                            | "trap"
-                                            | "notify"
-                                            | "rt_offload"
-                                            | "rt_trap"
-                                            | "rt_offload_failed"
-                                    )
-                                )
-                            })
-                        })
-                    }) {
+                    if hop
+                        .get("flags")
+                        .is_some_and(|flags| !supported_route_flags(flags))
+                    {
                         return Err(invalid("unsupported multipath flags"));
                     }
                     // iproute2 print_rt_flags includes kernel-derived status.
@@ -344,6 +352,17 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         } else {
             ""
         };
+        if route.get("to").is_some() {
+            return Err(invalid("unsupported direct route destination rewrite"));
+        }
+        // Authored pervasive cannot be discarded like kernel-derived status.
+        // Apply the same supported flag vocabulary at both projection levels.
+        if route
+            .get("flags")
+            .is_some_and(|flags| !supported_route_flags(flags))
+        {
+            return Err(invalid("unsupported direct route flags"));
+        }
         if route.get("encap").is_some() {
             return Err(invalid("unsupported direct route encapsulation"));
         }
