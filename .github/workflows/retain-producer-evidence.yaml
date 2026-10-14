@@ -29,6 +29,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Observe the existing attempt-1 producers and preserve raw evidence
+        # Stop observation before the job deadline so partial evidence can upload.
+        timeout-minutes: 345
         run: python3 scripts/retain-producer-evidence.py "$RUNNER_TEMP/producer-evidence"
       - name: Upload producer custody packet
         if: always()
