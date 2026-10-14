@@ -87,6 +87,8 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
         argument_zero: None,
         environment: Default::default(),
         tools: Default::default(),
+        tool_argument_zeros: Default::default(),
+        runtime_paths: Default::default(),
         timeout_seconds,
         containment: Some(q::ContainmentPrograms {
             unshare: std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -110,6 +112,270 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
             )
         });
     (root, receipt)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn version_probes_preserve_the_selected_tool_alias_in_retained_requests() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let alias = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("ls"))
+        .find(|path| path.is_file())
+        .unwrap();
+    request.tools.insert("ls".into(), alias.clone());
+    let expected = std::process::Command::new(&alias)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(expected.status.success());
+    let run = root.path().join("probe-alias");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(receipt.tools["ls"].version.as_bytes(), expected.stdout);
+    let retained: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    assert_eq!(retained.tool_argument_zeros["ls"], alias.to_str().unwrap());
+    assert_eq!(retained.tools["ls"], alias.canonicalize().unwrap());
+    q::verify_run(&run, Some(&receipt.composition)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn producers_cannot_read_unselected_host_secrets_or_connect_host_control_sockets() {
+    use std::os::{
+        linux::net::SocketAddrExt,
+        unix::net::{SocketAddr, UnixListener},
+    };
+    let (root, _) = run_fixture("true", 30);
+    let outside = tempdir().unwrap();
+    let secret = outside.path().join("credential");
+    fs::write(&secret, "private sentinel").unwrap();
+    let socket = outside.path().join("control.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let abstract_name = format!(
+        "qualification-test-{}",
+        root.path().file_name().unwrap().to_str().unwrap()
+    );
+    let abstract_listener =
+        UnixListener::bind_addr(&SocketAddr::from_abstract_name(abstract_name.as_bytes()).unwrap())
+            .unwrap();
+    abstract_listener.set_nonblocking(true).unwrap();
+    let source = root.path().join("isolation.c");
+    let helper = root.path().join("isolation");
+    fs::write(
+        &source,
+        format!(
+            r#"
+#include <assert.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+int main(void) {{
+    assert(access({secret:?}, F_OK) == -1);
+    const char *home = getenv("HOME");
+    assert(home && strlen(home) >= 10 && !strcmp(home+strlen(home)-10, "/work/home"));
+    struct sockaddr_un address = {{.sun_family = AF_UNIX}};
+    strcpy(address.sun_path, {socket:?});
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == -1);
+    close(fd);
+    memset(address.sun_path, 0, sizeof(address.sun_path));
+    strcpy(address.sun_path + 1, {abstract_name:?});
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(fd >= 0 && connect(fd, (struct sockaddr *)&address,
+        offsetof(struct sockaddr_un, sun_path)+1+strlen({abstract_name:?})) == -1);
+    close(fd);
+    return 0;
+}}
+"#,
+            secret = secret.to_str().unwrap(),
+            socket = socket.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let compiled = std::process::Command::new("cc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&helper)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command = vec![helper.to_str().unwrap().into()];
+    request.argument_zero = None;
+    let run = root.path().join("host-isolation");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(
+        receipt.status,
+        q::RunStatus::Passed,
+        "{receipt:#?}; {}",
+        fs::read_to_string(run.join("stderr.log")).unwrap()
+    );
+    assert!(listener.accept().is_err());
+    assert!(abstract_listener.accept().is_err());
+    assert_eq!(fs::read_to_string(secret).unwrap(), "private sentinel");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn producer_loader_settings_are_applied_only_after_containment() {
+    let (root, _) = run_fixture("true", 30);
+    let outside = tempdir().unwrap();
+    let marker = outside.path().join("loader-escaped");
+    let source = outside.path().join("loader.c");
+    let library = outside.path().join("loader.so");
+    fs::write(&source, format!("#include <stdio.h>\n__attribute__((constructor)) static void load(void) {{ FILE *f=fopen({:?}, \"w\"); if(f) {{ fputs(\"escaped\",f); fclose(f); }} }}\n",marker.to_str().unwrap())).unwrap();
+    let compiled = std::process::Command::new("cc")
+        .args(["-shared", "-fPIC"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request
+        .inputs
+        .insert("loader-fixture".into(), library.clone());
+    request
+        .environment
+        .insert("LD_PRELOAD".into(), library.to_str().unwrap().into());
+    request.command[2] = "test ! -e \"$ESCAPE_MARKER\"".into();
+    request
+        .environment
+        .insert("ESCAPE_MARKER".into(), marker.to_str().unwrap().into());
+    let run = root.path().join("loader-isolation");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(
+        receipt.status,
+        q::RunStatus::Passed,
+        "{receipt:#?}; {}",
+        fs::read_to_string(run.join("stderr.log")).unwrap()
+    );
+    assert!(!marker.exists(), "the loader ran outside confinement");
+    assert_eq!(receipt.environment["LD_PRELOAD"], library.to_str().unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn log_growth_is_bounded_and_exhaustion_cannot_verify_as_passed() {
+    let (root, receipt) = run_fixture(
+        "truncate -s 512M /proc/self/fd/1; truncate -s 1T /proc/self/fd/1; exit 0",
+        30,
+    );
+    assert!(
+        matches!(
+            receipt.status,
+            q::RunStatus::Failed | q::RunStatus::TimedOut
+        ),
+        "{receipt:#?}"
+    );
+    assert!(
+        fs::metadata(root.path().join("run/stdout.log"))
+            .unwrap()
+            .len()
+            <= 512 * 1024 * 1024
+    );
+    assert!(q::verify_run(&root.path().join("run"), None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn in_root_absolute_artifact_links_cannot_claim_portable_evidence() {
+    use std::os::unix::fs::symlink;
+    let (root, receipt) = run_fixture("true", 30);
+    let run = root.path().join("run");
+    for name in [
+        "receipt.json",
+        "request.json",
+        "execution.json",
+        "stdout.log",
+        "stderr.log",
+    ] {
+        let path = run.join(name);
+        let saved = run.join(format!("saved-{name}"));
+        fs::rename(&path, &saved).unwrap();
+        symlink(&saved, &path).unwrap();
+        assert!(
+            q::verify_run(&run, Some(&receipt.composition)).is_err(),
+            "{name}"
+        );
+        fs::remove_file(path).unwrap();
+        fs::rename(saved, run.join(name)).unwrap();
+    }
+    let index = [("stdout.log".into(), receipt.stdout_sha256)].into();
+    fs::rename(run.join("stdout.log"), run.join("saved.log")).unwrap();
+    symlink(run.join("saved.log"), run.join("stdout.log")).unwrap();
+    assert!(q::verify_index(&run, &index).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn artifact_indexes_reject_nonportable_backslash_and_drive_names() {
+    let root = tempdir().unwrap();
+    for name in ["foo\\bar", "C:artifact"] {
+        let path = root.path().join(name);
+        fs::write(&path, b"artifact").unwrap();
+        let index = [(name.into(), q::sha256_file(&path).unwrap())].into();
+        assert!(q::verify_index(root.path(), &index).is_err());
+    }
+}
+
+#[cfg(feature = "qualification-cli")]
+#[test]
+fn git_inventory_ignores_foreign_repository_environment() {
+    let root = tempdir().unwrap();
+    let foreign = tempdir().unwrap();
+    for dir in [root.path(), foreign.path()] {
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(root.path().join("original"), "original").unwrap();
+    fs::write(root.path().join("shadow"), "shadow").unwrap();
+    fs::write(foreign.path().join("shadow"), "foreign").unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(foreign.path())
+            .args(["add", "shadow"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_canix-toolbelt"))
+        .args(["qualification", "inventory", "--root"])
+        .arg(root.path())
+        .arg("--git")
+        .env("GIT_DIR", foreign.path().join(".git"))
+        .env("GIT_WORK_TREE", foreign.path())
+        .env("GIT_INDEX_FILE", foreign.path().join(".git/index"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let selected: q::Inventory = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(selected.files.contains_key("original"));
 }
 
 #[cfg(target_os = "linux")]
@@ -759,6 +1025,8 @@ fn execution_is_rejected_before_spawn_without_native_containment() {
         argument_zero: None,
         environment: Default::default(),
         tools: Default::default(),
+        tool_argument_zeros: Default::default(),
+        runtime_paths: Default::default(),
         timeout_seconds: 1,
         containment: None,
     };
@@ -864,31 +1132,21 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
 #[cfg(target_os = "linux")]
 #[test]
 fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
-    let root = tempdir().unwrap();
-    let work = root.path().join("work");
-    fs::create_dir(&work).unwrap();
-    let setpriv = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|p| p.join("setpriv"))
-        .find(|p| p.is_file())
-        .unwrap();
-    let unshare = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|p| p.join("unshare"))
-        .find(|p| p.is_file())
-        .unwrap();
-    let output = std::process::Command::new(unshare)
-        .args(["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "--kill-child=KILL", "--forward-signals", "--"])
-        .arg(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
-        .arg(&work).arg(setpriv)
-        .stdin(fs::File::create(root.path().join("execution.json")).unwrap())
-        .args(["/bin/sh", "/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
-        .current_dir(root.path()).output().unwrap();
+    let (root, receipt) = run_fixture(
+        "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted",
+        10,
+    );
     assert_eq!(
-        output.status.code(),
+        receipt.execution_exit,
         Some(99),
         "{}",
-        String::from_utf8_lossy(&output.stderr)
+        fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
     );
-    assert!(output.stdout.is_empty());
+    assert!(
+        fs::read(root.path().join("run/stdout.log"))
+            .unwrap()
+            .is_empty()
+    );
     std::thread::sleep(std::time::Duration::from_millis(1200));
     assert!(!root.path().join("late").exists());
 }
@@ -1198,13 +1456,13 @@ fn cancellation_during_log_finalization_never_commits_passed_evidence() {
     let receipt = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &run, &cancel).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        // A complete native report means the producer has exited. Small source
-        // recapture finishes before the retained sparse log finishes hashing.
-        while q::read_json::<q::ExecutionReport>(&run.join("execution.json")).is_err() {
+        // Native progress is published only after final composition capture.
+        // Do not guess that capture finished after an arbitrary sleep on a
+        // loaded runner; cancel while the bounded sparse log is being hashed.
+        while q::read_json::<serde_json::Value>(&run.join("finalizing.json")).is_err() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        std::thread::sleep(std::time::Duration::from_millis(75));
         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         task.join().unwrap()
     });

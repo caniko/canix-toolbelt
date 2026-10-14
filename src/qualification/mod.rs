@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
+mod boundary;
 mod receipt;
 pub use receipt::*;
 mod coverage;
@@ -139,6 +140,40 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
     serde_json::from_reader(regular_file(path)?).map_err(invalid_json)
 }
 
+// Parse exactly the bytes whose independently selected digest was checked.
+// Reopening the path after hashing would allow another attempt to substitute
+// its passing document. Bound the read even if a concurrent writer grows it.
+pub(crate) fn read_bound_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    expected: Option<&str>,
+) -> io::Result<T> {
+    let file = regular_file(path)?;
+    read_bound_json_file(file, expected)
+}
+
+fn read_bound_json_file<T: serde::de::DeserializeOwned>(
+    file: File,
+    expected: Option<&str>,
+) -> io::Result<T> {
+    let before = file.metadata()?;
+    if before.len() > 64 * 1024 * 1024 {
+        return Err(invalid("evidence JSON exceeds 64 MiB"));
+    }
+    let mut bytes = Vec::new();
+    (&file).take(before.len() + 1).read_to_end(&mut bytes)?;
+    let after = file.metadata()?;
+    if bytes.len() as u64 != before.len()
+        || after.len() != before.len()
+        || before.modified()? != after.modified()?
+    {
+        return Err(invalid("evidence JSON changed while reading"));
+    }
+    if expected.is_some_and(|hash| format!("{:x}", Sha256::digest(&bytes)) != hash) {
+        return Err(invalid("selected evidence JSON digest differs"));
+    }
+    serde_json::from_slice(&bytes).map_err(invalid_json)
+}
+
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     use std::io::Write;
     let mut file = fs::OpenOptions::new()
@@ -156,6 +191,7 @@ pub fn fingerprint(value: &impl Serialize) -> io::Result<String> {
 
 pub(crate) fn relative(path: &Path) -> io::Result<()> {
     if path.as_os_str().is_empty()
+        || path_text(path)?.contains(['\\', ':'])
         || path
             .components()
             .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
@@ -166,6 +202,29 @@ pub(crate) fn relative(path: &Path) -> io::Result<()> {
         )));
     }
     Ok(())
+}
+
+pub(crate) fn artifact_key(name: &str) -> io::Result<()> {
+    if name.contains(['\\', ':']) {
+        return Err(invalid("artifact keys must use slash-only portable paths"));
+    }
+    relative(Path::new(name))
+}
+
+// Retained evidence must survive relocation. Disallow symlink hops, including
+// in-root absolute links and directory links, rather than following host paths.
+pub(crate) fn evidence_path(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    relative(path)?;
+    let mut selected = root.to_path_buf();
+    for part in path.components() {
+        if let Component::Normal(name) = part {
+            selected.push(name);
+            if fs::symlink_metadata(&selected)?.file_type().is_symlink() {
+                return Err(invalid("symlinks are not portable evidence artifacts"));
+            }
+        }
+    }
+    contained(root, path)
 }
 
 pub(crate) fn contained(root: &Path, path: &Path) -> io::Result<PathBuf> {
@@ -295,6 +354,16 @@ pub(crate) fn inventory_checked(
 /// Gitlinks require an explicit independent inventory, rather than hidden recursion.
 pub fn git_inventory_spec(root: &Path, git: &Path) -> io::Result<InventorySpec> {
     let output = std::process::Command::new(git)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_NAMESPACE")
+        .env_remove("GIT_PREFIX")
+        .env_remove("GIT_CEILING_DIRECTORIES")
+        .env_remove("GIT_DISCOVERY_ACROSS_FILESYSTEM")
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z", "-co", "--exclude-standard"])
@@ -334,9 +403,29 @@ pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
     }
     let root = root.canonicalize()?;
     for (path, expected) in index {
-        if sha256_file(&contained(&root, Path::new(path))?)? != *expected {
+        artifact_key(path)?;
+        if sha256_file(&evidence_path(&root, Path::new(path))?)? != *expected {
             return Err(invalid(format!("artifact hash mismatch: {path}")));
         }
     }
     Ok(index.len())
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn selected_json_cannot_be_replaced_by_a_different_attempt_after_open() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("receipt.json");
+        fs::write(&path, br#"{"status":"failed"}"#).unwrap();
+        let expected = sha256_file(&path).unwrap();
+        let selected = regular_file(&path).unwrap();
+        fs::rename(&path, root.path().join("selected.json")).unwrap();
+        fs::write(&path, br#"{"status":"passed"}"#).unwrap();
+        let observed: serde_json::Value = read_bound_json_file(selected, Some(&expected)).unwrap();
+        assert_eq!(observed["status"], "failed");
+        assert!(read_bound_json::<serde_json::Value>(&path, Some(&expected)).is_err());
+    }
 }

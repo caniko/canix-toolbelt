@@ -33,7 +33,7 @@ pub struct LegacyVerification {
 /// Optional historical external-input/tool hashes need their own artifact-index verification.
 pub fn verify_legacy_run(directory: &Path) -> io::Result<LegacyVerification> {
     let root = directory.canonicalize()?;
-    let receipt: LegacyReceipt = read_json(&contained(&root, Path::new("receipt.json"))?)?;
+    let receipt: LegacyReceipt = read_json(&evidence_path(&root, Path::new("receipt.json"))?)?;
     let mut index = ArtifactIndex::from([("source.json".into(), receipt.source_sha256.clone())]);
     match (
         receipt.stdout_sha256,

@@ -37,6 +37,13 @@ pub struct RunRequest {
     /// Explicit tool paths whose bytes and --version output are retained.
     #[serde(default)]
     pub tools: BTreeMap<String, PathBuf>,
+    /// Optional tool argv[0] overrides; retained requests bind every effective alias.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_argument_zeros: BTreeMap<String, String>,
+    /// Explicit extra read-only runtime dependencies. Caller-readable home and
+    /// host-control paths are otherwise absent from the producer filesystem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_paths: Vec<PathBuf>,
     /// Required finite deadline in seconds.
     pub timeout_seconds: u64,
     /// Explicit namespace launcher and native supervisor. Required for execution.
@@ -90,7 +97,7 @@ pub struct ToolEvidence {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Receipt {
-    /// Receipt format version, currently 4. Earlier versions lacked descriptor hygiene.
+    /// Receipt format version, currently 5. Earlier versions exposed host files and sockets.
     pub schema_version: u32,
     /// Effective execution disposition.
     pub status: RunStatus,
@@ -342,6 +349,8 @@ fn contained_command(
     executable: &Path,
     argument_zero: &std::ffi::OsStr,
     work: &Path,
+    boundary: &Path,
+    max_log_bytes: u64,
 ) -> Command {
     let mut command = Command::new(&tools["unshare"].path);
     command
@@ -349,6 +358,8 @@ fn contained_command(
             "--user",
             "--map-root-user",
             "--pid",
+            "--net",
+            "--ipc",
             "--fork",
             "--mount-proc",
             "--kill-child=KILL",
@@ -357,6 +368,8 @@ fn contained_command(
         ])
         .arg(&tools["executor"].path)
         .arg(work)
+        .arg(boundary)
+        .arg(max_log_bytes.to_string())
         .arg(&tools["setpriv"].path)
         .arg(executable)
         .arg(argument_zero);
@@ -364,7 +377,7 @@ fn contained_command(
 }
 
 fn tool_version(
-    program: &Path,
+    tool: (&Path, &str),
     request: &RunRequest,
     cancelled: &AtomicBool,
     directory: &Path,
@@ -372,19 +385,22 @@ fn tool_version(
     deadline: Instant,
     receipt: &Receipt,
 ) -> io::Result<Vec<u8>> {
+    let (program, argument_zero) = tool;
     let path = directory.join(name);
     let stderr_path = directory.join(format!("{name}.stderr"));
     let mut command = contained_command(
         &receipt.containment,
         program,
-        program.as_os_str(),
+        std::ffi::OsStr::new(argument_zero),
         &directory.join("work"),
+        &directory.join("boundary.json"),
+        1024 * 1024,
     );
     command
         .arg("--version")
         .current_dir(&request.cwd)
         .env_clear()
-        .envs(&receipt.environment)
+        .env("LANG", "C")
         .stdin(
             fs::OpenOptions::new()
                 .write(true)
@@ -487,6 +503,32 @@ pub fn execute(
             .unwrap_or_else(|| request.command[0].clone()),
     );
     effective_request.cwd = cwd.clone();
+    effective_request.inputs = request
+        .inputs
+        .iter()
+        .map(|(name, path)| Ok((name.clone(), path.canonicalize()?)))
+        .collect::<io::Result<_>>()?;
+    if request
+        .tool_argument_zeros
+        .keys()
+        .any(|name| !request.tools.contains_key(name))
+    {
+        return Err(invalid("tool argument zero has no selected tool"));
+    }
+    effective_request.tool_argument_zeros = request
+        .tools
+        .iter()
+        .map(|(name, path)| {
+            let alias = request
+                .tool_argument_zeros
+                .get(name)
+                .cloned()
+                .or_else(|| path.to_str().map(str::to_owned))
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| invalid("invalid tool argument zero"))?;
+            Ok((name.clone(), alias))
+        })
+        .collect::<io::Result<_>>()?;
     effective_request.tools = request
         .tools
         .iter()
@@ -520,6 +562,22 @@ pub fn execute(
             .ok_or_else(|| invalid("non-UTF-8 work path"))?
             .into(),
     );
+    environment.insert(
+        "HOME".into(),
+        work.join("home")
+            .to_str()
+            .ok_or_else(|| invalid("non-UTF-8 home path"))?
+            .into(),
+    );
+    if !request.environment.contains_key("CARGO_HOME") {
+        environment.insert(
+            "CARGO_HOME".into(),
+            work.join("cargo-home")
+                .to_str()
+                .ok_or_else(|| invalid("non-UTF-8 Cargo home path"))?
+                .into(),
+        );
+    }
     if !request.environment.contains_key("CARGO_TARGET_DIR") {
         environment.insert(
             "CARGO_TARGET_DIR".into(),
@@ -543,10 +601,63 @@ pub fn execute(
     let request = &effective_request;
     fs::create_dir(&destination)?;
     fs::create_dir(&work)?;
+    fs::create_dir(work.join("home"))?;
+    fs::create_dir(work.join("cargo-home"))?;
+    let sandbox = destination.join("sandbox");
+    fs::create_dir(&sandbox)?;
+    // Public system runtime trees supply dynamic loaders and standard tools;
+    // neither the host home, /etc nor host /run is recursively exposed.
+    let mut read_only_paths: Vec<PathBuf> = [
+        "/nix/store",
+        "/bin",
+        "/usr/bin",
+        "/usr/lib",
+        "/usr/lib64",
+        "/lib",
+        "/lib64",
+        "/run/current-system/sw",
+        "/dev/null",
+        "/dev/zero",
+        "/dev/random",
+        "/dev/urandom",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .filter(|path| path.exists())
+    .collect();
+    for spec in request.sources.values() {
+        let root = spec.root.canonicalize()?;
+        for path in &spec.paths {
+            read_only_paths.push(root.join(path));
+        }
+    }
+    read_only_paths.extend(request.inputs.values().cloned());
+    read_only_paths.extend(request.tools.values().cloned());
+    read_only_paths.extend(containment.values().map(|program| program.path.clone()));
+    if let Ok(program) = &executable {
+        read_only_paths.push(program.path.clone());
+    }
+    read_only_paths.extend(request.runtime_paths.iter().cloned());
+    if read_only_paths
+        .iter()
+        .any(|path| !path.is_absolute() || path == Path::new("/"))
+    {
+        return Err(invalid(
+            "runtime mounts must be absolute paths below the host root",
+        ));
+    }
+    write_json(
+        &destination.join("boundary.json"),
+        &super::boundary::Boundary {
+            read_only_paths,
+            environment: environment.clone(),
+            sandbox,
+        },
+    )?;
     write_json(&destination.join("request.json"), request)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
     let mut receipt = Receipt {
-        schema_version: 4,
+        schema_version: 5,
         status: RunStatus::Pending,
         execution_exit: None,
         execution_signal: None,
@@ -580,7 +691,7 @@ pub fn execute(
             let path = path.canonicalize()?;
             let sha256 = sha256_file_checked(&path, &mut check)?;
             let output = tool_version(
-                &path,
+                (&path, &request.tool_argument_zeros[name]),
                 request,
                 cancelled,
                 &destination,
@@ -609,12 +720,14 @@ pub fn execute(
                     .unwrap_or(&request.command[0]),
             ),
             &work,
+            &destination.join("boundary.json"),
+            super::boundary::MAX_LOG_BYTES,
         );
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
             .env_clear()
-            .envs(&receipt.environment)
+            .env("LANG", "C")
             .stdin(
                 fs::OpenOptions::new()
                     .write(true)
@@ -679,6 +792,13 @@ pub fn execute(
     {
         receipt.status = RunStatus::TimedOut;
     }
+    if ["stdout.log", "stderr.log"].into_iter().any(|name| {
+        fs::metadata(destination.join(name))
+            .is_ok_and(|metadata| metadata.len() >= super::boundary::MAX_LOG_BYTES)
+    }) {
+        receipt.status = RunStatus::Failed;
+        receipt.error = Some("producer reached the 512 MiB per-stream output limit".into());
+    }
     match capture(request, &mut check) {
         Ok((after, _)) => {
             if after != receipt.composition {
@@ -697,6 +817,12 @@ pub fn execute(
     }
     // Tool and log finalization share a single finite cleanup budget, including
     // the failed/cancelled case where the producer's execution deadline elapsed.
+    write_json(
+        &destination.join("finalizing.json"),
+        &serde_json::json!({
+            "phase": "finalizing", "status": receipt.status, "after": receipt.after,
+        }),
+    )?;
     let finalize_deadline = Instant::now() + Duration::from_secs(5);
     let mut finalize = || {
         if cancelled.load(Ordering::Relaxed) {
@@ -755,17 +881,156 @@ pub fn execute(
     if receipt.status == RunStatus::Passed && Instant::now() >= deadline {
         receipt.status = RunStatus::TimedOut;
     }
-    receipt.elapsed_ms = started.elapsed().as_millis();
     if cancelled.load(Ordering::Relaxed) {
         receipt.status = RunStatus::Cancelled;
     }
-    write_json(&destination.join("receipt.json"), &receipt)?;
+    publish_receipt(&destination, &mut receipt, started, deadline, cancelled)?;
     Ok(receipt)
+}
+
+// Publish only after cooperative serialization, bounded writes and durable sync.
+// Cancellation/expiry during publication discards the staged passing document;
+// a retry may retain a non-accepting disposition within a fresh cleanup budget.
+fn publish_receipt(
+    directory: &Path,
+    receipt: &mut Receipt,
+    started: Instant,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let cleanup = Instant::now() + Duration::from_secs(5);
+    let staged = directory.join("receipt.pending.json");
+    loop {
+        let passed = receipt.status == RunStatus::Passed;
+        let mut check = || {
+            if passed && cancelled.load(Ordering::Relaxed) {
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "receipt publication cancelled",
+                ))
+            } else if Instant::now()
+                >= if passed {
+                    deadline.min(cleanup)
+                } else {
+                    cleanup
+                }
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "receipt publication deadline exceeded",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let outcome = (|| -> io::Result<()> {
+            // A fixed-width numeric slot permits a final elapsed-time update
+            // without serializing the entire inventory again after disk sync.
+            receipt.elapsed_ms = u128::MAX;
+            let mut bytes = Vec::new();
+            {
+                let mut writer = CheckedWriter {
+                    inner: &mut bytes,
+                    check: &mut check,
+                    count: 0,
+                };
+                serde_json::to_writer_pretty(&mut writer, &receipt).map_err(|error| {
+                    io::Error::new(
+                        error.io_error_kind().unwrap_or(io::ErrorKind::InvalidData),
+                        error,
+                    )
+                })?;
+                writer.write_all(b"\n")?;
+            }
+            let marker = format!("\"elapsedMs\": {}", u128::MAX);
+            let offset = bytes
+                .windows(marker.len())
+                .rposition(|window| window == marker.as_bytes())
+                .ok_or_else(|| invalid("missing elapsed time slot"))?
+                + "\"elapsedMs\": ".len();
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged)?;
+            for chunk in bytes.chunks(65536) {
+                check()?;
+                file.write_all(chunk)?;
+            }
+            file.sync_all()?;
+            check()?;
+            receipt.elapsed_ms = started.elapsed().as_millis();
+            let elapsed = format!("{:<39}", receipt.elapsed_ms);
+            file.seek(SeekFrom::Start(offset as u64))?;
+            file.write_all(elapsed.as_bytes())?;
+            file.sync_all()?;
+            check()?;
+            fs::rename(&staged, directory.join("receipt.json"))?;
+            Ok(())
+        })();
+        match outcome {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if staged.exists() {
+                    fs::remove_file(&staged)?;
+                }
+                if !passed {
+                    return Err(error);
+                }
+                receipt.status = match error.kind() {
+                    io::ErrorKind::Interrupted => RunStatus::Cancelled,
+                    io::ErrorKind::TimedOut => RunStatus::TimedOut,
+                    _ => RunStatus::Failed,
+                };
+                receipt.error = Some(error.to_string());
+            }
+        }
+    }
+}
+
+struct CheckedWriter<'a, W, F> {
+    inner: &'a mut W,
+    check: &'a mut F,
+    count: usize,
+}
+impl<W: io::Write, F: FnMut() -> io::Result<()>> io::Write for CheckedWriter<'_, W, F> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        (self.check)()?;
+        if self.count.saturating_add(bytes.len()) > 64 * 1024 * 1024 {
+            return Err(invalid("evidence JSON exceeds 64 MiB"));
+        }
+        let written = self.inner.write(bytes)?;
+        self.count += written;
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        (self.check)()?;
+        self.inner.flush()
+    }
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        // Write's default implementation retries Interrupted indefinitely.
+        // Cooperative cancellation must escape serialization, not be retried.
+        (self.check)()?;
+        if self.count.saturating_add(bytes.len()) > 64 * 1024 * 1024 {
+            return Err(invalid("evidence JSON exceeds 64 MiB"));
+        }
+        self.inner.write_all(bytes)?;
+        self.count += bytes.len();
+        Ok(())
+    }
 }
 
 /// Verify completed receipt integrity and, when supplied, the required immutable composition.
 /// This is portable evidence verification; it does not rerun commands or trust signatures.
 pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Result<Receipt> {
+    verify_run_bound(directory, expected, None)
+}
+
+pub(crate) fn verify_run_bound(
+    directory: &Path,
+    expected: Option<&Composition>,
+    receipt_sha256: Option<&str>,
+) -> io::Result<Receipt> {
     let root = directory.canonicalize()?;
     for name in [
         "receipt.json",
@@ -774,11 +1039,11 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         "stdout.log",
         "stderr.log",
     ] {
-        contained(&root, Path::new(name))?;
+        evidence_path(&root, Path::new(name))?;
     }
     let directory = &root;
-    let receipt: Receipt = read_json(&directory.join("receipt.json"))?;
-    if receipt.schema_version != 4
+    let receipt: Receipt = read_bound_json(&directory.join("receipt.json"), receipt_sha256)?;
+    if receipt.schema_version != 5
         || receipt.composition.schema_version != 1
         || receipt.status != RunStatus::Passed
         || receipt.execution_exit != Some(0)
@@ -798,10 +1063,15 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         ));
     }
     let report_path = directory.join("execution.json");
-    if Some(sha256_file(&report_path)?) != receipt.execution_report_sha256 {
-        return Err(invalid("native execution report identity differs"));
-    }
-    let report: ExecutionReport = read_json(&report_path)?;
+    let report: ExecutionReport = read_bound_json(
+        &report_path,
+        Some(
+            receipt
+                .execution_report_sha256
+                .as_deref()
+                .ok_or_else(|| invalid("missing native execution report identity"))?,
+        ),
+    )?;
     if report.exit_code != Some(0) || report.signal.is_some() || !report.descendants_drained {
         return Err(invalid("native execution report did not confirm success"));
     }
@@ -817,7 +1087,6 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         return Err(invalid("missing source inventories"));
     }
     for (name, hash) in [
-        ("request.json", &receipt.request_sha256),
         ("stdout.log", &receipt.stdout_sha256),
         ("stderr.log", &receipt.stderr_sha256),
     ] {
@@ -825,12 +1094,17 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
             return Err(invalid(format!("receipt artifact changed: {name}")));
         }
     }
-    let request: RunRequest = read_json(&directory.join("request.json"))?;
+    let request: RunRequest = read_bound_json(
+        &directory.join("request.json"),
+        Some(&receipt.request_sha256),
+    )?;
     if request.command.is_empty()
         || request.command[0].is_empty()
         || request.argument_zero.as_ref().is_some_and(String::is_empty)
         || !(1..=86400).contains(&request.timeout_seconds)
         || request.tools.keys().ne(receipt.tools.keys())
+        || request.tools.keys().ne(request.tool_argument_zeros.keys())
+        || request.tool_argument_zeros.values().any(String::is_empty)
         || request.sources.keys().ne(receipt.inventories.keys())
         || request.inputs.keys().ne(receipt.composition.inputs.keys())
         || request.environment != receipt.environment
@@ -866,4 +1140,33 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         ));
     }
     Ok(receipt)
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_is_observed_midway_through_json_serialization() {
+        let value = vec!["inventory-entry"; 4096];
+        let mut buffer = Vec::new();
+        let mut checks = 0;
+        let mut check = || {
+            checks += 1;
+            if checks >= 100 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(())
+            }
+        };
+        let mut writer = CheckedWriter {
+            inner: &mut buffer,
+            check: &mut check,
+            count: 0,
+        };
+        let error = serde_json::to_writer_pretty(&mut writer, &value).unwrap_err();
+        assert_eq!(error.io_error_kind(), Some(io::ErrorKind::Interrupted));
+        assert!(!buffer.is_empty());
+        assert!(buffer.len() < json_bytes(&value).unwrap().len());
+    }
 }

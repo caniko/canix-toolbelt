@@ -38,17 +38,41 @@ fn gate_label(name: &str) -> io::Result<()> {
 }
 
 fn copy(source: &Path, destination: &Path) -> io::Result<String> {
+    let input = regular_file(source)?;
+    let before = input.metadata()?;
+    copy_opened(input, before, destination)
+}
+
+fn copy_opened(input: File, before: fs::Metadata, destination: &Path) -> io::Result<String> {
     use std::io::Write;
-    let mut input = regular_file(source)?;
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
-    io::copy(&mut input, &mut output)?;
+    let mut bounded = (&input).take(before.len());
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    let mut copied = 0;
+    loop {
+        let count = bounded.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count])?;
+        hash.update(&buffer[..count]);
+        copied += count as u64;
+    }
+    let after = input.metadata()?;
+    if copied != before.len()
+        || before.len() != after.len()
+        || before.modified()? != after.modified()?
+    {
+        return Err(invalid("artifact changed during bounded copy"));
+    }
     output.flush()?;
     output.sync_all()?;
-    let hash = sha256_file(destination)?;
-    if sha256_file(source)? != hash {
+    let hash = format!("{:x}", hash.finalize());
+    if sha256_file(destination)? != hash {
         return Err(invalid("artifact changed during copy"));
     }
     Ok(hash)
@@ -75,7 +99,7 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
         }
     }
     for name in request.artifacts.keys() {
-        relative(Path::new(name))?;
+        artifact_key(name)?;
     }
     fs::create_dir(directory)?;
     fs::create_dir(directory.join("gates"))?;
@@ -136,7 +160,7 @@ pub fn verify_seal(
 ) -> io::Result<Seal> {
     let root = directory.canonicalize()?;
     let directory = &root;
-    let seal: Seal = read_json(&contained(&root, Path::new("seal.json"))?)?;
+    let seal: Seal = read_json(&evidence_path(&root, Path::new("seal.json"))?)?;
     if seal.schema_version != 1
         || &seal.composition != expected
         || required.is_empty()
@@ -162,13 +186,10 @@ pub fn verify_seal(
                     "mandatory gate artifact is not indexed: {path}"
                 )));
             }
-            contained(&root, Path::new(&path))?;
+            evidence_path(&root, Path::new(&path))?;
         }
-        let run = contained(&root, &Path::new("gates").join(name))?;
-        if sha256_file(&run.join("receipt.json"))? != *hash {
-            return Err(invalid("sealed receipt hash differs"));
-        }
-        verify_run(&run, Some(expected))?;
+        let run = evidence_path(&root, &Path::new("gates").join(name))?;
+        super::receipt::verify_run_bound(&run, Some(expected), Some(hash))?;
     }
     Ok(seal)
 }
@@ -480,6 +501,24 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growing_artifact_copies_never_read_beyond_the_opened_size() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("artifact");
+        let destination = root.path().join("copy");
+        fs::write(&source, b"original").unwrap();
+        let input = regular_file(&source).unwrap();
+        let before = input.metadata().unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_len(1 << 40)
+            .unwrap();
+        assert!(copy_opened(input, before, &destination).is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"original");
+    }
 
     #[test]
     fn parsed_archive_hash_stays_bound_when_the_path_is_replaced() {

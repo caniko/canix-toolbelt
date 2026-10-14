@@ -4,6 +4,9 @@
 // Keep PID 1 independent of the full operator/library dependency graph. Its
 // binary is byte-hashed for each run; even debug builds must remain small.
 #[cfg(target_os = "linux")]
+#[path = "../qualification/boundary.rs"]
+mod boundary;
+#[cfg(target_os = "linux")]
 #[path = "../qualification/execution.rs"]
 mod execution;
 
@@ -36,6 +39,15 @@ fn supervise() -> std::io::Result<i32> {
     let work = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing work tree"))?;
+    let boundary_path = args
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing boundary policy"))?;
+    let policy: boundary::Boundary = serde_json::from_reader(std::fs::File::open(&boundary_path)?)?;
+    let max_log_bytes = args
+        .next()
+        .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
+        .filter(|limit| *limit > 0 && *limit <= boundary::MAX_LOG_BYTES)
+        .ok_or_else(|| std::io::Error::other("invalid log bound"))?;
     let setpriv = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing privilege limiter"))?;
@@ -46,6 +58,13 @@ fn supervise() -> std::io::Result<i32> {
         .next()
         .ok_or_else(|| std::io::Error::other("missing argument zero"))?;
     let cwd = std::env::current_dir()?;
+    let executor = std::env::current_exe()?;
+    minimal_root(
+        &policy,
+        std::path::Path::new(&boundary_path),
+        std::path::Path::new(&work),
+        &cwd,
+    )?;
     read_only_host(std::path::Path::new(&work))?;
     // Re-enter the remounted tree; inherited cwd refers to the old mount.
     std::env::set_current_dir(cwd)?;
@@ -61,11 +80,13 @@ fn supervise() -> std::io::Result<i32> {
         // as a minimal exec adapter *after* dropping capabilities and setting
         // no-new-privs, then execute the canonical producer with its requested
         // name. This role never performs namespace or mount operations.
-        .arg(std::env::current_exe()?)
+        .arg(executor)
         .arg("--producer-exec")
+        .arg(max_log_bytes.to_string())
         .arg(program)
         .arg(argument_zero)
         .args(args)
+        .env_clear()
         // fd 0 is a private report channel opened by the host caller. Never let
         // the producer inherit it or reach it through the supervisor's proc fds.
         .stdin(std::process::Stdio::null())
@@ -192,6 +213,7 @@ fn read_only_host(work: &std::path::Path) -> std::io::Result<()> {
                     b"nosuid" => MountFlags::NOSUID,
                     b"nodev" => MountFlags::NODEV,
                     b"noexec" => MountFlags::NOEXEC,
+                    b"nosymfollow" => MountFlags::NOSYMFOLLOW,
                     b"noatime" => MountFlags::NOATIME,
                     b"nodiratime" => MountFlags::NODIRATIME,
                     b"relatime" => MountFlags::RELATIME,
@@ -228,6 +250,13 @@ fn read_only_host(work: &std::path::Path) -> std::io::Result<()> {
 fn producer_exec() -> std::io::Error {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os().skip(2);
+    let Some(max_log_bytes) = args
+        .next()
+        .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
+        .filter(|limit| *limit > 0 && *limit <= boundary::MAX_LOG_BYTES)
+    else {
+        return std::io::Error::other("invalid producer output bound");
+    };
     let Some(program) = args.next() else {
         return std::io::Error::other("missing producer executable");
     };
@@ -237,10 +266,118 @@ fn producer_exec() -> std::io::Error {
     if std::process::id() == 1 {
         return std::io::Error::other("producer exec cannot replace namespace init");
     }
+    let policy: boundary::Boundary = match std::fs::File::open("/.qualification-boundary.json")
+        .and_then(|file| serde_json::from_reader(file).map_err(std::io::Error::other))
+    {
+        Ok(policy) => policy,
+        Err(error) => return error,
+    };
+    if let Err(error) = rustix::process::setrlimit(
+        rustix::process::Resource::Fsize,
+        rustix::process::Rlimit {
+            current: Some(max_log_bytes),
+            maximum: Some(max_log_bytes),
+        },
+    ) {
+        return error.into();
+    }
     std::process::Command::new(program)
         .arg0(argument_zero)
         .args(args)
+        .env_clear()
+        .envs(policy.environment)
         .exec()
+}
+
+#[cfg(target_os = "linux")]
+fn minimal_root(
+    policy: &boundary::Boundary,
+    policy_path: &std::path::Path,
+    work: &std::path::Path,
+    cwd: &std::path::Path,
+) -> std::io::Result<()> {
+    use rustix::mount::{MountFlags, mount, mount_bind, mount_bind_recursive};
+    let root = &policy.sandbox;
+    mount("tmpfs", root, "tmpfs", MountFlags::NOSUID, c"size=64m")?;
+    let target = |path: &std::path::Path| -> std::io::Result<std::path::PathBuf> {
+        let path = path.strip_prefix("/").map_err(std::io::Error::other)?;
+        if path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(std::io::Error::other("non-normal boundary mount path"));
+        }
+        Ok(root.join(path))
+    };
+    let mut paths = policy.read_only_paths.clone();
+    paths.sort_by_key(|path| path.components().count());
+    paths.dedup();
+    for source in paths {
+        let destination = target(&source)?;
+        let metadata = std::fs::metadata(&source)?;
+        if metadata.is_dir() {
+            // NAR/store objects cannot contain live sockets. Other dependency
+            // trees are admitted only when no host control channel is exposed.
+            if source != std::path::Path::new("/nix/store") {
+                reject_control_channels(&source)?;
+            }
+            std::fs::create_dir_all(&destination)?;
+            mount_bind_recursive(&source, &destination)?;
+        } else {
+            // Regular files and the four standard random/null devices only;
+            // sockets, FIFOs and arbitrary device dependencies fail closed.
+            if !metadata.is_file()
+                && !["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"]
+                    .iter()
+                    .any(|path| source == std::path::Path::new(path))
+            {
+                return Err(std::io::Error::other("unsupported boundary mount input"));
+            }
+            std::fs::create_dir_all(
+                destination
+                    .parent()
+                    .ok_or_else(|| std::io::Error::other("missing mount parent"))?,
+            )?;
+            if !destination.exists() {
+                std::fs::File::create(&destination)?;
+            }
+            mount_bind(&source, &destination)?;
+        }
+    }
+    let work_target = target(work)?;
+    std::fs::create_dir_all(&work_target)?;
+    mount_bind(work, &work_target)?;
+    let config = root.join(".qualification-boundary.json");
+    std::fs::File::create(&config)?;
+    mount_bind(policy_path, &config)?;
+    let proc = root.join("proc");
+    std::fs::create_dir(&proc)?;
+    mount_bind_recursive("/proc", &proc)?;
+    std::fs::create_dir_all(target(cwd)?)?;
+    rustix::process::chroot(root)?;
+    std::env::set_current_dir("/")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reject_control_channels(root: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::FileTypeExt;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.file_type().is_socket() || metadata.file_type().is_fifo() {
+                return Err(std::io::Error::other(
+                    "host control channel in runtime dependency tree",
+                ));
+            }
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn main() -> std::process::ExitCode {

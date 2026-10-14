@@ -35,6 +35,7 @@ pub struct CoverageRequirements {
     /// Full source/input cohort, including `consumer-contract` for conformance.
     pub composition: Composition,
     /// Stable obligation IDs with explicit levels, gates and method selectors.
+    #[serde(deserialize_with = "unique_map")]
     pub obligations: BTreeMap<String, CoverageRequirement>,
 }
 
@@ -142,7 +143,11 @@ pub fn verify_coverage(
             "coverage report differs from independently bound digest",
         ));
     }
-    let report: CoverageReport = read_json(&directory.join(REPORT))?;
+    let root = directory.canonicalize()?;
+    let report: CoverageReport = read_bound_json(
+        &evidence_path(&root, Path::new(REPORT))?,
+        Some(report_sha256),
+    )?;
     if report.schema_version != 1
         || report.composition != expected.composition
         || report.obligations.keys().ne(expected.obligations.keys())

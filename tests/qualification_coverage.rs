@@ -4,6 +4,15 @@ use canix_toolbelt::qualification as q;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path, sync::atomic::AtomicBool};
 
+#[test]
+fn requirements_reject_duplicate_obligations_instead_of_shadowing_original_methods() {
+    let bytes = r#"{"schemaVersion":1,"composition":{"schemaVersion":1,"sources":{},"inputs":{}},
+        "obligations":{"original":{"level":"producer","gate":"parity","methods":["first","second"]},
+                       "original":{"level":"producer","gate":"parity","methods":["first"]}}}"#;
+    let error = serde_json::from_str::<q::CoverageRequirements>(bytes).unwrap_err();
+    assert!(error.to_string().contains("duplicate coverage key"));
+}
+
 fn containment() -> q::ContainmentPrograms {
     let tool = |name| {
         std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -48,6 +57,8 @@ fn fixture() -> (
             argument_zero: None,
             environment: BTreeMap::new(),
             tools: BTreeMap::new(),
+            tool_argument_zeros: BTreeMap::new(),
+            runtime_paths: Vec::new(),
             timeout_seconds: 30,
             containment: Some(containment()),
         },
@@ -61,7 +72,7 @@ fn fixture() -> (
         "{receipt:#?}; {}",
         fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
     );
-    assert_eq!(receipt.schema_version, 4);
+    assert_eq!(receipt.schema_version, 5);
     let receipts = BTreeMap::from([(
         "parity".into(),
         q::sha256_file(&root.path().join("run/receipt.json")).unwrap(),
