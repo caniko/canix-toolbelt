@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Reject unsupported route/nexthop destination rewrites and authored `pervasive`
+  flags before direct replay can drop forwarding policy. Preserve kernel status
+  flags, authored `onlink`, and omission of VPN/container-only and mixed paths.
 - Reject expiration on eligible direct routes before replay can make them
   permanent or extend their lifetime during reconciliation. Preserve omission
   of VPN/container-only and mixed routes.

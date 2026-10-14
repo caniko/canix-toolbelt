@@ -23,9 +23,14 @@ does not silently rewrite a producer's forwarding policy by removing members.
 Kernel-derived nexthop status flags, including `linkdown`, are accepted without
 being replayed as authored flags. The kernel derives current reachability and
 offload state from the actual devices; authored `onlink` remains preserved.
+The same flag vocabulary applies to route-level flags. Authored `pervasive`,
+unknown flags and malformed flag arrays reject eligible snapshots before effects;
+they are not discarded as kernel-derived status.
 Encapsulation on an eligible route or any of its nexthops rejects reconciliation
 before route, nftables or DNS updates. Unsupported forwarding semantics must not
 be silently stripped from a replayed route.
+Route or nexthop `to` attributes (`as to` destination rewrites) also reject,
+including null or malformed values, rather than losing the producer's rewrite.
 Cross-family `via` attributes on eligible routes or nexthops also reject the
 snapshot, including null or malformed attributes. ECMP replay supports at most
 60 nexthops per route. The maximal supported replay has eight arguments and
