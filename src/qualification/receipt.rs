@@ -392,6 +392,9 @@ pub fn execute(
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
+            // Identity is canonical, invocation semantics are not: coreutils,
+            // BusyBox and shells select behavior using the requested argv[0].
+            command.arg0(&request.command[0]);
             command.process_group(0);
         }
         let mut child = command.spawn()?;
