@@ -16,9 +16,10 @@ concurrency:
 jobs:
   retain:
     runs-on: ubuntu-24.04
-    # Observe the whole two-job-wide installable matrix, including hosted queue
-    # time. The matrix can outlive two hours even when every producer passes.
-    timeout-minutes: 240
+    # The producer matrix admits two builds at a time. Its queue can outlive a
+    # two-hour observer even when the original jobs succeed; retain those jobs
+    # within GitHub's bounded six-hour hosted-job budget.
+    timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -28,6 +29,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Observe the existing attempt-1 producers and preserve raw evidence
+        # Stop observation before the job deadline so partial evidence can upload.
+        timeout-minutes: 345
         run: python3 scripts/retain-producer-evidence.py "$RUNNER_TEMP/producer-evidence"
       - name: Upload producer custody packet
         if: always()
