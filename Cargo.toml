@@ -27,6 +27,7 @@ include = [
   "/ORCHESTRATION.md",
   "/CHANGELOG.md",
   "/docs/qualification.md",
+  "/docs/qualification-coverage.md",
   "/LICENSE",
   "/Cargo.toml",
   "/Cargo.lock",
