@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Sealed original-method coverage verification with explicit producer and
+  exact-consumer levels, independently selected obligations and provider-bound
+  hashes. Hosted coverage does not establish live deployment acceptance.
 - Provider-free execution wire types and pure validators generated for Rust and
   TypeScript from one versioned schema. Bind discovery to exact implementation,
   configuration and credential-reference identities; preserve u64 counters as
@@ -15,6 +18,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Preserve a qualification command's requested argv[0] after canonical executable
+  hashing and namespace/privilege containment, including Nix multicall applets.
+  `RunRequest` Rust initializers now set `argument_zero: None` for the default;
+  retained requests bind the effective name in the optional `argumentZero` field.
 - Backport upstream CPA/text-poke locking fixes for Linux 6.18.52 in the cloud
   installation test package set, covering both installer and installed guests
   to prevent module-loading kernel crashes during BIOS/UEFI qualification.

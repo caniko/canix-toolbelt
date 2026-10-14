@@ -45,6 +45,7 @@ fn fixture() -> (
                 .collect(),
             inputs: BTreeMap::from([("consumer-contract".into(), root.path().join("contract"))]),
             command: vec!["/bin/sh".into(), "-c".into(), "exit 0".into()],
+            argument_zero: None,
             environment: BTreeMap::new(),
             tools: BTreeMap::new(),
             timeout_seconds: 30,

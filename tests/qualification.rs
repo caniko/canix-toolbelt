@@ -84,6 +84,7 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
         .into(),
         inputs: [("lock".into(), root.path().join("input"))].into(),
         command: vec!["/bin/sh".into(), "-c".into(), script.into()],
+        argument_zero: None,
         environment: Default::default(),
         tools: Default::default(),
         timeout_seconds,
@@ -109,6 +110,56 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
             )
         });
     (root, receipt)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn contained_execution_preserves_requested_argv0_with_canonical_byte_custody() {
+    let (root, _) = run_fixture("true", 10);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command = vec!["/bin/sh".into(), "-c".into(), "printf '%s' \"$0\"".into()];
+    request.argument_zero = None;
+    let run = root.path().join("argv0");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(
+        fs::read_to_string(run.join("stdout.log")).unwrap(),
+        "/bin/sh"
+    );
+    assert_eq!(
+        receipt.executable.as_ref().unwrap().path,
+        std::path::Path::new("/bin/sh").canonicalize().unwrap()
+    );
+    assert_eq!(
+        q::verify_run(&run, Some(&receipt.composition)).unwrap(),
+        receipt
+    );
+    let retained: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    assert_eq!(retained.argument_zero.as_deref(), Some("/bin/sh"));
+    assert_eq!(
+        std::path::Path::new(&retained.command[0]),
+        receipt.executable.as_ref().unwrap().path
+    );
+    let replay = root.path().join("argv0-replay");
+    let replay_receipt = q::execute(&retained, &replay, &Default::default()).unwrap();
+    assert_eq!(
+        replay_receipt.status,
+        q::RunStatus::Passed,
+        "{replay_receipt:#?}"
+    );
+    assert_eq!(
+        fs::read_to_string(replay.join("stdout.log")).unwrap(),
+        "/bin/sh"
+    );
+    let mut explicit = retained;
+    explicit.argument_zero = Some("operator-selected-shell".into());
+    let run = root.path().join("argv0-explicit");
+    let receipt = q::execute(&explicit, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(
+        fs::read_to_string(run.join("stdout.log")).unwrap(),
+        "operator-selected-shell"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -696,6 +747,7 @@ fn execution_is_rejected_before_spawn_without_native_containment() {
         sources: Default::default(),
         inputs: Default::default(),
         command: vec!["never-spawn".into()],
+        argument_zero: None,
         environment: Default::default(),
         tools: Default::default(),
         timeout_seconds: 1,
@@ -819,7 +871,7 @@ fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
         .arg(env!("CARGO_BIN_EXE_canix-toolbelt-qualification-executor"))
         .arg(&work).arg(setpriv)
         .stdin(fs::File::create(root.path().join("execution.json")).unwrap())
-        .args(["/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
+        .args(["/bin/sh", "/bin/sh", "-c", "mount -t tmpfs tmpfs /proc || exit 99; setsid sh -c 'touch ready; sleep 1; printf late > late' & while ! test -f ready; do sleep 0.01; done; printf mounted"])
         .current_dir(root.path()).output().unwrap();
     assert_eq!(
         output.status.code(),

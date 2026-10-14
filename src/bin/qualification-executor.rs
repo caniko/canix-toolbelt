@@ -42,6 +42,9 @@ fn supervise() -> std::io::Result<i32> {
     let program = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing executable"))?;
+    let argument_zero = args
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing argument zero"))?;
     let cwd = std::env::current_dir()?;
     read_only_host(std::path::Path::new(&work))?;
     // Re-enter the remounted tree; inherited cwd refers to the old mount.
@@ -54,7 +57,14 @@ fn supervise() -> std::io::Result<i32> {
             "--no-new-privs",
             "--",
         ])
+        // setpriv cannot override argv[0]. Re-enter this byte-bound executable
+        // as a minimal exec adapter *after* dropping capabilities and setting
+        // no-new-privs, then execute the canonical producer with its requested
+        // name. This role never performs namespace or mount operations.
+        .arg(std::env::current_exe()?)
+        .arg("--producer-exec")
         .arg(program)
+        .arg(argument_zero)
         .args(args)
         // fd 0 is a private report channel opened by the host caller. Never let
         // the producer inherit it or reach it through the supervisor's proc fds.
@@ -214,7 +224,31 @@ fn read_only_host(work: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn producer_exec() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let mut args = std::env::args_os().skip(2);
+    let Some(program) = args.next() else {
+        return std::io::Error::other("missing producer executable");
+    };
+    let Some(argument_zero) = args.next().filter(|value| !value.is_empty()) else {
+        return std::io::Error::other("missing producer argument zero");
+    };
+    if std::process::id() == 1 {
+        return std::io::Error::other("producer exec cannot replace namespace init");
+    }
+    std::process::Command::new(program)
+        .arg0(argument_zero)
+        .args(args)
+        .exec()
+}
+
 fn main() -> std::process::ExitCode {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--producer-exec")) {
+        eprintln!("qualification producer exec: {}", producer_exec());
+        return std::process::ExitCode::from(125);
+    }
     #[cfg(target_os = "linux")]
     match supervise() {
         Ok(code) => return std::process::ExitCode::from(u8::try_from(code).unwrap_or(125)),

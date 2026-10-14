@@ -37,3 +37,20 @@ enforcement against real version-4 namespace-contained receipts. It does not
 execute or qualify the original PostgreSQL methods. A PostgreSQL conformance lane
 must report those exact original selectors after executing them and retain their
 unchanged frozen oracle bytes as composition inputs.
+
+## Invocation identity in version-4 receipts
+
+`RunRequest.argumentZero` is optional for new requests. Execution retains the
+original command name there and records the canonical executable path in
+`command[0]`, so multicall binaries execute the selected applet while the receipt
+hashes the actual canonical bytes. Explicit overrides are also supported and
+bound by the request hash. Older receipts without the field remain verifiable.
+Rust callers constructing a request set `argument_zero: None` for the default.
+
+The namespace supervisor still owns PID 1, the read-only source mounts, private
+writable work tree, report descriptor and descendant accounting. After setpriv
+drops capabilities and sets no-new-privs, a private exec-only role of that same
+byte-bound supervisor replaces itself with the canonical producer and requested
+argv[0]. It neither creates namespaces nor modifies mounts and cannot replace
+namespace init. Portable receipt verification does not consult the original
+host's PATH or aliases.

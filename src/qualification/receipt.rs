@@ -27,6 +27,10 @@ pub struct RunRequest {
     pub inputs: BTreeMap<String, PathBuf>,
     /// Argument vector, passed without shell interpolation.
     pub command: Vec<String>,
+    /// Optional argv[0] override. Retained executions set this to the requested
+    /// command name while command[0] records the canonical executable selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_zero: Option<String>,
     /// Explicit overrides, recorded verbatim. Do not put secrets here.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
@@ -336,6 +340,7 @@ fn containment(
 fn contained_command(
     tools: &BTreeMap<String, ProgramIdentity>,
     executable: &Path,
+    argument_zero: &std::ffi::OsStr,
     work: &Path,
 ) -> Command {
     let mut command = Command::new(&tools["unshare"].path);
@@ -353,7 +358,8 @@ fn contained_command(
         .arg(&tools["executor"].path)
         .arg(work)
         .arg(&tools["setpriv"].path)
-        .arg(executable);
+        .arg(executable)
+        .arg(argument_zero);
     command
 }
 
@@ -368,7 +374,12 @@ fn tool_version(
 ) -> io::Result<Vec<u8>> {
     let path = directory.join(name);
     let stderr_path = directory.join(format!("{name}.stderr"));
-    let mut command = contained_command(&receipt.containment, program, &directory.join("work"));
+    let mut command = contained_command(
+        &receipt.containment,
+        program,
+        program.as_os_str(),
+        &directory.join("work"),
+    );
     command
         .arg("--version")
         .current_dir(&request.cwd)
@@ -420,6 +431,7 @@ pub fn execute(
         .as_millis();
     if request.command.is_empty()
         || request.command[0].is_empty()
+        || request.argument_zero.as_ref().is_some_and(String::is_empty)
         || request.timeout_seconds == 0
         || request.timeout_seconds > 86400
     {
@@ -468,6 +480,12 @@ pub fn execute(
     // Retain effective canonical selections so portable verification can compare
     // the request with receipt identities without consulting the original host.
     let mut effective_request = request.clone();
+    effective_request.argument_zero = Some(
+        request
+            .argument_zero
+            .clone()
+            .unwrap_or_else(|| request.command[0].clone()),
+    );
     effective_request.cwd = cwd.clone();
     effective_request.tools = request
         .tools
@@ -581,7 +599,17 @@ pub fn execute(
             );
         }
         let executable = executable?;
-        let mut command = contained_command(&receipt.containment, &executable.path, &work);
+        let mut command = contained_command(
+            &receipt.containment,
+            &executable.path,
+            std::ffi::OsStr::new(
+                request
+                    .argument_zero
+                    .as_deref()
+                    .unwrap_or(&request.command[0]),
+            ),
+            &work,
+        );
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
@@ -800,6 +828,7 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
     let request: RunRequest = read_json(&directory.join("request.json"))?;
     if request.command.is_empty()
         || request.command[0].is_empty()
+        || request.argument_zero.as_ref().is_some_and(String::is_empty)
         || !(1..=86400).contains(&request.timeout_seconds)
         || request.tools.keys().ne(receipt.tools.keys())
         || request.sources.keys().ne(receipt.inventories.keys())
