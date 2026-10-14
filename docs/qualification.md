@@ -1,5 +1,41 @@
 # Source-bound qualification
 
+## Hosted coverage applicability
+
+`qualification verify-coverage SEAL --expected requirements.json --receipts
+receipts.json --report-sha256 HASH` verifies a sealed `artifacts/coverage.json`
+against independently selected obligations and provider-bound report/receipt
+hashes. The library exposes the same `verify_coverage` operation.
+
+The provider observer must first establish repository, actual checkout revision,
+workflow/generator identity, exact run/attempt, required terminal jobs, and artifact
+custody. Obtain the hashes from that authenticated observation; taking them from
+the downloaded bundle itself establishes only self-consistency. This operation
+does not collect forge evidence, authenticate a provider or authorize deployment.
+Its result explicitly reports `coverage-integrity-and-applicability`.
+
+`CoverageRequirements` selects a full `Composition` and a nonempty map of stable
+obligation IDs. Each obligation selects an exact `level`, sealed `gate` label and
+nonempty set of original `methods`. `CoverageReport` uses the same composition
+and obligation keys, with each method mapped to a terminal execution status.
+The gate receipts must pass `verify_seal`; every required method must be present
+and `passed`. Failed, skipped, pending, cancelled, unknown, missing or extra method
+results are rejected. A consumer may bind all 174 original PostgreSQL selectors
+without replacing their inventory or frozen oracle bytes.
+
+Levels are explicit: `producer` and `consumer-conformance` are distinct and never
+implicitly promoted. Consumer conformance additionally requires the immutable
+consumer artifact/source under `Composition.sources["consumer"]` and its contract
+digest under
+`Composition.inputs["consumer-contract"]`. Callers select the complete cohort,
+including patches, features, tools and archived dependency inputs that matter to
+the gate. The verifier checks exact cohort equality rather than inferring that
+two jobs with similar names exercise equivalent behavior.
+
+There is no hosted `live-acceptance` level. Host configuration/runtime equality,
+production restore/signature verification, recovery equality, explicit thaw and
+application health remain separate observations of the actual deployment.
+
 The optional `qualification` feature exposes reusable Rust operations for source
 inventories, command receipts, portable verification, Cargo graph comparison,
 source export and handoff sealing. Enable `cli,qualification` for the independent

@@ -7,6 +7,20 @@ use std::sync::atomic::AtomicBool;
 /// Independent qualification command surface. JSON requests use the documented library types.
 #[derive(Debug, Subcommand)]
 pub enum QualificationCommand {
+    /// Verify sealed method coverage; provider custody and live acceptance are separate
+    VerifyCoverage {
+        /// Portable seal directory containing artifacts/coverage.json
+        directory: PathBuf,
+        /// Independently selected CoverageRequirements JSON
+        #[arg(long)]
+        expected: PathBuf,
+        /// Exact required gate-to-receipt hash index from provider custody
+        #[arg(long)]
+        receipts: PathBuf,
+        /// Independently bound coverage report SHA-256 from provider custody
+        #[arg(long)]
+        report_sha256: String,
+    },
     /// Hash explicit source paths, or Git-selected tracked/unignored files
     Inventory {
         /// Source root
@@ -138,6 +152,20 @@ pub fn dispatch(
     cancelled: &AtomicBool,
 ) -> io::Result<CommandResult> {
     match command {
+        QualificationCommand::VerifyCoverage {
+            directory,
+            expected,
+            receipts,
+            report_sha256,
+        } => result(
+            &verify_coverage(
+                &directory,
+                &read_json(&expected)?,
+                &read_json(&receipts)?,
+                &report_sha256,
+            )?,
+            true,
+        ),
         QualificationCommand::Inventory {
             root,
             paths,
