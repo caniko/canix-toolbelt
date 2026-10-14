@@ -152,6 +152,15 @@ fn contained_execution_preserves_requested_argv0_with_canonical_byte_custody() {
         "/bin/sh"
     );
     let mut explicit = retained;
+    // Nix's /bin/sh is BusyBox: arbitrary argv[0] selects a nonexistent applet.
+    // Bash accepts an arbitrary name, so it exercises forwarding itself.
+    explicit.command[0] = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("bash"))
+        .find(|path| path.is_file())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
     explicit.argument_zero = Some("operator-selected-shell".into());
     let run = root.path().join("argv0-explicit");
     let receipt = q::execute(&explicit, &run, &Default::default()).unwrap();
