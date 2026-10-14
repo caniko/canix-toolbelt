@@ -18,13 +18,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
-- Preserve a qualification command's requested argv[0] after canonical executable
-  hashing and namespace/privilege containment, including Nix multicall applets.
-  `RunRequest` Rust initializers now set `argument_zero: None` for the default;
-  retained requests bind the effective name in the optional `argumentZero` field.
-- Backport upstream CPA/text-poke locking fixes for Linux 6.18.52 in the cloud
-  installation test package set, covering both installer and installed guests
-  to prevent module-loading kernel crashes during BIOS/UEFI qualification.
+- Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
 - Require native owner/host observation fencing through dispatch; unsupported
   adapters fail before reads or effects, and lost authority invalidates an idle
   context witness. Reject unbound imported pending evidence exchanges and keep
@@ -49,6 +43,19 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Execute qualification in a minimal filesystem and private network namespace,
+  applying producer loader variables only after containment. Schema-5 receipts
+  reject earlier host-exposing execution evidence. Bound output, artifact copies
+  and receipt publication; bind exact selected JSON bytes and tool aliases,
+  reject duplicate coverage requirements and nonportable evidence paths, and
+  clear inherited Git repository selection. See [the v5 migration notes](docs/qualification-v5.md).
+- Preserve a qualification command's requested argv[0] after canonical executable
+  hashing and namespace/privilege containment, including Nix multicall applets.
+  `RunRequest` Rust initializers now set `argument_zero: None` for the default;
+  retained requests bind the effective name in the optional `argumentZero` field.
+- Backport upstream CPA/text-poke locking fixes for Linux 6.18.52 in the cloud
+  installation test package set, covering both installer and installed guests
+  to prevent module-loading kernel crashes during BIOS/UEFI qualification.
 - Contain qualification commands and version probes in Linux PID namespaces with
   a native init supervisor. Reject escaped/background descendants, unsupported
   execution platforms and version-1 receipt acceptance; bind both containment
