@@ -9,6 +9,9 @@ mod boundary;
 #[cfg(target_os = "linux")]
 #[path = "../qualification/execution.rs"]
 mod execution;
+#[cfg(target_os = "linux")]
+#[path = "../qualification/work_tree.rs"]
+mod work_tree;
 
 #[cfg(target_os = "linux")]
 fn supervise() -> std::io::Result<i32> {
@@ -59,6 +62,10 @@ fn supervise() -> std::io::Result<i32> {
         .ok_or_else(|| std::io::Error::other("missing argument zero"))?;
     let cwd = std::env::current_dir()?;
     let executor = std::env::current_exe()?;
+    // Rust descriptors are CLOEXEC. Only non-dumpable PID 1 retains this old
+    // mount handle, and it never follows work-tree symlinks during retention.
+    use std::os::fd::AsRawFd;
+    let retained_work = std::fs::File::open(&work)?;
     minimal_root(
         &policy,
         std::path::Path::new(&boundary_path),
@@ -116,6 +123,19 @@ fn supervise() -> std::io::Result<i32> {
         signal: status.signal(),
         descendants_drained: drained,
     };
+    let capacity = rustix::fs::statvfs(&work)?;
+    if capacity.f_bavail == 0 || capacity.f_favail == 0 {
+        return Err(std::io::Error::other(
+            "producer exhausted the aggregate work-tree quota",
+        ));
+    }
+    if drained {
+        let retained =
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", retained_work.as_raw_fd()));
+        work_tree::copy_tree(std::path::Path::new(&work), &retained, &|| {
+            cancelled.load(Ordering::Relaxed)
+        })?;
+    }
     let mut bytes = serde_json::to_vec_pretty(&execution)?;
     bytes.push(b'\n');
     let mut remaining = bytes.as_slice();
@@ -346,7 +366,14 @@ fn minimal_root(
     }
     let work_target = target(work)?;
     std::fs::create_dir_all(&work_target)?;
-    mount_bind(work, &work_target)?;
+    mount(
+        "tmpfs",
+        &work_target,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        c"size=256m,nr_inodes=16384",
+    )?;
+    work_tree::copy_tree(work, &work_target, &|| false)?;
     let config = root.join(".qualification-boundary.json");
     std::fs::File::create(&config)?;
     mount_bind(policy_path, &config)?;

@@ -63,18 +63,25 @@ completed receipt. Unsupported platforms fail before spawning a command. Missing
 namespace permissions or launcher capabilities fail closed rather than falling
 back to process groups. Inventory/archive/portable verification remain portable.
 
-New execution receipts use schema version 4. Earlier execution receipts lacked
-descriptor hygiene and native status evidence and cannot satisfy `verify-run` or a new sealed gate.
+New execution receipts use schema version 5. Earlier execution receipts lacked
+one or more of the current descriptor, status, host-file and control-channel
+protections and cannot satisfy `verify-run` or a new sealed gate.
 Historical bytes remain evidence; do not rewrite them to the newer version.
 
-The supervisor recursively clones the host mount tree in its private namespace,
-uses kernel mount IDs to identify visible mounts, and remounts them read-only
+The supervisor constructs a minimal filesystem with selected sources, inputs,
+programs and runtime dependencies, public tools and libraries, the immutable Nix
+store and a private bounded work tmpfs. Host home and control directories are
+absent, and a private network namespace isolates host abstract sockets. It uses
+kernel mount IDs to identify visible mounts, and remounts them read-only
 without removing existing locked mount flags. It re-enters the working directory
 through that protected tree. Source/input mutations, including writes through
 hardlink aliases and temporary changes later restored, are denied. The producer
 and version probes run through the byte-bound `setpriv` with all capabilities
 removed and `no_new_privs`; the supervisor is non-dumpable. A missing mount-ID or
 read-only-mount capability fails closed before producer execution.
+See [the v5 guide](qualification-v5.md) for dependency selection, quotas and work
+retention. Selecting a containing source directory preserves symlink semantics;
+individually selected symlink mounts fail closed instead of being flattened.
 
 Before any files or signal registrations are created, the freshly exec'd
 single-threaded supervisor invokes Linux `close_range(3, UINT_MAX, 0)`. This

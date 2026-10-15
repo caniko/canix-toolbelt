@@ -15,7 +15,14 @@ offline dependencies; hosted checkout and dependency provisioning happen before
 execution.
 
 Source and dependency mounts remain read-only, including inherited `nosymfollow`
-flags. Only the fresh work tree is writable. The launcher and privilege limiter
+flags. A source selected through a symlink is rejected before spawn; selecting
+its containing directory preserves the recorded symlink semantics instead.
+Only the fresh work tree is writable. It is backed by a separate tmpfs capped
+at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
+After descendant drainage, the supervisor retains bounded regular files,
+directories and symlinks without following links. Work files are visible to
+the caller after completion; use the bounded log streams for live progress.
+The launcher and privilege limiter
 use sanitized environments; recorded producer settings, including loader
 variables, are applied by the final exec adapter after containment and capability
 removal. The producer's home is a fresh `work/home`. The default Cargo home is
@@ -41,7 +48,10 @@ time includes the inventory serialization and durable bulk write.
 
 Portable evidence rejects symlink hops, ambiguous backslashes and drive-prefix
 artifact names. Original source inventories still support contained relative
-source links. Gate, request, execution-report and coverage JSON are parsed from
+source links. `ArtifactIndex` is a transparent newtype over a sorted map and
+rejects duplicate JSON keys in standalone indexes and embedded requirements.
+Rust callers can use `collect`, array conversion, or `.into()` on an existing
+`BTreeMap`; serialized bytes remain unchanged. Gate, request, execution-report and coverage JSON are parsed from
 the same opened bytes whose selected hashes are checked. Artifact copying reads
 only the opened descriptor's initial size and rejects changes. Git inventory
 clears inherited repository-selection variables. Coverage requirements reject

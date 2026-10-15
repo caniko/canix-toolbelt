@@ -73,7 +73,7 @@ fn fixture() -> (
         fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
     );
     assert_eq!(receipt.schema_version, 5);
-    let receipts = BTreeMap::from([(
+    let receipts = q::ArtifactIndex::from([(
         "parity".into(),
         q::sha256_file(&root.path().join("run/receipt.json")).unwrap(),
     )]);
@@ -160,7 +160,7 @@ fn expectations_cannot_be_selected_from_the_successful_subset() {
     let (root, required, receipts, report) = fixture();
     let (directory, hash) = seal(root.path(), "sealed", &required, &receipts, &report);
     assert!(q::verify_coverage(&directory, &required, &receipts, &"0".repeat(64)).is_err());
-    assert!(q::verify_coverage(&directory, &required, &BTreeMap::new(), &hash).is_err());
+    assert!(q::verify_coverage(&directory, &required, &q::ArtifactIndex::new(), &hash).is_err());
     let mut changed = required.clone();
     changed
         .composition
@@ -214,7 +214,7 @@ fn sealed_reports_without_explicit_consumer_bindings_are_insufficient() {
         report["composition"] = serde_json::to_value(&receipt.composition).unwrap();
         let file = root.path().join(format!("report-without-{missing}.json"));
         fs::write(&file, serde_json::to_vec(&report).unwrap()).unwrap();
-        let receipts = BTreeMap::from([(
+        let receipts = q::ArtifactIndex::from([(
             "parity".into(),
             q::sha256_file(&run.join("receipt.json")).unwrap(),
         )]);

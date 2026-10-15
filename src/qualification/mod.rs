@@ -26,7 +26,83 @@ pub use seal::*;
 pub mod cli;
 
 /// Sorted portable artifact paths and SHA-256 hashes (also the Python index format).
-pub type ArtifactIndex = BTreeMap<String, String>;
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ArtifactIndex(
+    #[serde(deserialize_with = "unique_artifact_map")] BTreeMap<String, String>,
+);
+
+fn unique_artifact_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    struct Unique;
+    impl<'de> serde::de::Visitor<'de> for Unique {
+        type Value = BTreeMap<String, String>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an artifact index with unique keys")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, String>()? {
+                if values.insert(key, value).is_some() {
+                    return Err(serde::de::Error::custom("duplicate artifact index key"));
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(Unique)
+}
+
+impl ArtifactIndex {
+    /// Construct an empty, sorted index.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl std::ops::Deref for ArtifactIndex {
+    type Target = BTreeMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ArtifactIndex {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl<const N: usize> From<[(String, String); N]> for ArtifactIndex {
+    fn from(values: [(String, String); N]) -> Self {
+        Self(values.into())
+    }
+}
+impl From<BTreeMap<String, String>> for ArtifactIndex {
+    fn from(values: BTreeMap<String, String>) -> Self {
+        Self(values)
+    }
+}
+impl FromIterator<(String, String)> for ArtifactIndex {
+    fn from_iter<T: IntoIterator<Item = (String, String)>>(values: T) -> Self {
+        Self(values.into_iter().collect())
+    }
+}
+impl IntoIterator for ArtifactIndex {
+    type Item = (String, String);
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a ArtifactIndex {
+    type Item = (&'a String, &'a String);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 
 /// Explicit source selection. No build-directory exclusions are inferred.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -414,6 +490,22 @@ pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
+
+    #[test]
+    fn artifact_indexes_and_embedded_receipt_requirements_reject_duplicates() {
+        let bytes = r#"{"gate":"failed-receipt-hash","gate":"passing-receipt-hash"}"#;
+        assert!(
+            serde_json::from_str::<ArtifactIndex>(bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate artifact index key")
+        );
+        let composition =
+            r#"{"schemaVersion":1,"sources":{"source":"first","source":"second"},"inputs":{}}"#;
+        assert!(serde_json::from_str::<Composition>(composition).is_err());
+        let index: ArtifactIndex = [("a".into(), "digest".into())].into();
+        assert_eq!(serde_json::to_string(&index).unwrap(), r#"{"a":"digest"}"#);
+    }
 
     #[test]
     fn selected_json_cannot_be_replaced_by_a_different_attempt_after_open() {

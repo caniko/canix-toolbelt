@@ -69,6 +69,14 @@ fn inventory_rejects_escaping_links_and_records_internal_link_identity() {
 
 #[cfg(target_os = "linux")]
 fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Receipt) {
+    // The no-op seed provisions a retained request for the test below it. Cold
+    // hosted namespace/dependency admission can exceed five seconds; keep the
+    // actual timeout/cancellation payloads' requested budgets unchanged.
+    let timeout_seconds = if script == "true" {
+        timeout_seconds.max(30)
+    } else {
+        timeout_seconds
+    };
     let root = tempdir().unwrap();
     fs::write(root.path().join("source"), b"original").unwrap();
     fs::write(root.path().join("input"), b"pinned").unwrap();
@@ -137,6 +145,46 @@ fn version_probes_preserve_the_selected_tool_alias_in_retained_requests() {
     assert_eq!(retained.tool_argument_zeros["ls"], alias.to_str().unwrap());
     assert_eq!(retained.tools["ls"], alias.canonicalize().unwrap());
     q::verify_run(&run, Some(&receipt.composition)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn source_symlink_mounts_fail_closed_and_directory_selections_preserve_links() {
+    use std::os::unix::fs::symlink;
+    let (root, _) = run_fixture("true", 30);
+    let source = root.path().join("tree");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("target"), b"original").unwrap();
+    symlink("target", source.join("link")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.sources.get_mut("producer").unwrap().paths = vec!["tree/link".into()];
+    let rejected = q::execute(
+        &request,
+        &root.path().join("selected-link"),
+        &Default::default(),
+    )
+    .unwrap_err();
+    assert!(rejected.to_string().contains("symlink"), "{rejected}");
+    request.sources.get_mut("producer").unwrap().root = source;
+    request.sources.get_mut("producer").unwrap().paths = vec![".".into()];
+    request.command[2] = "test -L tree/link && test \"$(readlink tree/link)\" = target && test \"$(cat tree/link)\" = original".into();
+    let run = root.path().join("selected-directory");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    q::verify_run(&run, None).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn aggregate_work_quota_prevents_many_individually_small_files_filling_host_disk() {
+    let (root, receipt) = run_fixture(
+        "dd if=/dev/zero of=\"$QUALIFICATION_WORK_DIR/first\" bs=1M count=200; dd if=/dev/zero of=\"$QUALIFICATION_WORK_DIR/second\" bs=1M count=200; exit 0",
+        30,
+    );
+    assert_eq!(receipt.status, q::RunStatus::Failed, "{receipt:#?}");
+    assert!(!root.path().join("run/work/first").exists());
+    assert!(!root.path().join("run/work/second").exists());
+    assert!(q::verify_run(&root.path().join("run"), None).is_err());
 }
 
 #[cfg(target_os = "linux")]
@@ -908,13 +956,13 @@ fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
     }
     let (root, _) = run_fixture("true", 5);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    request.command[2] = "setsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; sleep 1; printf late; printf changed > source' & while ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done; sleep 10".into();
+    request.command[2] = "setsid sh -c 'touch \"$QUALIFICATION_WORK_DIR/ready\"; printf ready; sleep 1; printf late; printf changed > source' & while ! test -f \"$QUALIFICATION_WORK_DIR/ready\"; do sleep 0.01; done; sleep 10".into();
     let cancelled = std::sync::atomic::AtomicBool::new(false);
     let receipt = std::thread::scope(|scope| {
         let task =
             scope.spawn(|| q::execute(&request, &root.path().join("cancel"), &cancelled).unwrap());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !root.path().join("cancel/work/ready").exists() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while fs::read(root.path().join("cancel/stdout.log")).unwrap_or_default() != b"ready" {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -924,10 +972,9 @@ fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
     assert_eq!(receipt.status, q::RunStatus::Cancelled);
     std::thread::sleep(std::time::Duration::from_millis(1200));
     assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
-    assert!(
-        fs::read(root.path().join("cancel/stdout.log"))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        fs::read(root.path().join("cancel/stdout.log")).unwrap(),
+        b"ready"
     );
 }
 

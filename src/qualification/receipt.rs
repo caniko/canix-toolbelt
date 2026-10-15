@@ -503,6 +503,23 @@ pub fn execute(
             .unwrap_or_else(|| request.command[0].clone()),
     );
     effective_request.cwd = cwd.clone();
+    for spec in request.sources.values() {
+        let root = spec.root.canonicalize()?;
+        for path in &spec.paths {
+            relative(path)?;
+            let mut selected = root.clone();
+            for part in path.components() {
+                if let std::path::Component::Normal(name) = part {
+                    selected.push(name);
+                    if fs::symlink_metadata(&selected)?.file_type().is_symlink() {
+                        return Err(invalid(
+                            "selected source mount traverses a symlink; select its containing directory to preserve link semantics",
+                        ));
+                    }
+                }
+            }
+        }
+    }
     effective_request.inputs = request
         .inputs
         .iter()

@@ -28,6 +28,7 @@ include = [
   "/CHANGELOG.md",
   "/docs/qualification.md",
   "/docs/qualification-coverage.md",
+  "/docs/qualification-v5.md",
   "/LICENSE",
   "/Cargo.toml",
   "/Cargo.lock",

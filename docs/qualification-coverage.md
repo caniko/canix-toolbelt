@@ -33,18 +33,18 @@ production restore/signature verification, recovery equality, explicit thaw and
 application health remain separate observations of the actual deployment.
 
 The regression fixture uses 174 synthetic selectors to prove completeness
-enforcement against real version-4 namespace-contained receipts. It does not
+enforcement against real version-5 namespace-contained receipts. It does not
 execute or qualify the original PostgreSQL methods. A PostgreSQL conformance lane
 must report those exact original selectors after executing them and retain their
 unchanged frozen oracle bytes as composition inputs.
 
-## Invocation identity in version-4 receipts
+## Invocation identity in version-5 receipts
 
 `RunRequest.argumentZero` is optional for new requests. Execution retains the
 original command name there and records the canonical executable path in
 `command[0]`, so multicall binaries execute the selected applet while the receipt
 hashes the actual canonical bytes. Explicit overrides are also supported and
-bound by the request hash. Older receipts without the field remain verifiable.
+bound by the request hash. Earlier receipt schemas cannot qualify new gates.
 Rust callers constructing a request set `argument_zero: None` for the default.
 
 The namespace supervisor still owns PID 1, the read-only source mounts, private
