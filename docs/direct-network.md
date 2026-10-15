@@ -180,7 +180,9 @@ need no additional user authorization. Established workloads remain running.
 Units using `RootDirectory` or `RootImage` retain the same inline readiness
 precheck. Admission denial is therefore a service execution failure governed by
 the workload's existing `Restart`, `StartLimitIntervalSec` and `StartLimitBurst`
-policy, including automatic recovery when DNS returns. Existing pre/start/post
+policy, including automatic recovery when DNS returns while that policy still
+permits retries. Exhausted payload start limits retain systemd's normal behavior;
+the module adds no independent restart or recovery loop. Existing pre/start/post
 commands retain their authored root policy, credentials and resource limits.
 A generated systemd drop-in, installed for both system and Home Manager units,
 appends read-only binds for the readiness package's
@@ -189,18 +191,23 @@ It preserves authored binds and does not expose the whole Nix store or change
 `RootDirectoryStartOnly`. Closure enumeration happens at build time, without
 import-from-derivation. Binding the directory rather than its socket inode lets
 each new precheck observe a recreated daemon socket.
-For immutable or read-only alternate roots, create the bind destinations with
-the correct file/directory type when constructing the root. This includes
-`/run/direct-network` and each store path in the readiness package's closure.
-Writable roots may let systemd create missing destinations; a read-only root
-cannot receive missing mount points at service start.
-For an existing immutable image without those destinations, the service author
-can instead select systemd's `RootDirectoryStartOnly = true` (`"yes"` in a
+**Immutable roots must be prepared.** When control commands use the service root,
+create bind destinations with the correct file/directory type when constructing
+the root: `/run/direct-network` and each store path in the selected readiness
+package's runtime closure. Rebuild those targets when the package's closure
+changes. Arbitrary unprepared immutable images are not supported: a read-only
+root cannot receive missing mount points at service start, so namespace setup
+can fail before admission or authored hooks run. Writable roots may let systemd
+create missing destinations. The module does not modify images or move denial
+retries to a separate host-side dependency gate; both would change this contract.
+Separately, the service author can select systemd's
+`RootDirectoryStartOnly = true` (`"yes"` in a
 Home Manager unit). Readiness and all other control commands then run on the
 host, while `ExecStart` retains the image. The module honors that explicit policy
 and omits readiness binds, requiring no image modification. This setting also
 changes the root of authored pre/post/reload/stop hooks; select it only when
-those hooks are intended to use host paths. The module never enables it implicitly.
+those hooks are intended to use host paths. The module never enables it implicitly
+or uses it as a fallback for an unprepared image.
 Rooted user-manager units retain systemd's native prerequisites: unprivileged
 user namespaces for `RootDirectory`, and systemd's authorized mountfsd image
 mounting support for `RootImage`. The module supplies the readiness binds without

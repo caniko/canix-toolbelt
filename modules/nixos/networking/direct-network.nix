@@ -162,7 +162,11 @@ in {
           services = lib.mkOption {
             type = lib.types.attrsOf sliceType;
             default = {};
-            description = "Enabled Home Manager service names mapped to their existing parent resource slices.";
+            description = ''
+              Enabled Home Manager service names mapped to their existing parent resource slices.
+              Immutable service roots must contain the readiness closure's bind targets and
+              /run/direct-network when control commands use the service root; see docs/direct-network.md.
+            '';
           };
           slices = lib.mkOption {
             type = lib.types.listOf sliceType;
@@ -175,7 +179,11 @@ in {
     systemServices = lib.mkOption {
       type = lib.types.attrsOf sliceType;
       default = {};
-      description = "Enabled system-manager services mapped to their existing parent resource slices.";
+      description = ''
+        Enabled system-manager services mapped to their existing parent resource slices.
+        Immutable service roots must contain the readiness closure's bind targets and
+        /run/direct-network when control commands use the service root; see docs/direct-network.md.
+      '';
     };
     systemSlices = lib.mkOption {
       type = lib.types.listOf sliceType;

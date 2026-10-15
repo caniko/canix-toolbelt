@@ -241,6 +241,9 @@ for name in ['rooted-start', 'imaged-start', 'host-controls-start']:
         if name == 'host-controls-start':
             machine.succeed('systemctl show host-controls-start.service -p RootDirectoryStartOnly --value | grep -Fx yes')
             machine.succeed('test ! -e /etc/systemd/system/host-controls-start.service.d/50-direct-network-rooted-admission.conf')
+        else:
+            # Prepared immutable roots keep authored control hooks inside the root.
+            machine.succeed(f'systemctl show {name}.service -p RootDirectoryStartOnly --value | grep -Fx no')
         try:
             machine.succeed(f'systemctl start {name}.service')
         except Exception:
