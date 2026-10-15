@@ -22,26 +22,32 @@ pub struct RunRequest {
     /// Command working directory.
     pub cwd: PathBuf,
     /// Every source root participating in qualification.
+    #[serde(deserialize_with = "unique_map")]
     pub sources: BTreeMap<String, InventorySpec>,
     /// Extra inputs hashed before and after execution.
+    #[serde(deserialize_with = "unique_map")]
     pub inputs: BTreeMap<String, PathBuf>,
     /// Argument vector, passed without shell interpolation.
     pub command: Vec<String>,
-    /// Optional argv[0] override. Retained executions set this to the requested
-    /// command name while command[0] records the canonical executable selection.
+    /// Optional `argv[0]` override. Retained executions set this to the requested
+    /// command name while `command[0]` records the canonical executable selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_zero: Option<String>,
     /// Explicit overrides, recorded verbatim. Do not put secrets here.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_map")]
     pub environment: BTreeMap<String, String>,
     /// Explicit tool paths whose bytes and --version output are retained.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_map")]
     pub tools: BTreeMap<String, PathBuf>,
-    /// Optional tool argv[0] overrides; retained requests bind every effective alias.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Optional tool `argv[0]` overrides; retained requests bind every effective alias.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "unique_map"
+    )]
     pub tool_argument_zeros: BTreeMap<String, String>,
-    /// Explicit extra read-only runtime dependencies. Caller-readable home and
-    /// host-control paths are otherwise absent from the producer filesystem.
+    /// Explicit read-only runtime paths, each also selected by `sources` or `inputs`
+    /// so its contents participate in before/after composition capture.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_paths: Vec<PathBuf>,
     /// Required finite deadline in seconds.
@@ -112,6 +118,7 @@ pub struct Receipt {
     /// After-execution identity; absent when capture fails.
     pub after: Option<Composition>,
     /// Selected files before execution, retained for portable verification.
+    #[serde(deserialize_with = "unique_map")]
     pub inventories: BTreeMap<String, Inventory>,
     /// Request-file SHA-256, binding argv, cwd, timeout and explicit environment.
     pub request_sha256: String,
@@ -120,13 +127,15 @@ pub struct Receipt {
     /// stderr.log SHA-256.
     pub stderr_sha256: String,
     /// Tool path, binary and version evidence.
+    #[serde(deserialize_with = "unique_map")]
     pub tools: BTreeMap<String, ToolEvidence>,
     /// Canonical program actually executed and its byte identity, if resolution succeeded.
     pub executable: Option<ProgramIdentity>,
     /// Namespace launcher and native supervisor identities, when selected.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_map")]
     pub containment: BTreeMap<String, ProgramIdentity>,
     /// Complete environment actually supplied after clearing inherited variables.
+    #[serde(deserialize_with = "unique_map")]
     pub environment: BTreeMap<String, String>,
     /// UNIX start time in milliseconds.
     pub started_unix_ms: u128,
@@ -255,6 +264,32 @@ fn capture(
         },
         inventories,
     ))
+}
+
+// Purely lexical after execution canonicalizes selections; portable verification
+// uses the identical rule without consulting the original producer filesystem.
+fn validate_runtime_selection(request: &RunRequest) -> io::Result<()> {
+    for runtime in &request.runtime_paths {
+        if !runtime.is_absolute()
+            || runtime == Path::new("/")
+            || runtime
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+            || !(request.inputs.values().any(|path| path == runtime)
+                || request.sources.values().any(|spec| {
+                    spec.root.is_absolute()
+                        && spec
+                            .paths
+                            .iter()
+                            .any(|path| spec.root.join(path) == *runtime)
+                }))
+        {
+            return Err(invalid(
+                "runtime path requires an identical source or input selection for composition binding",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn stop(child: &mut Child) -> io::Result<()> {
@@ -503,6 +538,9 @@ pub fn execute(
             .unwrap_or_else(|| request.command[0].clone()),
     );
     effective_request.cwd = cwd.clone();
+    for spec in effective_request.sources.values_mut() {
+        spec.root = spec.root.canonicalize()?;
+    }
     for spec in request.sources.values() {
         let root = spec.root.canonicalize()?;
         for path in &spec.paths {
@@ -525,6 +563,17 @@ pub fn execute(
         .iter()
         .map(|(name, path)| Ok((name.clone(), path.canonicalize()?)))
         .collect::<io::Result<_>>()?;
+    effective_request.runtime_paths = request
+        .runtime_paths
+        .iter()
+        .map(|path| {
+            if !path.is_absolute() {
+                return Err(invalid("runtime mounts must be absolute paths"));
+            }
+            path.canonicalize()
+        })
+        .collect::<io::Result<_>>()?;
+    validate_runtime_selection(&effective_request)?;
     if request
         .tool_argument_zeros
         .keys()
@@ -560,10 +609,12 @@ pub fn execute(
     // Only a fresh, source-disjoint work tree is writable in the producer's
     // namespace. Inherited open log descriptors remain writable as well.
     for spec in request.sources.values() {
-        if work.starts_with(spec.root.canonicalize()?)
-            && spec.paths.iter().any(|p| spec.root.join(p).is_dir())
-        {
-            return Err(invalid("writable work tree overlaps selected source"));
+        let root = spec.root.canonicalize()?;
+        for path in &spec.paths {
+            let selected = contained(&root, path)?;
+            if selected.is_dir() && work.starts_with(selected) {
+                return Err(invalid("writable work tree overlaps selected source"));
+            }
         }
     }
     let mut environment = build_environment(request);
@@ -1079,6 +1130,20 @@ pub(crate) fn verify_run_bound(
             "receipt is incomplete, failed, changed, or belongs to another composition",
         ));
     }
+    let valid_digest =
+        |hash: &str| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if receipt
+        .executable
+        .iter()
+        .chain(receipt.containment.values())
+        .any(|program| !valid_digest(&program.sha256))
+        || receipt
+            .tools
+            .values()
+            .any(|tool| !valid_digest(&tool.sha256))
+    {
+        return Err(invalid("receipt program identity is not a SHA-256 digest"));
+    }
     let report_path = directory.join("execution.json");
     let report: ExecutionReport = read_bound_json(
         &report_path,
@@ -1115,6 +1180,7 @@ pub(crate) fn verify_run_bound(
         &directory.join("request.json"),
         Some(&receipt.request_sha256),
     )?;
+    validate_runtime_selection(&request)?;
     if request.command.is_empty()
         || request.command[0].is_empty()
         || request.argument_zero.as_ref().is_some_and(String::is_empty)

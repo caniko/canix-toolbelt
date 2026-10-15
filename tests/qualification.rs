@@ -32,6 +32,67 @@ fn inventory_is_deterministic_and_binds_executable_bits() {
 }
 
 #[test]
+fn inventories_reject_unrepresented_empty_directories() {
+    let root = tempdir().unwrap();
+    let out = tempdir().unwrap();
+    fs::create_dir(root.path().join("tree")).unwrap();
+    fs::write(root.path().join("tree/file"), b"source").unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["tree".into()],
+    };
+    let expected = q::inventory(&spec).unwrap();
+    fs::create_dir(root.path().join("tree/empty")).unwrap();
+    assert!(q::inventory(&spec).is_err());
+    assert!(q::export_source(&spec, &out.path().join("rejected.tar")).is_err());
+    // A tar must not introduce the same unbound filesystem condition either.
+    let archive = out.path().join("extra-directory.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+    builder
+        .append_dir_all("tree", root.path().join("tree"))
+        .unwrap();
+    builder.finish().unwrap();
+    assert!(q::verify_source_archive(&archive, &expected).is_err());
+}
+
+#[test]
+fn trust_selection_maps_reject_shadowed_json_keys() {
+    let file = r#"{"sha256":"digest","executable":false,"link":null}"#;
+    let inventory = format!(r#"{{"schemaVersion":1,"files":{{"source":{file},"source":{file}}}}}"#);
+    assert!(serde_json::from_str::<q::Inventory>(&inventory).is_err());
+    let seal = r#"{"composition":{"schemaVersion":1,"sources":{},"inputs":{}},"gates":{"test":"failed","test":"passed"},"expectedReceipts":{},"artifacts":{}}"#;
+    assert!(serde_json::from_str::<q::SealRequest>(seal).is_err());
+    for (field, value) in [
+        ("sources", r#"{"root":"/source","paths":["file"]}"#),
+        ("inputs", r#""/lock""#),
+        ("tools", r#""/tool""#),
+        ("environment", r#""setting""#),
+        ("toolArgumentZeros", r#""alias""#),
+    ] {
+        let request = format!(
+            r#"{{"cwd":"/source","sources":{{}},"inputs":{{}},"command":["true"],"timeoutSeconds":1,"{field}":{{"label":{value},"label":{value}}}}}"#
+        );
+        // Remove the single default field so failure can only be the duplicate
+        // map key, rather than a repeated struct field.
+        let request = request.replacen(&format!(r#""{field}":{{}},"#), "", 1);
+        let error = serde_json::from_str::<q::RunRequest>(&request).unwrap_err();
+        assert!(error.to_string().contains("duplicate"), "{field}: {error}");
+    }
+}
+
+#[test]
+fn public_json_reads_reject_oversized_documents_before_deserialization() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("oversized.json");
+    fs::File::create(&path)
+        .unwrap()
+        .set_len(65 * 1024 * 1024)
+        .unwrap();
+    let error = q::read_json::<serde_json::Value>(&path).unwrap_err();
+    assert!(error.to_string().contains("exceeds 64 MiB"), "{error}");
+}
+
+#[test]
 fn index_verification_rejects_traversal_and_tampering() {
     let root = tempdir().unwrap();
     fs::write(root.path().join("log"), b"hello\n").unwrap();
@@ -145,6 +206,68 @@ fn version_probes_preserve_the_selected_tool_alias_in_retained_requests() {
     assert_eq!(retained.tool_argument_zeros["ls"], alias.to_str().unwrap());
     assert_eq!(retained.tools["ls"], alias.canonicalize().unwrap());
     q::verify_run(&run, Some(&receipt.composition)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_dependencies_require_composition_bound_selection() {
+    let (root, _) = run_fixture("true", 30);
+    let cache = root.path().join("cache");
+    fs::create_dir(&cache).unwrap();
+    fs::write(cache.join("dependency"), b"first").unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.runtime_paths = vec![cache.clone()];
+    let rejected = root.path().join("unbound-runtime");
+    assert!(q::execute(&request, &rejected, &Default::default()).is_err());
+    assert!(!rejected.exists(), "unbound runtime must fail before spawn");
+    request.sources.insert(
+        "dependencies".into(),
+        InventorySpec {
+            root: root.path().into(),
+            paths: vec!["cache".into()],
+        },
+    );
+    request.command[2] = "test \"$(cat cache/dependency)\" = first".into();
+    let run = root.path().join("bound-runtime");
+    let first = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(first.status, q::RunStatus::Passed, "{first:#?}");
+    q::verify_run(&run, None).unwrap();
+    fs::write(cache.join("dependency"), b"second").unwrap();
+    request.command[2] = "test \"$(cat cache/dependency)\" = second".into();
+    let second = q::execute(
+        &request,
+        &root.path().join("changed-runtime"),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(second.status, q::RunStatus::Passed, "{second:#?}");
+    assert_ne!(first.composition, second.composition);
+
+    request.command[2] =
+        "printf ready; while test \"$(cat cache/dependency)\" != third; do sleep 0.01; done".into();
+    let changed_run = root.path().join("midrun-runtime-change");
+    let changed = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &changed_run, &Default::default()).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while fs::read(changed_run.join("stdout.log")).unwrap_or_default() != b"ready" {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        fs::write(cache.join("dependency"), b"third").unwrap();
+        task.join().unwrap()
+    });
+    assert_eq!(changed.status, q::RunStatus::SourceChanged, "{changed:#?}");
+    assert!(q::verify_run(&changed_run, None).is_err());
+
+    // Portable verification must enforce the same selection, even after the
+    // request hash is recomputed by an untrusted bundle author.
+    let mut retained: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    retained.runtime_paths.push(root.path().join("unselected"));
+    fs::write(run.join("request.json"), q::json_bytes(&retained).unwrap()).unwrap();
+    let mut rewritten = first;
+    rewritten.request_sha256 = q::sha256_file(&run.join("request.json")).unwrap();
+    fs::write(run.join("receipt.json"), q::json_bytes(&rewritten).unwrap()).unwrap();
+    assert!(q::verify_run(&run, None).is_err());
 }
 
 #[cfg(target_os = "linux")]
@@ -1141,6 +1264,11 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
         "executor",
         "setpriv",
         "command",
+        "executable-digest",
+        "tool-digest",
+        "unshare-digest",
+        "executor-digest",
+        "setpriv-digest",
     ] {
         let mut changed = receipt.clone();
         match mutation {
@@ -1161,6 +1289,15 @@ fn request_requirements_cannot_be_omitted_or_substituted_in_a_receipt() {
             }
             "command" => {
                 changed.executable.as_mut().unwrap().path = "/different/command".into();
+            }
+            "executable-digest" => changed.executable.as_mut().unwrap().sha256.clear(),
+            "tool-digest" => changed.tools.get_mut("shell").unwrap().sha256 = "not-a-digest".into(),
+            "unshare-digest" | "executor-digest" | "setpriv-digest" => {
+                changed
+                    .containment
+                    .get_mut(mutation.strip_suffix("-digest").unwrap())
+                    .unwrap()
+                    .sha256 = "z".repeat(64);
             }
             _ => unreachable!(),
         }

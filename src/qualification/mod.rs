@@ -35,26 +35,48 @@ pub struct ArtifactIndex(
 fn unique_artifact_map<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, String>, D::Error> {
-    struct Unique;
-    impl<'de> serde::de::Visitor<'de> for Unique {
-        type Value = BTreeMap<String, String>;
+    unique_map_named(deserializer, "artifact index")
+}
+
+pub(crate) fn unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    unique_map_named(deserializer, "qualification map")
+}
+
+fn unique_map_named<'de, D, V>(
+    deserializer: D,
+    name: &'static str,
+) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    struct Unique<V>(&'static str, std::marker::PhantomData<V>);
+    impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for Unique<V> {
+        type Value = BTreeMap<String, V>;
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("an artifact index with unique keys")
+            write!(formatter, "a {} with unique keys", self.0)
         }
         fn visit_map<A: serde::de::MapAccess<'de>>(
             self,
             mut map: A,
         ) -> Result<Self::Value, A::Error> {
             let mut values = BTreeMap::new();
-            while let Some((key, value)) = map.next_entry::<String, String>()? {
+            while let Some((key, value)) = map.next_entry::<String, V>()? {
                 if values.insert(key, value).is_some() {
-                    return Err(serde::de::Error::custom("duplicate artifact index key"));
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate {} key",
+                        self.0
+                    )));
                 }
             }
             Ok(values)
         }
     }
-    deserializer.deserialize_map(Unique)
+    deserializer.deserialize_map(Unique(name, std::marker::PhantomData))
 }
 
 impl ArtifactIndex {
@@ -133,6 +155,7 @@ pub struct Inventory {
     /// Wire format version; currently 1.
     pub schema_version: u32,
     /// Sorted, root-relative entries.
+    #[serde(deserialize_with = "unique_map")]
     pub files: BTreeMap<String, SourceFile>,
 }
 
@@ -211,9 +234,9 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> io::Error {
     invalid(error.to_string())
 }
 
-/// Load a typed JSON document without interpreting any embedded commands.
+/// Load at most 64 MiB of typed JSON from one opened regular-file descriptor.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
-    serde_json::from_reader(regular_file(path)?).map_err(invalid_json)
+    read_bound_json(path, None)
 }
 
 // Parse exactly the bytes whose independently selected digest was checked.
@@ -344,7 +367,13 @@ fn collect(
     let resolved = contained(root, path)?;
     let metadata = fs::symlink_metadata(root.join(path))?;
     if metadata.is_dir() {
-        for entry in fs::read_dir(root.join(path))? {
+        let mut entries = fs::read_dir(root.join(path))?.peekable();
+        if entries.peek().is_none() {
+            return Err(invalid(
+                "empty directories cannot be represented by source inventory v1",
+            ));
+        }
+        for entry in entries {
             let child = entry?.path();
             if child.file_name().is_some_and(|name| name == ".git") {
                 return Err(invalid(

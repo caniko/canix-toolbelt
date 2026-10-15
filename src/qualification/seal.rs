@@ -7,11 +7,12 @@ pub struct SealRequest {
     /// Required immutable source/input identity, never inferred from a passing subset.
     pub composition: Composition,
     /// Required labels and completed execution directories. Must be nonempty.
+    #[serde(deserialize_with = "unique_map")]
     pub gates: BTreeMap<String, PathBuf>,
     /// Independently selected required label-to-receipt hashes. No passing substitutes.
     pub expected_receipts: ArtifactIndex,
     /// Additional files to retain; names are root-relative within artifacts/.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_map")]
     pub artifacts: BTreeMap<String, PathBuf>,
 }
 
@@ -456,6 +457,10 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
     if files.keys().any(|name| directories.contains(name)) {
         return Err(invalid("archive file is also required as a directory"));
     }
+    let mut represented_directories = std::collections::BTreeSet::new();
+    for name in files.keys() {
+        add_parent_directories(name, &mut represented_directories)?;
+    }
     let links: BTreeMap<_, _> = links
         .iter()
         .map(|(name, link)| {
@@ -465,9 +470,17 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
                     "archive omits a directory required by a link target",
                 ));
             }
+            represented_directories.extend(traversed);
             Ok((name.clone(), target))
         })
         .collect::<io::Result<_>>()?;
+    // Ignore only the archive's structural root, not extra visible directories
+    // that the qualified file/link inventory cannot describe.
+    directories.remove(".");
+    represented_directories.remove(".");
+    if directories != represented_directories {
+        return Err(invalid("archive contains unrepresented empty directories"));
+    }
     for (name, target) in &links {
         let mut target = target;
         let mut seen = std::collections::BTreeSet::new();

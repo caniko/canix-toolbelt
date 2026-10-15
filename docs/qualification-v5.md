@@ -17,6 +17,10 @@ execution.
 Source and dependency mounts remain read-only, including inherited `nosymfollow`
 flags. A source selected through a symlink is rejected before spawn; selecting
 its containing directory preserves the recorded symlink semantics instead.
+Inventory v1 cannot represent empty directories: recursive selections containing
+one fail closed, and source archives reject extra directories not implied by
+inventoried files or link resolution. Select explicit files when empty siblings
+are not part of the source contract.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
 After descendant drainage, the supervisor retains bounded regular files,
@@ -26,13 +30,17 @@ The launcher and privilege limiter
 use sanitized environments; recorded producer settings, including loader
 variables, are applied by the final exec adapter after containment and capability
 removal. The producer's home is a fresh `work/home`. The default Cargo home is
-`work/cargo-home`. A supplied Cargo dependency cache needs explicit read-only
-runtime selection; do not expose a cache containing credentials or control
-channels.
+`work/cargo-home`. A supplied Cargo dependency cache needs an explicit recursive
+source selection (or file input selections), binding its contents before and
+after execution. Do not expose a cache containing credentials or control channels.
 
-`RunRequest.runtimePaths` optionally selects additional absolute read-only
-runtime dependencies. Selection is an explicit trust decision, just like source
-and input selection. `RunRequest.toolArgumentZeros` optionally preserves tool
+`RunRequest.runtimePaths` optionally names absolute read-only runtime dependencies.
+Every path must equal a selected source path or input file, so runtime bytes
+participate in the composition instead of merely exposing a mutable host path.
+Unbound runtime selections fail before spawn; portable verification enforces
+the same rule without accessing the original host. Changed dependencies produce
+a different composition, and detected mid-run changes cannot pass.
+`RunRequest.toolArgumentZeros` optionally preserves tool
 aliases separately from their canonical byte-bound executable paths. Effective
 requests bind every selected alias. Rust callers initialize the new fields with
 empty collections when no extra selection is needed.
@@ -50,12 +58,18 @@ Portable evidence rejects symlink hops, ambiguous backslashes and drive-prefix
 artifact names. Original source inventories still support contained relative
 source links. `ArtifactIndex` is a transparent newtype over a sorted map and
 rejects duplicate JSON keys in standalone indexes and embedded requirements.
+Source/input/tool/environment selections, inventory paths, receipt maps and seal
+gate/artifact selections also reject duplicate keys. Portable receipt verification
+requires every executable, tool and containment digest to be 64 hexadecimal digits.
 Rust callers can use `collect`, array conversion, or `.into()` on an existing
 `BTreeMap`; serialized bytes remain unchanged. Gate, request, execution-report and coverage JSON are parsed from
 the same opened bytes whose selected hashes are checked. Artifact copying reads
 only the opened descriptor's initial size and rejects changes. Git inventory
 clears inherited repository-selection variables. Coverage requirements reject
 duplicate obligation IDs instead of silently replacing an original method set.
+All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retaining
+a completed work tree replaces prior children, preserving producer deletions and
+directory/file transitions between probes and the main command.
 
 Portable verification establishes integrity and applicability. Provider custody,
 exact-source hosted qualification and live acceptance remain independent gates.
