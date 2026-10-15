@@ -7,6 +7,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
 - Reject unsupported route/nexthop destination rewrites and authored `pervasive`
   flags before direct replay can drop forwarding policy. Preserve kernel status
   flags, authored `onlink`, and omission of VPN/container-only and mixed paths.
