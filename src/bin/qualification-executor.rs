@@ -74,6 +74,12 @@ fn supervise() -> std::io::Result<i32> {
     let setpriv = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing privilege limiter"))?;
+    // Bootstrap may have executed from a sealed anonymous descriptor. Re-entry
+    // uses the canonical path only after minimal_root has digest-checked its
+    // private snapshot, never a host pathname or a deleted memfd pseudo-path.
+    let executor = args
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing executor snapshot path"))?;
     let program = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing executable"))?;
@@ -81,7 +87,6 @@ fn supervise() -> std::io::Result<i32> {
         .next()
         .ok_or_else(|| std::io::Error::other("missing argument zero"))?;
     let cwd = std::env::current_dir()?;
-    let executor = std::env::current_exe()?;
     // Rust descriptors are CLOEXEC. Only non-dumpable PID 1 retains this old
     // mount handle, and it never follows work-tree symlinks during retention.
     use std::os::fd::AsRawFd;

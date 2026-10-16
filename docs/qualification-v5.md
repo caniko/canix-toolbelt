@@ -35,8 +35,9 @@ export do not represent inode aliases; select independent source copies instead.
 Selected and structural source directories must have mode `0755` on Unix;
 inventory v1 cannot bind any other directory mode, and archive verification rejects
 noncanonical directory headers rather than silently normalizing their semantics.
-Execution also requires every symlink target to be explicitly selected in the
-same source inventory, so hashing a target cannot admit an unmounted dangling link.
+Execution and portable run/seal verification require every symlink target to be
+explicitly selected in the same source inventory, so hashing a target cannot
+admit an unmounted dangling link.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
 The private supervisor observes kernel syscall results for the producer and its
@@ -66,6 +67,17 @@ and seals; portable verification checks its digest, environment and exact snapsh
 file/directory/mount selections against the inventories, inputs and executable
 identities. Earlier schema-5 packets without these snapshot selections or the
 policy identity remain historical, not qualifying evidence.
+Bootstrap runs before that private root exists. Mutable launcher/executor bytes
+are copied into anonymous executable files, sealed against writes and resizing,
+then checked against the selected digest before launch. The host retains those
+descriptors until all probes and the main execution finish; PID 1 closes inherited
+descriptors before starting a producer. Each bootstrap copy is capped at 256 MiB
+and uses the request's cancellation/deadline checks. This route requires Linux
+executable memfd support. A non-root caller may instead execute a canonical
+root-owned program beneath entirely root-owned, non-writable ancestors; this
+preserves platform executable attachments such as AppArmor's unshare policy.
+The executor's later privilege-dropped re-entry uses its digest-checked private
+snapshot, not the bootstrap descriptor's deleted-file pseudo-path.
 The producer's home is a fresh `work/home`. The default Cargo home is
 `work/cargo-home`. A supplied Cargo dependency cache needs an explicit recursive
 source selection (or file input selections), binding its contents before and
@@ -85,8 +97,13 @@ requests bind every selected alias. Rust callers initialize the new fields with
 empty collections when no extra selection is needed.
 
 Producer stdout/stderr each have a hard 512 MiB file-size limit (version probes
-use 1 MiB). Reaching the main-stream limit is non-acceptance even if a shell
-masks a failed child. Evidence JSON is limited to 64 MiB. Receipt publication
+use 1 MiB). A request admits at most 32 tool probes, and their combined retained
+version strings may not exceed 8 MiB. The probe that exceeds that aggregate budget
+is retained as failed evidence (at most one additional 2 MiB stdout/stderr pair);
+no later probes or main command run. Portable verification enforces the same
+count and aggregate-version limits. Reaching the main-stream limit is
+non-acceptance even if a shell masks a failed child. Evidence JSON is limited to
+64 MiB. Receipt publication
 checks cancellation and deadlines during serialization, between writes and
 after durable sync, then atomically exposes the completed receipt. Interrupted
 publication discards the staged passing document and may retain a failed,
@@ -113,7 +130,10 @@ All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retainin
 a completed work tree replaces prior children, preserving producer deletions and
 directory/file transitions and directory permission modes between probes and the
 main command. Restrictive modes are restored after copying descendants. Retention
-rejects multiply linked work files instead of silently changing inode-alias
+and startup restoration run under privileged PID 1 before producer capabilities
+are dropped, so mode-`000` files and nested directories remain copyable; their
+original modes are preserved for the next producer to inspect and change.
+Retention rejects multiply linked work files instead of silently changing inode-alias
 semantics between commands. Startup restoration observes cancellation; cleanup
 also kills and reaps a launcher that exceeds the graceful five-second budget.
 Both Cargo-metadata CLI commands use the same bounded regular-file reader as

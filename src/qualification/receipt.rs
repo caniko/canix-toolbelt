@@ -3,6 +3,9 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const MAX_TOOLS: usize = 32;
+const MAX_TOOL_VERSION_BYTES: usize = 8 * 1024 * 1024;
+
 /// Exact source/input identity shared by required executions.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -250,16 +253,7 @@ fn capture(
         .map(|(name, spec)| Ok((name.clone(), inventory_checked(spec, check)?)))
         .collect::<io::Result<BTreeMap<_, _>>>()?;
     for inventory in inventories.values() {
-        for (name, file) in &inventory.files {
-            if let Some(link) = &file.link {
-                let (target, _) = super::seal::link_walk(name, Path::new(link))?;
-                if !inventory.files.contains_key(&target) {
-                    return Err(invalid(
-                        "source symlink target requires an explicit selection in the same inventory",
-                    ));
-                }
-            }
-        }
+        validate_source_links(inventory)?;
     }
     let sources = inventories
         .iter()
@@ -278,6 +272,20 @@ fn capture(
         },
         inventories,
     ))
+}
+
+fn validate_source_links(inventory: &Inventory) -> io::Result<()> {
+    for (name, file) in &inventory.files {
+        if let Some(link) = &file.link {
+            let (target, _) = super::seal::link_walk(name, Path::new(link))?;
+            if !inventory.files.contains_key(&target) {
+                return Err(invalid(
+                    "source symlink target requires an explicit selection in the same inventory",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // Purely lexical after execution canonicalizes selections; portable verification
@@ -398,8 +406,122 @@ fn containment(
     .collect()
 }
 
+// Bootstrap executes before PID 1 can create the private root. Keep its mutable
+// programs in sealed, digest-checked anonymous files until every launch is reaped.
+struct Bootstrap {
+    identities: BTreeMap<String, ProgramIdentity>,
+    snapshots: BTreeMap<String, File>,
+}
+
+impl Bootstrap {
+    fn new(
+        identities: &BTreeMap<String, ProgramIdentity>,
+        check: &mut impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (identities, check);
+            Err(invalid("qualification bootstrap requires Linux"))
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let mut snapshots = BTreeMap::new();
+            for name in ["unshare", "executor"] {
+                use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+                use std::{io::Write, os::unix::fs::PermissionsExt};
+                let identity = &identities[name];
+                // Preserve the original executable attachment for platform security
+                // policy (notably AppArmor userns admission). Only a non-root caller
+                // beneath an entirely root-owned, non-writable path may use this route.
+                if root_owned_program(&identity.path)? {
+                    continue;
+                }
+                check()?;
+                let input = regular_file(&identity.path)?;
+                let length = input.metadata()?.len();
+                if length > 256 * 1024 * 1024 {
+                    return Err(invalid("bootstrap program exceeds 256 MiB"));
+                }
+                // Deliberately inherited through unshare, including script launchers.
+                // PID 1 closes every descriptor >= 3 before any producer is started.
+                let mut output = File::from(memfd_create(
+                    name,
+                    MemfdFlags::ALLOW_SEALING | MemfdFlags::EXEC,
+                )?);
+                let mut input = input.take(length + 1);
+                let mut buffer = [0; 65536];
+                loop {
+                    check()?;
+                    let count = input.read(&mut buffer)?;
+                    if count == 0 {
+                        break;
+                    }
+                    output.write_all(&buffer[..count])?;
+                }
+                if input.limit() != 1 {
+                    return Err(invalid("bootstrap program changed while copying"));
+                }
+                output.set_permissions(fs::Permissions::from_mode(0o500))?;
+                fcntl_add_seals(
+                    &output,
+                    SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL,
+                )?;
+                // Hash after sealing: another same-UID process cannot modify the
+                // selected bytes between this check and either exec, even via proc-fd.
+                if sha256_file_checked(&Self::descriptor_path(&output), check)? != identity.sha256 {
+                    return Err(invalid("bootstrap snapshot differs from selected program"));
+                }
+                snapshots.insert(name.into(), output);
+            }
+            Ok(Self {
+                identities: identities.clone(),
+                snapshots,
+            })
+        }
+    }
+
+    fn descriptor_path(file: &File) -> PathBuf {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            PathBuf::new()
+        }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.snapshots
+            .get(name)
+            .map(Self::descriptor_path)
+            .unwrap_or_else(|| self.identities[name].path.clone())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn root_owned_program(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(false);
+    }
+    for ancestor in path.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || rustix::fs::access(ancestor, rustix::fs::Access::WRITE_OK).is_ok()
+            || metadata.file_type().is_symlink()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn contained_command(
-    tools: &BTreeMap<String, ProgramIdentity>,
+    tools: &Bootstrap,
     executable: &Path,
     argument_zero: &std::ffi::OsStr,
     work: &Path,
@@ -407,7 +529,12 @@ fn contained_command(
     boundary_sha256: &str,
     max_log_bytes: u64,
 ) -> Command {
-    let mut command = Command::new(&tools["unshare"].path);
+    let mut command = Command::new(tools.path("unshare"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.arg0(&tools.identities["unshare"].path);
+    }
     command
         .args([
             "--user",
@@ -421,31 +548,33 @@ fn contained_command(
             "--forward-signals",
             "--",
         ])
-        .arg(&tools["executor"].path)
+        .arg(tools.path("executor"))
         .arg(work)
         .arg(boundary)
         .arg(boundary_sha256)
         .arg(max_log_bytes.to_string())
-        .arg(&tools["setpriv"].path)
+        .arg(&tools.identities["setpriv"].path)
+        .arg(&tools.identities["executor"].path)
         .arg(executable)
         .arg(argument_zero);
     command
 }
 
 fn tool_version(
-    tool: (&Path, &str),
+    tool: (&str, &Path, &str),
     request: &RunRequest,
     cancelled: &AtomicBool,
     directory: &Path,
-    name: &str,
     deadline: Instant,
     receipt: &Receipt,
+    bootstrap: &Bootstrap,
 ) -> io::Result<Vec<u8>> {
-    let (program, argument_zero) = tool;
-    let path = directory.join(name);
+    let (name, program, argument_zero) = tool;
+    let name = format!("tool-{name}.log");
+    let path = directory.join(&name);
     let stderr_path = directory.join(format!("{name}.stderr"));
     let mut command = contained_command(
-        &receipt.containment,
+        bootstrap,
         program,
         std::ffi::OsStr::new(argument_zero),
         &directory.join("work"),
@@ -479,13 +608,19 @@ fn tool_version(
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
+    let mut output = Vec::new();
     for stream in [&path, &stderr_path] {
-        if fs::metadata(stream)?.len() > 1024 * 1024 {
+        let file = regular_file(stream)?;
+        let length = file.metadata()?.len();
+        if length > 1024 * 1024 {
             return Err(invalid("tool version stream exceeds 1 MiB"));
         }
+        let start = output.len();
+        file.take(1024 * 1024 + 1).read_to_end(&mut output)?;
+        if output.len() - start != length as usize {
+            return Err(invalid("tool version stream changed during bounded read"));
+        }
     }
-    let mut output = fs::read(path)?;
-    output.extend_from_slice(&fs::read(stderr_path)?);
     Ok(output)
 }
 
@@ -512,6 +647,9 @@ pub fn execute(
             "command and a deadline between 1 and 86400 seconds are required",
         ));
     }
+    if request.tools.len() > MAX_TOOLS {
+        return Err(invalid("qualification supports at most 32 tool probes"));
+    }
     let deadline = started + Duration::from_secs(request.timeout_seconds);
     let mut check = || {
         if cancelled.load(Ordering::Relaxed) {
@@ -529,6 +667,7 @@ pub fn execute(
         }
     };
     let containment = containment(request, &mut check)?;
+    let bootstrap = Bootstrap::new(&containment, &mut check)?;
     let cwd = request.cwd.canonicalize()?;
     let parent = directory
         .parent()
@@ -816,20 +955,25 @@ pub fn execute(
         if cancelled.load(Ordering::Relaxed) {
             return Ok((RunStatus::Cancelled, None));
         }
+        let mut version_bytes = 0usize;
         for (name, tool) in &selected_tools {
             relative(Path::new(name))?;
             if Path::new(name).components().count() != 1 {
                 return Err(invalid("tool labels must be single path components"));
             }
             let output = tool_version(
-                (&tool.path, &request.tool_argument_zeros[name]),
+                (name, &tool.path, &request.tool_argument_zeros[name]),
                 request,
                 cancelled,
                 &destination,
-                &format!("tool-{name}.log"),
                 started + Duration::from_secs(request.timeout_seconds),
                 &receipt,
+                &bootstrap,
             )?;
+            version_bytes = version_bytes.saturating_add(output.len());
+            if version_bytes > MAX_TOOL_VERSION_BYTES {
+                return Err(invalid("aggregate tool version evidence exceeds 8 MiB"));
+            }
             let version = String::from_utf8(output).map_err(|e| invalid(e.to_string()))?;
             receipt.tools.insert(
                 name.clone(),
@@ -842,7 +986,7 @@ pub fn execute(
         }
         let executable = executable?;
         let mut command = contained_command(
-            &receipt.containment,
+            &bootstrap,
             &executable.path,
             std::ffi::OsStr::new(
                 request
@@ -1266,6 +1410,14 @@ pub(crate) fn verify_run_bound(
         {
             return Err(invalid("receipt source inventory identity differs"));
         }
+        validate_source_links(inventory)?;
+    }
+    if receipt.tools.len() > MAX_TOOLS
+        || receipt.tools.values().fold(0usize, |total, tool| {
+            total.saturating_add(tool.version.len())
+        }) > MAX_TOOL_VERSION_BYTES
+    {
+        return Err(invalid("receipt exceeds aggregate tool version limits"));
     }
     if receipt.inventories.len() != receipt.composition.sources.len() {
         return Err(invalid("missing source inventories"));
@@ -1414,6 +1566,76 @@ pub(crate) fn verify_run_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bootstrap_seals_both_launchers_before_path_or_inode_substitution() {
+        use std::os::unix::fs::PermissionsExt;
+        for replace in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let unshare = root.path().join("unshare");
+            let executor = root.path().join("executor");
+            fs::write(
+                &unshare,
+                b"#!/bin/sh\nwhile test \"$1\" != --; do shift; done\nshift\nexec \"$@\"\n",
+            )
+            .unwrap();
+            fs::write(&executor, b"#!/bin/sh\nprintf approved\n").unwrap();
+            let identities: BTreeMap<_, _> = [
+                ("unshare", &unshare),
+                ("executor", &executor),
+                ("setpriv", &executor),
+            ]
+            .into_iter()
+            .map(|(name, path)| {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+                (
+                    name.into(),
+                    ProgramIdentity {
+                        path: path.clone(),
+                        sha256: sha256_file(path).unwrap(),
+                    },
+                )
+            })
+            .collect();
+            let bootstrap = Bootstrap::new(&identities, &mut || Ok(())).unwrap();
+            assert_eq!(bootstrap.snapshots.len(), 2);
+            for file in bootstrap.snapshots.values() {
+                assert!(fs::write(Bootstrap::descriptor_path(file), b"forged").is_err());
+                assert!(file.set_len(0).is_err());
+            }
+            for path in [&unshare, &executor] {
+                let target = if replace {
+                    path.with_extension("swap")
+                } else {
+                    path.clone()
+                };
+                fs::write(&target, b"#!/bin/sh\nprintf forged\n").unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+                if replace {
+                    fs::rename(target, path).unwrap();
+                }
+            }
+            let output = contained_command(
+                &bootstrap,
+                Path::new("/producer"),
+                std::ffi::OsStr::new("producer"),
+                root.path(),
+                &root.path().join("boundary.json"),
+                &"a".repeat(64),
+                1,
+            )
+            .env_clear()
+            .output()
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, b"approved", "replace={replace}");
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

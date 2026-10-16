@@ -410,6 +410,281 @@ fn finalization_rejects_unselected_symlink_targets() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn review_round_portable_runs_and_seals_reject_unselected_link_targets() {
+    let (root, _) = run_fixture("true", 30);
+    fs::create_dir(root.path().join("sub")).unwrap();
+    fs::set_permissions(root.path().join("sub"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("target"), b"target").unwrap();
+    std::os::unix::fs::symlink("../target", root.path().join("sub/link")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.sources.get_mut("producer").unwrap().paths = vec!["sub".into(), "target".into()];
+    let run = root.path().join("linked");
+    let mut receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    let handoff = root.path().join("handoff");
+    q::seal(
+        &q::SealRequest {
+            composition: receipt.composition.clone(),
+            gates: [("build".into(), run.clone())].into(),
+            expected_receipts: [(
+                "build".into(),
+                q::sha256_file(&run.join("receipt.json")).unwrap(),
+            )]
+            .into(),
+            artifacts: Default::default(),
+        },
+        &handoff,
+    )
+    .unwrap();
+
+    // Rebind every containing identity too: rejection must be semantic, not an
+    // accidental stale request, boundary, composition or external receipt hash.
+    let inventory = receipt.inventories.get_mut("producer").unwrap();
+    inventory.files.remove("target");
+    receipt
+        .composition
+        .sources
+        .insert("producer".into(), q::fingerprint(inventory).unwrap());
+    receipt.after = Some(receipt.composition.clone());
+    let mut request: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    request.sources.get_mut("producer").unwrap().paths = vec!["sub".into()];
+    fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+    receipt.request_sha256 = q::sha256_file(&run.join("request.json")).unwrap();
+    let mut boundary: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    let target = root.path().join("target");
+    boundary["snapshot_files"]
+        .as_object_mut()
+        .unwrap()
+        .remove(target.to_str().unwrap());
+    boundary["snapshot_mounts"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|path| path.as_str() != target.to_str());
+    fs::write(run.join("boundary.json"), q::json_bytes(&boundary).unwrap()).unwrap();
+    receipt.boundary_sha256 = q::sha256_file(&run.join("boundary.json")).unwrap();
+    fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
+    let required: q::ArtifactIndex = [(
+        "build".into(),
+        q::sha256_file(&run.join("receipt.json")).unwrap(),
+    )]
+    .into();
+    let mut seal: q::Seal = q::read_json(&handoff.join("seal.json")).unwrap();
+    seal.composition = receipt.composition.clone();
+    seal.gates = required.clone();
+    for file in ["request.json", "boundary.json", "receipt.json"] {
+        let path = format!("gates/build/{file}");
+        fs::copy(run.join(file), handoff.join(&path)).unwrap();
+        seal.artifacts
+            .insert(path, q::sha256_file(&run.join(file)).unwrap());
+    }
+    fs::write(handoff.join("seal.json"), q::json_bytes(&seal).unwrap()).unwrap();
+    let run_rejected = q::verify_run(&run, Some(&receipt.composition)).is_err();
+    let seal_rejected = q::verify_seal(&handoff, &receipt.composition, &required).is_err();
+    assert!(
+        run_rejected && seal_rejected,
+        "run rejected={run_rejected}, seal rejected={seal_rejected}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_round_bootstrap_executor_substitution_cannot_forge_success() {
+    for replace in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        let tools = request.containment.as_mut().unwrap();
+        let executor = root.path().join("executor");
+        fs::copy(&tools.executor, &executor).unwrap();
+        tools.executor = executor.clone();
+        let unshare = tools.unshare.clone();
+        let fake = root.path().join("fake-executor");
+        fs::write(&fake, b"#!/bin/sh\nprintf '{\"exitCode\":0,\"signal\":null,\"descendantsDrained\":true}' >&0\nprintf forged-bootstrap\n").unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let backup = root.path().join("executor.approved");
+        let launcher = root.path().join("launcher");
+        let cp = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("cp"))
+            .find(|path| path.is_file())
+            .unwrap();
+        let mv = cp.parent().unwrap().join("mv");
+        let rm = cp.parent().unwrap().join("rm");
+        fs::write(&launcher, format!(
+            "#!/bin/sh\nset -eu\n{cp:?} {executor:?} {backup:?}\n{}\n{cp:?} {fake:?} {executor:?}\nset +e\n{unshare:?} \"$@\"\nstatus=$?\n{mv:?} {backup:?} {executor:?}\nexit \"$status\"\n",
+            if replace { format!("{rm:?} {executor:?}") } else { String::new() },
+        )).unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        tools.unshare = launcher;
+        request.command[2] = "printf actual-producer; exit 7".into();
+        let run = root.path().join("substituted-bootstrap");
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        assert_ne!(
+            receipt.status,
+            q::RunStatus::Passed,
+            "replace={replace}: {receipt:#?}"
+        );
+        assert_ne!(
+            fs::read(run.join("stdout.log")).unwrap(),
+            b"forged-bootstrap"
+        );
+        assert!(q::verify_run(&run, None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_round_restrictive_work_survives_probes_and_main_execution() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("restrictive-tool");
+    let unlock = r#"dir="$QUALIFICATION_WORK_DIR/locked"
+        test "$(stat -c %a "$dir")" = 0
+        chmod 700 "$dir"
+        test "$(stat -c %a "$dir/nested")" = 0
+        chmod 700 "$dir/nested"
+        test "$(stat -c %a "$dir/nested/file")" = 0
+        chmod 600 "$dir/nested/file"
+        test "$(cat "$dir/nested/file")" = retained"#;
+    let lock = r#"chmod 000 "$dir/nested/file" "$dir/nested" "$dir""#;
+    fs::write(
+        &tool,
+        format!(
+            r#"#!/bin/sh
+set -eu
+dir="$QUALIFICATION_WORK_DIR/locked"
+if test -d "$dir"; then
+    {unlock}
+else
+    mkdir -p "$dir/nested"
+    printf retained > "$dir/nested/file"
+fi
+{lock}
+printf version
+"#
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools = [("first".into(), tool.clone()), ("second".into(), tool)].into();
+    request.command[2] = format!("set -eu\n{unlock}\n{lock}\nprintf main");
+    let run = root.path().join("restrictive-work");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    // Restore host-side access even on a failing baseline, for scoped cleanup.
+    let locked = run.join("work/locked");
+    let mode = fs::metadata(&locked).unwrap().permissions().mode() & 0o7777;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(locked.join("nested"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(
+        locked.join("nested/file"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    assert_eq!(mode, 0);
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(fs::read(run.join("stdout.log")).unwrap(), b"main");
+    assert_eq!(fs::read(locked.join("nested/file")).unwrap(), b"retained");
+    q::verify_run(&run, None).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_round_tool_probe_count_is_bounded_before_admission() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.tools = (0..33)
+        .map(|i| (format!("alias-{i}"), "/bin/sh".into()))
+        .collect();
+    request.timeout_seconds = 1;
+    let run = root.path().join("too-many-probes");
+    let result = q::execute(&request, &run, &Default::default());
+    assert!(
+        result.is_err(),
+        "unbounded probes were admitted: {result:#?}"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("at most 32 tool probes")
+    );
+    assert!(!run.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_round_tool_versions_have_an_aggregate_byte_budget() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("large-version");
+    fs::write(&tool, b"#!/bin/sh\nset -eu\nhead -c 1048576 /dev/zero | tr '\\000' x\nhead -c 1048576 /dev/zero | tr '\\000' x >&2\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools = (0..6)
+        .map(|i| (format!("alias-{i}"), tool.clone()))
+        .collect();
+    request.command[2] = "printf main".into();
+    let run = root.path().join("large-versions");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Failed, "{:#?}", receipt.error);
+    assert!(
+        receipt
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("aggregate tool version")
+    );
+    assert!(fs::read(run.join("stdout.log")).unwrap().is_empty());
+    assert!(!run.join("tool-alias-5.log").exists());
+    assert_eq!(receipt.tools.len(), 4);
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_round_portable_tool_evidence_obeys_the_same_aggregate_limits() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let tool = root.path().join("tool");
+    fs::write(&tool, b"#!/bin/sh\nprintf version\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools.insert("selected".into(), tool);
+    let run = root.path().join("tool-evidence");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    q::verify_run(&run, None).unwrap();
+    let request: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    for count in [false, true] {
+        let mut changed = receipt.clone();
+        let mut request = request.clone();
+        if count {
+            let tool = changed.tools["selected"].clone();
+            changed.tools = (0..33)
+                .map(|i| (format!("alias-{i}"), tool.clone()))
+                .collect();
+            request.tools = changed
+                .tools
+                .iter()
+                .map(|(name, tool)| (name.clone(), tool.path.clone()))
+                .collect();
+            request.tool_argument_zeros = changed
+                .tools
+                .keys()
+                .map(|name| (name.clone(), "tool".into()))
+                .collect();
+        } else {
+            changed.tools.get_mut("selected").unwrap().version = "x".repeat(8 * 1024 * 1024 + 1);
+        }
+        fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+        changed.request_sha256 = q::sha256_file(&run.join("request.json")).unwrap();
+        fs::write(run.join("receipt.json"), q::json_bytes(&changed).unwrap()).unwrap();
+        let error = q::verify_run(&run, None).unwrap_err();
+        assert!(
+            error.to_string().contains("aggregate tool version limits"),
+            "{error}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn finalization_execution_snapshots_cannot_observe_transient_host_substitutions() {
     use std::time::{Duration, Instant};
     for replacement in [false, true] {
