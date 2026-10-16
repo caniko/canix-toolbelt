@@ -396,6 +396,7 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
     let mut links = BTreeMap::new();
     let mut directories = std::collections::BTreeSet::new();
     let mut seen_paths = std::collections::BTreeSet::new();
+    let mut reserved_bytes = 0usize;
     for entry in tar.entries()? {
         let mut entry = entry?;
         let kind = entry.header().entry_type();
@@ -423,6 +424,17 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
         let path = entry.path()?.into_owned();
         relative(&path)?;
         let name = path_text(&path)?.trim_start_matches("./").to_owned();
+        reserved_bytes = reserved_bytes.saturating_add(source_entry_bytes(
+            &name,
+            &SourceFile {
+                sha256: String::new(),
+                executable: false,
+                link: None,
+            },
+        ));
+        if seen_paths.len() >= MAX_SOURCE_FILES || reserved_bytes > MAX_SOURCE_JSON_BYTES {
+            return Err(invalid("archive entry or serialized-size budget exceeded"));
+        }
         if !seen_paths.insert(name.clone()) {
             return Err(invalid("duplicate archive path"));
         }
@@ -443,8 +455,13 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
                 .link_name()?
                 .ok_or_else(|| invalid("missing archive link target"))?
                 .into_owned();
-            links.insert(name.clone(), link.clone());
-            Some(path_text(&link)?)
+            let text = path_text(&link)?;
+            reserved_bytes = reserved_bytes.saturating_add(text.len().saturating_mul(6));
+            if reserved_bytes > MAX_SOURCE_JSON_BYTES {
+                return Err(invalid("archive serialized-size budget exceeded"));
+            }
+            links.insert(name.clone(), link);
+            Some(text)
         } else if kind.is_file() {
             // Rust tar includes the redundant POSIX regular-file type bits.
             // Neither encoding may carry unrepresented permission bits.
@@ -534,6 +551,26 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_review_archive_inventory_rejects_excess_entries_during_parsing() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("many.tar");
+        let mut builder = tar::Builder::new(File::create(&archive).unwrap());
+        for i in 0..=MAX_SOURCE_FILES {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, format!("file-{i}"), io::empty())
+                .unwrap();
+        }
+        builder.finish().unwrap();
+        drop(builder);
+        let error = archive_inventory(&archive).unwrap_err();
+        assert!(error.to_string().contains("budget"), "{error}");
+    }
 
     #[test]
     fn growing_artifact_copies_never_read_beyond_the_opened_size() {

@@ -27,6 +27,9 @@ Inventory collection also admits at most 131,072 file entries and conservatively
 reserves a 64 MiB serialized-evidence budget before inserting each entry. The
 combined named sources share those bounds. Fingerprints stream through the same
 bounded JSON writer instead of materializing unbounded serialization buffers.
+Source-archive verification also bounds entries and serialized-size reservations
+while parsing, before retaining paths in its maps, including directory entries
+and link targets. Both current and retained-legacy archive verification share it.
 A source selected through a symlink is rejected before spawn; selecting
 its containing directory preserves the recorded symlink semantics instead.
 Inventory v1 cannot represent empty directories: recursive selections containing
@@ -67,7 +70,9 @@ Compat-architecture execution is not supported. Job-control stops use
 `PTRACE_LISTEN`; ordinary signals are forwarded rather than swallowed.
 After descendant drainage, the supervisor retains bounded regular files,
 directories and symlinks without following links. Work files are visible to
-the caller after completion; use the bounded log streams for live progress.
+the caller after completion. `stdout.log.live` and `stderr.log.live` expose diagnostic
+progress but are never selected as evidence. Receipt log files are published
+only after their private capture completes.
 The launcher and privilege limiter
 use sanitized environments; recorded producer settings, including loader
 variables, are applied by the final exec adapter after containment and capability
@@ -112,8 +117,8 @@ aliases separately from their canonical byte-bound executable paths. Effective
 requests bind every selected alias. Rust callers initialize the new fields with
 empty collections when no extra selection is needed.
 
-Producer stdout/stderr each have a hard 512 MiB file-size limit (version probes
-use independently captured 1 MiB streams). Probe capture uses private Unix
+Producer stdout/stderr each have a hard 512 MiB stream limit (version probes
+use independently captured 1 MiB streams). All log capture uses private Unix
 sockets and bounded readers that latch overflow even when a producer handles
 `EPIPE`; work files retain their separate 256 MiB aggregate quota. The global
 file-size ceiling remains 512 MiB, above that entire work quota, so a version
@@ -123,9 +128,12 @@ version strings may not exceed 8 MiB. The probe that exceeds that aggregate budg
 is retained as failed evidence (at most one additional 2 MiB stdout/stderr pair);
 no later probes or main command run. Portable verification enforces the same
 count and aggregate-version limits. Reaching the main-stream limit is
-non-acceptance even if a shell masks a failed child. Main and probe log capture
-retains the original opened descriptors; substituted public log paths cannot
-become the selected producer output. Evidence JSON is limited to
+non-acceptance even if a shell masks a failed child. Main and probe capture hash
+channel bytes independently while retaining them in anonymous files; completed
+files are sealed against writes and resizing before checking their digests and
+publishing them. Public log paths are created exclusively at publication and
+verified against the private channel digests. Neither same-inode writes nor
+substituted paths can become the selected producer output. Evidence JSON is limited to
 64 MiB. Receipt publication
 checks cancellation and deadlines during serialization, between writes and
 after durable sync, then atomically exposes the completed receipt. Interrupted
@@ -141,7 +149,7 @@ Source/input/tool/environment selections, inventory paths, receipt maps and seal
 gate/artifact selections also reject duplicate keys. Portable receipt verification
 requires every input, executable, tool, containment and boundary-policy digest to
 be 64 hexadecimal digits.
-Retained executable, tool and containment paths must also be canonical and
+Retained executable, tool, containment, cwd, input, runtime and sandbox paths must also be canonical and
 absolute without consulting the original machine's filesystem.
 Every retained source-file digest is subject to the same format check, even when
 an externally supplied inventory and its enclosing composition were rehashed.
@@ -155,6 +163,14 @@ All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retainin
 a completed work tree replaces prior children, preserving producer deletions and
 directory/file transitions and directory permission modes between probes and the
 main command. Restrictive modes are restored after copying descendants. Retention
+preserves and hashes access and modification timestamps, including nanoseconds,
+for files, directories and symlinks. Reads avoid changing those retained times.
+The work identity uses the `qualification-work-v2` domain for this expanded contract.
+The caller pins the original evidence/work directory inodes for the entire run.
+PID 1 opens without symlinks and checks those identities before any restoration
+or producer launch, including the first invocation. Clearing and copying use
+descriptor-relative, no-follow operations rooted in those pinned directories;
+replacement paths cannot redirect retention into unrelated directories. Retention
 and startup restoration run under privileged PID 1 before producer capabilities
 are dropped, so mode-`000` files and nested directories remain copyable; their
 original modes are preserved for the next producer to inspect and change.

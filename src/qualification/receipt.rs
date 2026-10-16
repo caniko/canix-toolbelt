@@ -544,7 +544,7 @@ fn contained_command(
     tools: &Bootstrap,
     executable: &Path,
     argument_zero: &std::ffi::OsStr,
-    work: (&Path, Option<&str>),
+    work: (&Path, Option<&str>, &str),
     boundary: &Path,
     boundary_sha256: &str,
     max_log_bytes: u64,
@@ -571,6 +571,7 @@ fn contained_command(
         .arg(tools.path("executor"))
         .arg(work.0)
         .arg(work.1.unwrap_or("-"))
+        .arg(work.2)
         .arg(boundary)
         .arg(boundary_sha256)
         .arg(max_log_bytes.to_string())
@@ -617,27 +618,44 @@ fn retain_report(reader: impl Read, path: &Path) -> io::Result<Option<ExecutionR
     Ok(Some(report))
 }
 
+struct CapturedLog {
+    file: File,
+    sha256: String,
+    overflow: bool,
+}
+
+type LogWorker = std::thread::JoinHandle<io::Result<CapturedLog>>;
+
 fn capture_log(
-    mut file: File,
+    path: &Path,
     limit: u64,
     finished: Arc<AtomicBool>,
-) -> io::Result<(
-    std::process::Stdio,
-    std::thread::JoinHandle<io::Result<bool>>,
-)> {
+) -> io::Result<(std::process::Stdio, LogWorker)> {
     #[cfg(target_os = "linux")]
     {
+        use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
         use std::io::Write;
         use std::os::{fd::OwnedFd, unix::net::UnixStream};
         // A socket cannot be reopened through a host /proc/fd path to keep a
         // writer alive after namespace teardown, unlike a pipe.
         let (mut reader, writer) = UnixStream::pair()?;
         reader.set_read_timeout(Some(Duration::from_millis(100)))?;
+        let mut preview_path = path.as_os_str().to_owned();
+        preview_path.push(".live");
+        let mut preview = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(PathBuf::from(preview_path))?;
+        let mut file = File::from(memfd_create(
+            c"qualification-log",
+            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+        )?);
         let worker = std::thread::spawn(move || {
             let mut remaining = limit;
             let mut cleanup = None;
             let mut buffer = [0; 65536];
-            loop {
+            let mut hash = Sha256::new();
+            let overflow = loop {
                 if finished.load(Ordering::Relaxed) {
                     let deadline =
                         cleanup.get_or_insert_with(|| Instant::now() + Duration::from_secs(1));
@@ -646,7 +664,7 @@ fn capture_log(
                     }
                 }
                 let count = match reader.read(&mut buffer) {
-                    Ok(0) => return Ok(false),
+                    Ok(0) => break false,
                     Ok(count) => count,
                     Err(error)
                         if matches!(
@@ -655,7 +673,7 @@ fn capture_log(
                         ) =>
                     {
                         if finished.load(Ordering::Relaxed) {
-                            return Ok(false);
+                            break false;
                         }
                         continue;
                     }
@@ -664,24 +682,38 @@ fn capture_log(
                 };
                 let retain = count.min(remaining as usize);
                 file.write_all(&buffer[..retain])?;
+                // Diagnostic progress is never used as receipt evidence. Only
+                // socket bytes and their sealed copy select the completed log.
+                preview.write_all(&buffer[..retain])?;
+                hash.update(&buffer[..retain]);
                 remaining -= retain as u64;
                 // Closing wakes writers with EPIPE. The private join result
                 // latches overflow even if the producer handles that error.
                 if count > retain {
-                    return Ok(true);
+                    break true;
                 }
-            }
+            };
+            fcntl_add_seals(
+                &file,
+                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL,
+            )?;
+            Ok(CapturedLog {
+                file,
+                sha256: format!("{:x}", hash.finalize()),
+                overflow,
+            })
         });
         Ok((std::process::Stdio::from(OwnedFd::from(writer)), worker))
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (&mut file, limit, finished);
+        let _ = (path, limit, finished);
         Err(invalid("probe capture requires Linux"))
     }
 }
 
-fn finish_logs(streams: [std::thread::JoinHandle<io::Result<bool>>; 2]) -> io::Result<()> {
+fn finish_logs(streams: [LogWorker; 2], finished: &AtomicBool) -> io::Result<[CapturedLog; 2]> {
+    finished.store(true, Ordering::Relaxed);
     // Join both streams even when one fails, so no capture thread outlives a run.
     let results = streams.map(|stream| {
         stream
@@ -689,53 +721,22 @@ fn finish_logs(streams: [std::thread::JoinHandle<io::Result<bool>>; 2]) -> io::R
             .map_err(|_| invalid("log capture thread panicked"))
             .and_then(|result| result)
     });
-    for result in results {
-        if result? {
-            return Err(invalid("producer exceeded its log stream bound"));
-        }
-    }
-    Ok(())
+    let [out, err] = results;
+    Ok([out?, err?])
 }
 
-fn tool_version(
-    tool: (&str, &Path, &str),
-    request: &RunRequest,
-    cancelled: &AtomicBool,
-    directory: &Path,
-    deadline: Instant,
-    evidence: (&Receipt, Option<&str>),
-    bootstrap: &Bootstrap,
-) -> io::Result<(Vec<u8>, String)> {
-    let (receipt, work_sha256) = evidence;
-    let (name, program, argument_zero) = tool;
-    let name = format!("tool-{name}.log");
-    let path = directory.join(&name);
-    let stderr_path = directory.join(format!("{name}.stderr"));
-    let mut command = contained_command(
-        bootstrap,
-        program,
-        std::ffi::OsStr::new(argument_zero),
-        (&directory.join("work"), work_sha256),
-        &directory.join("boundary.json"),
-        &receipt.boundary_sha256,
-        1024 * 1024,
-    );
-    let (report_reader, report_writer) = report_channel()?;
-    let mut out = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    let mut err = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&stderr_path)?;
-    let out_log = out.try_clone()?;
-    let err_log = err.try_clone()?;
+fn capture_logs(
+    paths: [&Path; 2],
+    limit: u64,
+) -> io::Result<(
+    std::process::Stdio,
+    std::process::Stdio,
+    Arc<AtomicBool>,
+    [LogWorker; 2],
+)> {
     let finished = Arc::new(AtomicBool::new(false));
-    let (stdout, out_worker) = capture_log(out_log, 1024 * 1024, Arc::clone(&finished))?;
-    let (stderr, err_worker) = match capture_log(err_log, 1024 * 1024, Arc::clone(&finished)) {
+    let (stdout, out_worker) = capture_log(paths[0], limit, Arc::clone(&finished))?;
+    let (stderr, err_worker) = match capture_log(paths[1], limit, Arc::clone(&finished)) {
         Ok(capture) => capture,
         Err(error) => {
             drop(stdout);
@@ -744,6 +745,76 @@ fn tool_version(
             return Err(error);
         }
     };
+    Ok((stdout, stderr, finished, [out_worker, err_worker]))
+}
+
+fn publish_log(
+    log: Option<&CapturedLog>,
+    path: &Path,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    use std::io::{Seek, Write};
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    let expected = if let Some(log) = log {
+        let mut input = log.file.try_clone()?;
+        input.rewind()?;
+        if sha256_open_file_checked(input.try_clone()?, check)? != log.sha256 {
+            return Err(invalid(
+                "sealed producer log differs from its private channel",
+            ));
+        }
+        input.rewind()?;
+        let mut buffer = [0; 65536];
+        loop {
+            check()?;
+            let count = input.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            output.write_all(&buffer[..count])?;
+        }
+        log.sha256.clone()
+    } else {
+        format!("{:x}", Sha256::digest([]))
+    };
+    output.sync_all()?;
+    check()?;
+    if sha256_file_checked(path, check)? != expected {
+        return Err(invalid(
+            "published producer log differs from its private channel",
+        ));
+    }
+    Ok(expected)
+}
+
+fn tool_version(
+    tool: (&str, &Path, &str),
+    request: &RunRequest,
+    cancelled: &AtomicBool,
+    directory: &Path,
+    deadline: Instant,
+    evidence: (&Receipt, Option<&str>, &str),
+    bootstrap: &Bootstrap,
+) -> io::Result<(Vec<u8>, String)> {
+    let (receipt, work_sha256, work_identity) = evidence;
+    let (name, program, argument_zero) = tool;
+    let name = format!("tool-{name}.log");
+    let path = directory.join(&name);
+    let stderr_path = directory.join(format!("{name}.stderr"));
+    let mut command = contained_command(
+        bootstrap,
+        program,
+        std::ffi::OsStr::new(argument_zero),
+        (&directory.join("work"), work_sha256, work_identity),
+        &directory.join("boundary.json"),
+        &receipt.boundary_sha256,
+        1024 * 1024,
+    );
+    let (report_reader, report_writer) = report_channel()?;
+    let (stdout, stderr, finished, workers) = capture_logs([&path, &stderr_path], 1024 * 1024)?;
     command
         .arg("--version")
         .current_dir(&request.cwd)
@@ -766,9 +837,20 @@ fn tool_version(
         }
         result
     });
-    finished.store(true, Ordering::Relaxed);
-    let logs = finish_logs([out_worker, err_worker]);
-    logs?;
+    let [mut out, mut err] = finish_logs(workers, &finished)?;
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    let mut check = || {
+        if Instant::now() >= cleanup_deadline {
+            Err(io::ErrorKind::TimedOut.into())
+        } else {
+            Ok(())
+        }
+    };
+    publish_log(Some(&out), &path, &mut check)?;
+    publish_log(Some(&err), &stderr_path, &mut check)?;
+    if out.overflow || err.overflow {
+        return Err(invalid("producer exceeded its log stream bound"));
+    }
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
@@ -784,8 +866,9 @@ fn tool_version(
         .work_sha256
         .ok_or_else(|| invalid("tool version lacks a private work identity"))?;
     let mut output = Vec::new();
-    for (file, stream) in [(&mut out, &path), (&mut err, &stderr_path)] {
+    for (log, stream) in [(&mut out, &path), (&mut err, &stderr_path)] {
         use std::io::Seek;
+        let file = &mut log.file;
         file.rewind()?;
         let length = file.metadata()?.len();
         if length > 1024 * 1024 {
@@ -796,7 +879,9 @@ fn tool_version(
         if output.len() - start != length as usize {
             return Err(invalid("tool version stream changed during bounded read"));
         }
-        if sha256_file(stream)? != format!("{:x}", Sha256::digest(&output[start..])) {
+        if log.sha256 != format!("{:x}", Sha256::digest(&output[start..]))
+            || sha256_file(stream)? != log.sha256
+        {
             return Err(invalid("tool version log was replaced"));
         }
     }
@@ -1024,6 +1109,40 @@ pub fn execute(
     fs::create_dir(&work)?;
     fs::create_dir(work.join("home"))?;
     fs::create_dir(work.join("cargo-home"))?;
+    // Hold both inodes until all invocations are reaped, preventing inode reuse.
+    // PID 1 independently opens without symlinks and checks these identities.
+    let pin_directory = |path: &Path| -> io::Result<File> {
+        #[cfg(target_os = "linux")]
+        {
+            Ok(rustix::fs::openat2(
+                rustix::fs::CWD,
+                path,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+                rustix::fs::ResolveFlags::NO_SYMLINKS,
+            )?
+            .into())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = path;
+            Err(invalid("qualification work retention requires Linux"))
+        }
+    };
+    let retained_evidence = pin_directory(&destination)?;
+    let retained_work = pin_directory(&work)?;
+    use std::os::unix::fs::MetadataExt;
+    let evidence_metadata = retained_evidence.metadata()?;
+    let work_metadata = retained_work.metadata()?;
+    let work_identity = format!(
+        "{}:{}:{}:{}",
+        evidence_metadata.dev(),
+        evidence_metadata.ino(),
+        work_metadata.dev(),
+        work_metadata.ino()
+    );
     let sandbox = destination.join("sandbox");
     fs::create_dir(&sandbox)?;
     // Public system runtime trees supply dynamic loaders and standard tools;
@@ -1128,17 +1247,8 @@ pub fn execute(
         error: None,
     };
     // Create logs even for cancellation or spawn failures, for a complete failed receipt.
-    let out = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(destination.join("stdout.log"))?;
-    let err = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(destination.join("stderr.log"))?;
     let mut native_report = None;
+    let mut main_logs = None;
     let outcome = (|| -> io::Result<(RunStatus, Option<i32>)> {
         if cancelled.load(Ordering::Relaxed) {
             return Ok((RunStatus::Cancelled, None));
@@ -1156,7 +1266,7 @@ pub fn execute(
                 cancelled,
                 &destination,
                 started + Duration::from_secs(request.timeout_seconds),
-                (&receipt, work_sha256.as_deref()),
+                (&receipt, work_sha256.as_deref(), &work_identity),
                 &bootstrap,
             )?;
             work_sha256 = Some(retained_work);
@@ -1184,34 +1294,51 @@ pub fn execute(
                     .as_deref()
                     .unwrap_or(&request.command[0]),
             ),
-            (&work, work_sha256.as_deref()),
+            (&work, work_sha256.as_deref(), &work_identity),
             &destination.join("boundary.json"),
             &receipt.boundary_sha256,
             super::boundary::MAX_LOG_BYTES,
         );
         let (report_reader, report_writer) = report_channel()?;
+        let (stdout, stderr, finished, workers) = capture_logs(
+            [
+                &destination.join("stdout.log"),
+                &destination.join("stderr.log"),
+            ],
+            super::boundary::MAX_LOG_BYTES,
+        )?;
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
             .env_clear()
             .env("LANG", "C")
             .stdin(report_writer)
-            .stdout(out.try_clone()?)
-            .stderr(err.try_clone()?);
+            .stdout(stdout)
+            .stderr(stderr);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn()?;
+        let child = command.spawn();
         drop(command);
-        let outcome = wait(
-            &mut child,
-            started + Duration::from_secs(request.timeout_seconds),
-            cancelled,
-        );
-        if outcome.is_err() {
-            stop(&mut child)?;
+        let outcome = child.and_then(|mut child| {
+            let outcome = wait(
+                &mut child,
+                started + Duration::from_secs(request.timeout_seconds),
+                cancelled,
+            );
+            if outcome.is_err() {
+                stop(&mut child)?;
+            }
+            outcome
+        });
+        main_logs = Some(finish_logs(workers, &finished)?);
+        if main_logs
+            .as_ref()
+            .is_some_and(|logs| logs.iter().any(|log| log.overflow))
+        {
+            return Err(invalid("producer exceeded its log stream bound"));
         }
         let outcome = outcome?;
         native_report = retain_report(report_reader, &destination.join("execution.json"))?;
@@ -1257,9 +1384,12 @@ pub fn execute(
     {
         receipt.status = RunStatus::TimedOut;
     }
-    if [&out, &err].into_iter().any(|file| {
-        file.metadata()
-            .is_ok_and(|metadata| metadata.len() >= super::boundary::MAX_LOG_BYTES)
+    if main_logs.as_ref().is_some_and(|logs| {
+        logs.iter().any(|log| {
+            log.file
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() >= super::boundary::MAX_LOG_BYTES)
+        })
     }) {
         receipt.status = RunStatus::Failed;
         receipt.error = Some("producer reached the 512 MiB per-stream output limit".into());
@@ -1289,6 +1419,29 @@ pub fn execute(
         }),
     )?;
     let finalize_deadline = Instant::now() + Duration::from_secs(5);
+    // The producer is already drained. Retain its completed diagnostics even
+    // after cancellation, within the same finite cleanup budget. Acceptance
+    // and receipt publication still observe cancellation below.
+    let logs = (|| -> io::Result<()> {
+        let mut cleanup = || {
+            if Instant::now() < finalize_deadline {
+                Ok(())
+            } else {
+                Err(io::ErrorKind::TimedOut.into())
+            }
+        };
+        receipt.stdout_sha256 = publish_log(
+            main_logs.as_ref().map(|logs| &logs[0]),
+            &destination.join("stdout.log"),
+            &mut cleanup,
+        )?;
+        receipt.stderr_sha256 = publish_log(
+            main_logs.as_ref().map(|logs| &logs[1]),
+            &destination.join("stderr.log"),
+            &mut cleanup,
+        )?;
+        Ok(())
+    })();
     let mut finalize = || {
         if cancelled.load(Ordering::Relaxed) {
             Err(io::Error::new(
@@ -1305,6 +1458,7 @@ pub fn execute(
         }
     };
     let finalization = (|| -> io::Result<()> {
+        logs?;
         if sha256_file_checked(&destination.join("boundary.json"), &mut finalize)
             .ok()
             .as_ref()
@@ -1341,8 +1495,6 @@ pub fn execute(
             }
             receipt.execution_report_sha256 = Some(hash);
         }
-        receipt.stdout_sha256 = sha256_open_file_checked(out.try_clone()?, &mut finalize)?;
-        receipt.stderr_sha256 = sha256_open_file_checked(err.try_clone()?, &mut finalize)?;
         for (name, expected) in [
             ("stdout.log", &receipt.stdout_sha256),
             ("stderr.log", &receipt.stderr_sha256),
@@ -1650,6 +1802,18 @@ pub(crate) fn verify_run_bound(
         &directory.join("boundary.json"),
         Some(&receipt.boundary_sha256),
     )?;
+    if !canonical_absolute(&request.cwd)
+        || !canonical_absolute(&boundary.sandbox)
+        || request
+            .inputs
+            .values()
+            .chain(&request.runtime_paths)
+            .any(|path| !canonical_absolute(path))
+    {
+        return Err(invalid(
+            "retained cwd, input, runtime and sandbox paths must be canonical and absolute",
+        ));
+    }
     validate_runtime_selection(&request)?;
     if request.command.is_empty()
         || request.command[0].is_empty()
@@ -1801,6 +1965,19 @@ pub(crate) fn verify_run_bound(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_review_live_preview_names_do_not_collide_for_dotted_tools() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["tool-a.log", "tool-a.log.log"] {
+            let path = root.path().join(name);
+            let stderr = root.path().join(format!("{name}.stderr"));
+            let (stdout, stderr, finished, workers) = capture_logs([&path, &stderr], 32).unwrap();
+            drop((stdout, stderr));
+            finish_logs(workers, &finished).unwrap();
+        }
+    }
+
     #[test]
     fn merge_repair_source_link_chains_bind_terminal_identity_and_reject_cycles() {
         let file = SourceFile {
@@ -1901,7 +2078,7 @@ mod tests {
                 &bootstrap,
                 Path::new("/producer"),
                 std::ffi::OsStr::new("producer"),
-                (root.path(), None),
+                (root.path(), None, "unused-directory-identity"),
                 &root.path().join("boundary.json"),
                 &"a".repeat(64),
                 1,

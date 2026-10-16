@@ -649,6 +649,214 @@ fn successor_replaced_log_paths_cannot_become_qualified_output() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn new_review_same_inode_log_injection_cannot_qualify() {
+    for probe in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        request.command[2] = "printf native-output; printf native-error >&2".into();
+        if probe {
+            request.tools.insert("probe".into(), "/bin/sh".into());
+        }
+        let run = root.path().join("inplace-logs");
+        let unshare = &request.containment.as_ref().unwrap().unshare;
+        let launcher = root.path().join("inplace-launcher");
+        let logs = if probe {
+            ["tool-probe.log", "tool-probe.log.stderr"]
+        } else {
+            ["stdout.log", "stderr.log"]
+        };
+        fs::write(&launcher, format!("#!/bin/sh\n{unshare:?} \"$@\"\nstatus=$?\nfor log in {:?} {:?}; do printf injected > \"$log\"; done\nexit \"$status\"\n", run.join(logs[0]), run.join(logs[1]))).unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        request.containment.as_mut().unwrap().unshare = launcher;
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        assert_ne!(
+            receipt.status,
+            q::RunStatus::Passed,
+            "probe={probe}: {receipt:#?}"
+        );
+        assert!(q::verify_run(&run, None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_review_live_preview_writes_never_select_completed_log_bytes() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "printf ready; printf native-error >&2; kill -STOP $$; printf done".into();
+    let pid_file = record_launcher(&mut request, root.path());
+    let run = root.path().join("preview-injection");
+    let receipt = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while fs::read(run.join("stdout.log.live")).unwrap_or_default() != b"ready"
+            && !task.is_finished()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(fs::read(run.join("stdout.log.live")).unwrap(), b"ready");
+        assert!(!run.join("stdout.log").exists());
+        for name in ["stdout.log.live", "stderr.log.live"] {
+            fs::write(run.join(name), b"injected").unwrap();
+        }
+        while !task.is_finished() && std::time::Instant::now() < deadline {
+            resume_launcher(&pid_file);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        task.join().unwrap()
+    });
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(fs::read(run.join("stdout.log")).unwrap(), b"readydone");
+    assert_eq!(fs::read(run.join("stderr.log")).unwrap(), b"native-error");
+    q::verify_run(&run, None).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_review_replaced_work_cannot_overwrite_an_unrelated_directory() {
+    let (root, _) = run_fixture("true", 30);
+    let victim = tempdir().unwrap();
+    fs::write(victim.path().join("keep"), b"unrelated").unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let run = root.path().join("redirected-work");
+    let launcher = root.path().join("redirect-work-launcher");
+    let unshare = &request.containment.as_ref().unwrap().unshare;
+    let program = |name: &str| {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join(name))
+            .find(|path| path.is_file())
+            .unwrap()
+    };
+    let mv = program("mv");
+    let ln = program("ln");
+    fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nset -eu\n{mv:?} {:?} {:?}\n{ln:?} -s {:?} {:?}\nexec {unshare:?} \"$@\"\n",
+            run.join("work"),
+            run.join("work.original"),
+            victim.path(),
+            run.join("work")
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    request.containment.as_mut().unwrap().unshare = launcher;
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(fs::read(victim.path().join("keep")).unwrap(), b"unrelated");
+    assert_ne!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[test]
+fn new_review_directory_selection_ignores_lexically_adjacent_siblings() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("a")).unwrap();
+    fs::write(root.path().join("a/file"), b"nested").unwrap();
+    fs::write(root.path().join("a-foo"), b"sibling").unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["a".into(), "a-foo".into()],
+    };
+    let inventory = q::inventory(&spec).unwrap();
+    assert_eq!(inventory.files.len(), 2);
+    let out = tempdir().unwrap();
+    q::export_source(&spec, &out.path().join("source.tar")).unwrap();
+    q::verify_source_archive(&out.path().join("source.tar"), &inventory).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_review_probe_work_timestamps_reach_the_next_probe_and_main() {
+    let (root, _) = run_fixture("true", 30);
+    let create = root.path().join("create-cache");
+    let inspect = root.path().join("inspect-cache");
+    fs::write(&create, b"#!/bin/sh\nset -eu\ncd \"$QUALIFICATION_WORK_DIR\"\nmkdir nested\nprintf cache > nested/file\nln -s file nested/link\ntouch -h -d @123 nested/file nested/link nested .\nprintf created\n").unwrap();
+    let check = "set -eu; cd \"$QUALIFICATION_WORK_DIR\"; for path in nested/file nested/link nested .; do test \"$(stat -c %X:%Y \"$path\")\" = 123:123; done; printf preserved";
+    fs::write(&inspect, format!("#!/bin/sh\n{check}\n")).unwrap();
+    for path in [&create, &inspect] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.tools.insert("a-create".into(), create);
+    request.tools.insert("b-inspect".into(), inspect);
+    request.command[2] = check.into();
+    let run = root.path().join("timestamp-transitions");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(receipt.tools["b-inspect"].version, "preserved");
+    assert_eq!(fs::read(run.join("stdout.log")).unwrap(), b"preserved");
+    q::verify_run(&run, None).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_review_portable_cwd_input_runtime_and_sandbox_paths_are_canonical() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.runtime_paths.push(request.inputs["lock"].clone());
+    let run = root.path().join("portable-paths");
+    q::execute(&request, &run, &Default::default()).unwrap();
+    q::verify_run(&run, None).unwrap();
+    let original_request: serde_json::Value = q::read_json(&run.join("request.json")).unwrap();
+    let original_receipt: serde_json::Value = q::read_json(&run.join("receipt.json")).unwrap();
+    let original_boundary: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    let mut accepted = Vec::new();
+    for field in ["cwd", "input", "sandbox"] {
+        for prefix in ["relative/", "/tmp/../", "/tmp/./"] {
+            let mut request = original_request.clone();
+            let mut receipt = original_receipt.clone();
+            let mut boundary = original_boundary.clone();
+            let old = match field {
+                "cwd" => request["cwd"].as_str(),
+                "input" => request["inputs"]["lock"].as_str(),
+                _ => boundary["sandbox"].as_str(),
+            }
+            .unwrap()
+            .to_owned();
+            let changed = format!("{prefix}{}", old.trim_start_matches('/'));
+            match field {
+                "cwd" => request["cwd"] = changed.into(),
+                "sandbox" => boundary["sandbox"] = changed.into(),
+                _ => {
+                    request["inputs"]["lock"] = changed.clone().into();
+                    request["runtimePaths"][0] = changed.clone().into();
+                    let file = boundary["snapshot_files"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(&old)
+                        .unwrap();
+                    boundary["snapshot_files"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(changed.clone(), file);
+                    for path in boundary["snapshot_mounts"].as_array_mut().unwrap() {
+                        if path.as_str() == Some(&old) {
+                            *path = changed.clone().into();
+                        }
+                    }
+                }
+            }
+            fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+            fs::write(run.join("boundary.json"), q::json_bytes(&boundary).unwrap()).unwrap();
+            receipt["requestSha256"] = q::sha256_file(&run.join("request.json")).unwrap().into();
+            receipt["boundarySha256"] = q::sha256_file(&run.join("boundary.json")).unwrap().into();
+            fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
+            if q::verify_run(&run, None).is_ok() {
+                accepted.push((field, prefix));
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "noncanonical paths accepted: {accepted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn successor_host_work_injection_cannot_cross_invocation_boundaries() {
     let mut accepted = Vec::new();
     for after_probe in [false, true] {
@@ -1228,7 +1436,7 @@ exit "$status"
         let receipt = std::thread::scope(|scope| {
             let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !fs::read(run.join("stdout.log"))
+            while !fs::read(run.join("stdout.log.live"))
                 .unwrap_or_default()
                 .starts_with(b"ready")
                 && !task.is_finished()
@@ -1241,7 +1449,7 @@ exit "$status"
             // Only this request's fresh launcher process group is resumed. The
             // producer stops before consumption; the host fixture gates capture.
             // no host-writable input is used as a release/control channel.
-            while !fs::read(run.join("stdout.log"))
+            while !fs::read(run.join("stdout.log.live"))
                 .unwrap_or_default()
                 .ends_with(b"consumed")
                 && !task.is_finished()
@@ -1356,13 +1564,13 @@ fn contained_boundary_snapshot_does_not_alias_the_host_policy_inode() {
     let (receipt, original) = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while fs::read(run.join("stdout.log")).unwrap_or_default() != b"ready"
+        while fs::read(run.join("stdout.log.live")).unwrap_or_default() != b"ready"
             && !task.is_finished()
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(fs::read(run.join("stdout.log")).unwrap(), b"ready");
+        assert_eq!(fs::read(run.join("stdout.log.live")).unwrap(), b"ready");
         let path = run.join("boundary.json");
         let original = fs::read(&path).unwrap();
         let mut substituted: serde_json::Value = serde_json::from_slice(&original).unwrap();
@@ -1537,7 +1745,7 @@ fn runtime_dependencies_require_composition_bound_selection() {
     let changed = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &changed_run, &Default::default()).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while fs::read(changed_run.join("stdout.log")).unwrap_or_default() != b"ready" {
+        while fs::read(changed_run.join("stdout.log.live")).unwrap_or_default() != b"ready" {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -1783,7 +1991,9 @@ fn producer_loader_settings_are_applied_only_after_containment() {
 #[test]
 fn log_growth_is_bounded_and_exhaustion_cannot_verify_as_passed() {
     let (root, receipt) = run_fixture(
-        "truncate -s 512M /proc/self/fd/1; truncate -s 1T /proc/self/fd/1; exit 0",
+        // stdout is now a non-reopenable socket, so truncate cannot reach it.
+        // Exercise the actual stream bound and deliberately mask EPIPE.
+        "head -c 536870913 /dev/zero; exit 0",
         30,
     );
     assert!(
@@ -2562,7 +2772,7 @@ fn setsid_descendants_cannot_write_after_success_timeout_or_cancellation() {
         let task =
             scope.spawn(|| q::execute(&request, &root.path().join("cancel"), &cancelled).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while fs::read(root.path().join("cancel/stdout.log")).unwrap_or_default() != b"ready" {
+        while fs::read(root.path().join("cancel/stdout.log.live")).unwrap_or_default() != b"ready" {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -2830,13 +3040,13 @@ fn startup_and_post_execution_capture_share_one_deadline() {
     let started = std::time::Instant::now();
     let receipt = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &directory, &Default::default()));
-        while fs::read(directory.join("stdout.log")).unwrap_or_default() != b"started"
+        while fs::read(directory.join("stdout.log.live")).unwrap_or_default() != b"started"
             && !task.is_finished()
             && started.elapsed() < std::time::Duration::from_secs(3)
         {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        if fs::read(directory.join("stdout.log")).unwrap_or_default() == b"started" {
+        if fs::read(directory.join("stdout.log.live")).unwrap_or_default() == b"started" {
             fs::OpenOptions::new()
                 .write(true)
                 .open(root.path().join("input"))

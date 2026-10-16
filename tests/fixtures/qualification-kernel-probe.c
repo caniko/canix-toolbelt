@@ -66,9 +66,15 @@ int main(int argc, char **argv) {
         sigemptyset(&signals);
         sigaddset(&signals, SIGXFSZ);
         if (sigprocmask(SIG_BLOCK, &signals, NULL)) return 91;
-        if (lseek(STDOUT_FILENO, 512 * 1024 * 1024, SEEK_SET) < 0) return 92;
-        if (write(STDOUT_FILENO, "x", 1) != -1 || errno != EFBIG) return 93;
-        if (ftruncate(STDOUT_FILENO, 0) || lseek(STDOUT_FILENO, 0, SEEK_SET) < 0) return 94;
+        /* stdout is now a socket. Keep testing masked kernel file-limit errors
+         * and cleanup on a regular work file, independently of log capture. */
+        const char *work = getenv("QUALIFICATION_WORK_DIR");
+        if (!work || chdir(work)) return 92;
+        int output = open("file-limit", O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        if (output < 0 || lseek(output, 512 * 1024 * 1024, SEEK_SET) < 0) return 92;
+        if (write(output, "x", 1) != -1 || errno != EFBIG) return 93;
+        if (ftruncate(output, 0) || lseek(output, 0, SEEK_SET) < 0) return 94;
+        if (close(output) || unlink("file-limit")) return 95;
     } else if (!strcmp(argv[1], "thread-exec")) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, exec_thread, NULL)) return 91;

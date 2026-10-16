@@ -51,6 +51,10 @@ fn supervise() -> std::io::Result<i32> {
         .next()
         .and_then(|value| value.into_string().ok())
         .ok_or_else(|| std::io::Error::other("missing prior work identity"))?;
+    let work_identity = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| std::io::Error::other("missing retained directory identity"))?;
     let boundary_path = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing boundary policy"))?;
@@ -93,13 +97,46 @@ fn supervise() -> std::io::Result<i32> {
     let cwd = std::env::current_dir()?;
     // Rust descriptors are CLOEXEC. Only non-dumpable PID 1 retains this old
     // mount handle, and it never follows work-tree symlinks during retention.
-    use std::os::fd::AsRawFd;
-    let retained_work = std::fs::File::open(&work)?;
+    use std::os::unix::fs::MetadataExt;
+    let work_path = std::path::Path::new(&work);
+    let evidence = work_tree::open_directory(
+        work_path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing evidence parent"))?,
+    )?;
+    let retained_work = std::fs::File::from(rustix::fs::openat(
+        &evidence,
+        work_path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("missing work name"))?,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOATIME,
+        rustix::fs::Mode::empty(),
+    )?);
+    let parent = evidence.metadata()?;
+    let metadata = retained_work.metadata()?;
+    if work_identity
+        != format!(
+            "{}:{}:{}:{}",
+            parent.dev(),
+            parent.ino(),
+            metadata.dev(),
+            metadata.ino()
+        )
+    {
+        return Err(std::io::Error::other(
+            "retained evidence/work directory was replaced",
+        ));
+    }
     minimal_root(
         &policy,
         &boundary_bytes,
         std::path::Path::new(&work),
         &work_sha256,
+        &retained_work,
         &cwd,
         &cancelled,
     )?;
@@ -147,11 +184,9 @@ fn supervise() -> std::io::Result<i32> {
         ));
     }
     if drained {
-        let retained =
-            std::path::PathBuf::from(format!("/proc/self/fd/{}", retained_work.as_raw_fd()));
-        execution.work_sha256 = Some(work_tree::copy_tree(
-            std::path::Path::new(&work),
-            &retained,
+        execution.work_sha256 = Some(work_tree::copy_tree_opened(
+            &work_tree::open_directory(std::path::Path::new(&work))?,
+            &retained_work,
             &|| cancelled.load(Ordering::Relaxed),
         )?);
     }
@@ -342,6 +377,7 @@ fn minimal_root(
     boundary_bytes: &[u8],
     work: &std::path::Path,
     work_sha256: &str,
+    retained_work: &std::fs::File,
     cwd: &std::path::Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
@@ -454,9 +490,11 @@ fn minimal_root(
             std::fs::create_dir(work_target.join(name))?;
         }
     } else {
-        let restored = work_tree::copy_tree(work, &work_target, &|| {
-            cancelled.load(std::sync::atomic::Ordering::Relaxed)
-        })?;
+        let restored = work_tree::copy_tree_opened(
+            retained_work,
+            &work_tree::open_directory(&work_target)?,
+            &|| cancelled.load(std::sync::atomic::Ordering::Relaxed),
+        )?;
         if restored != work_sha256 {
             return Err(std::io::Error::other(
                 "retained work differs from the preceding private execution",
