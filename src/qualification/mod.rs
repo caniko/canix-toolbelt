@@ -200,8 +200,15 @@ fn sha256_open_file_checked(
 
 /// Stable pretty JSON bytes, with two-space indentation and a final newline.
 pub fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(invalid_json)?;
-    bytes.push(b'\n');
+    use std::io::Write;
+    let mut bytes = Vec::new();
+    let mut output = receipt::CheckedWriter {
+        inner: &mut bytes,
+        check: &mut || Ok(()),
+        count: 0,
+    };
+    serde_json::to_writer_pretty(&mut output, value).map_err(invalid_json)?;
+    output.write_all(b"\n")?;
     Ok(bytes)
 }
 
@@ -222,7 +229,54 @@ pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> 
 
 /// SHA-256 identity of the canonical serialization of a typed value.
 pub fn fingerprint(value: &impl Serialize) -> io::Result<String> {
-    Ok(format!("{:x}", Sha256::digest(json_bytes(value)?)))
+    use std::io::Write;
+    let mut hash = Sha256::new();
+    let mut output = receipt::CheckedWriter {
+        inner: &mut hash,
+        check: &mut || Ok(()),
+        count: 0,
+    };
+    serde_json::to_writer_pretty(&mut output, value).map_err(invalid_json)?;
+    output.write_all(b"\n")?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn canonical_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        && path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+}
+
+const MAX_SOURCE_FILES: usize = 131_072;
+const MAX_SOURCE_JSON_BYTES: usize = 64 * 1024 * 1024;
+
+fn source_entry_bytes(path: &str, file: &SourceFile) -> usize {
+    // ponytail: reserve worst-case escaping within 64 MiB; exact accounting can
+    // replace this conservative reservation if a valid large corpus needs it.
+    // At most six serialized bytes per UTF-8 byte, plus fixed JSON fields/hash.
+    path.len()
+        .saturating_add(file.link.as_ref().map_or(0, String::len))
+        .saturating_mul(6)
+        .saturating_add(256)
+}
+
+fn inventory_budget(
+    inventory: &Inventory,
+    entries: &mut usize,
+    bytes: &mut usize,
+) -> io::Result<()> {
+    *entries = entries.saturating_add(inventory.files.len());
+    *bytes = inventory.files.iter().fold(*bytes, |bytes, (path, file)| {
+        bytes.saturating_add(source_entry_bytes(path, file))
+    });
+    if *entries > MAX_SOURCE_FILES || *bytes > MAX_SOURCE_JSON_BYTES {
+        return Err(invalid(
+            "combined source inventories exceed entry or serialized-size budget",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn relative(path: &Path) -> io::Result<()> {
@@ -298,6 +352,7 @@ fn collect(
     root: &Path,
     path: &Path,
     files: &mut BTreeMap<String, SourceFile>,
+    bytes: &mut usize,
     check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<()> {
     check()?;
@@ -324,6 +379,7 @@ fn collect(
                     .strip_prefix(root)
                     .map_err(|e| invalid(e.to_string()))?,
                 files,
+                bytes,
                 check,
             )?;
         }
@@ -367,14 +423,25 @@ fn collect(
             .strip_prefix(root)
             .map_err(|e| invalid(e.to_string()))?,
     )?;
-    files.insert(
-        key.trim_start_matches("./").to_owned(),
-        SourceFile {
-            sha256: sha256_file_checked(&resolved, check)?,
-            executable,
-            link,
-        },
-    );
+    let key = key.trim_start_matches("./").to_owned();
+    let mut file = SourceFile {
+        sha256: String::new(),
+        executable,
+        link,
+    };
+    let previous = files.get(&key);
+    let next_bytes = bytes
+        .saturating_sub(previous.map_or(0, |old| source_entry_bytes(&key, old)))
+        .saturating_add(source_entry_bytes(&key, &file));
+    if (previous.is_none() && files.len() >= MAX_SOURCE_FILES) || next_bytes > MAX_SOURCE_JSON_BYTES
+    {
+        return Err(invalid(
+            "source inventory exceeds entry or serialized-size budget",
+        ));
+    }
+    file.sha256 = sha256_file_checked(&resolved, check)?;
+    files.insert(key, file);
+    *bytes = next_bytes;
     Ok(())
 }
 
@@ -413,8 +480,9 @@ pub(crate) fn inventory_checked(
     }
     let root = spec.root.canonicalize()?;
     let mut files = BTreeMap::new();
+    let mut bytes = 0;
     for path in &spec.paths {
-        collect(&root, path, &mut files, check)?;
+        collect(&root, path, &mut files, &mut bytes, check)?;
     }
     if files.is_empty() {
         return Err(invalid("source inventory is empty"));
@@ -545,6 +613,49 @@ pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
+
+    #[test]
+    fn review_resolution_inventory_refuses_an_entry_before_exceeding_its_limit() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("extra"), b"extra").unwrap();
+        let file = SourceFile {
+            sha256: "a".repeat(64),
+            executable: false,
+            link: None,
+        };
+        let mut files = (0..131_072)
+            .map(|i| (format!("file-{i}"), file.clone()))
+            .collect();
+        assert!(
+            collect(
+                root.path(),
+                Path::new("extra"),
+                &mut files,
+                &mut 0,
+                &mut || Ok(())
+            )
+            .is_err()
+        );
+        files.clear();
+        let mut bytes = MAX_SOURCE_JSON_BYTES;
+        assert!(
+            collect(
+                root.path(),
+                Path::new("extra"),
+                &mut files,
+                &mut bytes,
+                &mut || Ok(())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn review_resolution_serialization_is_bounded_before_allocating_evidence() {
+        let large = "x".repeat(64 * 1024 * 1024);
+        assert!(fingerprint(&large).is_err());
+        assert!(json_bytes(&large).is_err());
+    }
 
     #[test]
     fn artifact_indexes_and_embedded_receipt_requirements_reject_duplicates() {

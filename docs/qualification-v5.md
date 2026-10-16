@@ -23,6 +23,10 @@ snapshot root is capped at 1 GiB and 131,072 inodes; exceeding either bound fail
 closed, independently of the work-tree quota. Public system tool/library trees
 remain platform-owned runtime dependencies, not a claim to capture the operating
 system. They are the only permitted host directory binds.
+Inventory collection also admits at most 131,072 file entries and conservatively
+reserves a 64 MiB serialized-evidence budget before inserting each entry. The
+combined named sources share those bounds. Fingerprints stream through the same
+bounded JSON writer instead of materializing unbounded serialization buffers.
 A source selected through a symlink is rejected before spawn; selecting
 its containing directory preserves the recorded symlink semantics instead.
 Inventory v1 cannot represent empty directories: recursive selections containing
@@ -109,7 +113,12 @@ requests bind every selected alias. Rust callers initialize the new fields with
 empty collections when no extra selection is needed.
 
 Producer stdout/stderr each have a hard 512 MiB file-size limit (version probes
-use 1 MiB). A request admits at most 32 tool probes, and their combined retained
+use independently captured 1 MiB streams). Probe capture uses private Unix
+sockets and bounded readers that latch overflow even when a producer handles
+`EPIPE`; work files retain their separate 256 MiB aggregate quota. The global
+file-size ceiling remains 512 MiB, above that entire work quota, so a version
+probe can initialize a cache larger than 1 MiB. A request admits at most 32 tool
+probes, and their combined retained
 version strings may not exceed 8 MiB. The probe that exceeds that aggregate budget
 is retained as failed evidence (at most one additional 2 MiB stdout/stderr pair);
 no later probes or main command run. Portable verification enforces the same
@@ -132,6 +141,8 @@ Source/input/tool/environment selections, inventory paths, receipt maps and seal
 gate/artifact selections also reject duplicate keys. Portable receipt verification
 requires every input, executable, tool, containment and boundary-policy digest to
 be 64 hexadecimal digits.
+Retained executable, tool and containment paths must also be canonical and
+absolute without consulting the original machine's filesystem.
 Every retained source-file digest is subject to the same format check, even when
 an externally supplied inventory and its enclosing composition were rehashed.
 Rust callers can use `collect`, array conversion, or `.into()` on an existing

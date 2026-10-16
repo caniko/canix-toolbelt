@@ -289,6 +289,121 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
     (root, receipt)
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn review_resolution_probe_work_files_are_not_limited_to_one_mib() {
+    let (root, _) = run_fixture("true", 30);
+    let tool = root.path().join("cache-tool");
+    fs::write(&tool, b"#!/bin/sh\nset -eu\nhead -c 2097152 /dev/zero > \"$QUALIFICATION_WORK_DIR/cache\"\nprintf tiny-version\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.tools.insert("cache".into(), tool);
+    request.command[2] = "test \"$(wc -c < \"$QUALIFICATION_WORK_DIR/cache\")\" = 2097152".into();
+    let run = root.path().join("probe-cache");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(receipt.tools["cache"].version, "tiny-version");
+    q::verify_run(&run, None).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_resolution_probe_log_overflow_is_latched_even_when_handled() {
+    for stderr in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let tool = root.path().join("noisy-tool");
+        fs::write(
+            &tool,
+            format!(
+                "#!/bin/sh\ntrap '' PIPE\nhead -c 2097152 /dev/zero {}\nexit 0\n",
+                if stderr { ">&2" } else { "" }
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        request.tools.insert("noisy".into(), tool);
+        request.command[2] = "printf main-ran".into();
+        let run = root.path().join("probe-overflow");
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        assert_eq!(receipt.status, q::RunStatus::Failed, "{receipt:#?}");
+        assert!(fs::read(run.join("stdout.log")).unwrap().is_empty());
+        for file in ["tool-noisy.log", "tool-noisy.log.stderr"] {
+            assert!(fs::metadata(run.join(file)).unwrap().len() <= 1024 * 1024);
+        }
+        assert!(q::verify_run(&run, None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_resolution_portable_program_paths_must_be_canonical_and_absolute() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.tools.insert("shell".into(), "/bin/sh".into());
+    let run = root.path().join("program-paths");
+    q::execute(&request, &run, &Default::default()).unwrap();
+    q::verify_run(&run, None).unwrap();
+    let original_request: serde_json::Value = q::read_json(&run.join("request.json")).unwrap();
+    let original_receipt: serde_json::Value = q::read_json(&run.join("receipt.json")).unwrap();
+    let original_boundary: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    let mut admitted = Vec::new();
+    for name in ["unshare", "executor", "setpriv", "executable", "shell"] {
+        for prefix in ["relative/", "/tmp/../", "/tmp/./"] {
+            let mut request = original_request.clone();
+            let mut receipt = original_receipt.clone();
+            let mut boundary = original_boundary.clone();
+            let path = match name {
+                "executable" => &mut request["command"][0],
+                "shell" => &mut request["tools"][name],
+                _ => &mut request["containment"][name],
+            };
+            let old = path.as_str().unwrap().to_owned();
+            let changed = format!("{prefix}{}", old.trim_start_matches('/'));
+            *path = changed.clone().into();
+            match name {
+                "executable" => receipt["executable"]["path"] = changed.clone().into(),
+                "shell" => receipt["tools"][name]["path"] = changed.clone().into(),
+                _ => receipt["containment"][name]["path"] = changed.clone().into(),
+            }
+            // Main and tool may share the shell's canonical inode/path.
+            if old == original_request["command"][0].as_str().unwrap() {
+                request["command"][0] = changed.clone().into();
+                request["tools"]["shell"] = changed.clone().into();
+                receipt["executable"]["path"] = changed.clone().into();
+                receipt["tools"]["shell"]["path"] = changed.clone().into();
+            }
+            let file = boundary["snapshot_files"]
+                .as_object_mut()
+                .unwrap()
+                .remove(&old)
+                .unwrap();
+            boundary["snapshot_files"]
+                .as_object_mut()
+                .unwrap()
+                .insert(changed.clone(), file);
+            for mount in boundary["snapshot_mounts"].as_array_mut().unwrap() {
+                if mount.as_str() == Some(&old) {
+                    *mount = changed.clone().into();
+                }
+            }
+            fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+            fs::write(run.join("boundary.json"), q::json_bytes(&boundary).unwrap()).unwrap();
+            receipt["requestSha256"] = q::sha256_file(&run.join("request.json")).unwrap().into();
+            receipt["boundarySha256"] = q::sha256_file(&run.join("boundary.json")).unwrap().into();
+            fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
+            if q::verify_run(&run, None).is_ok() {
+                admitted.push((name, prefix));
+            }
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "noncanonical program paths accepted: {admitted:?}"
+    );
+}
+
 #[test]
 fn merge_repair_archive_regular_files_require_canonical_modes() {
     let root = tempdir().unwrap();

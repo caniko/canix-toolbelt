@@ -288,7 +288,7 @@ fn read_only_host(work: &std::path::Path) -> std::io::Result<()> {
 fn producer_exec() -> std::io::Error {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os().skip(2);
-    let Some(max_log_bytes) = args
+    let Some(_max_log_bytes) = args
         .next()
         .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
         .filter(|limit| *limit > 0 && *limit <= boundary::MAX_LOG_BYTES)
@@ -317,8 +317,10 @@ fn producer_exec() -> std::io::Error {
     if let Err(error) = rustix::process::setrlimit(
         rustix::process::Resource::Fsize,
         rustix::process::Rlimit {
-            current: Some(max_log_bytes),
-            maximum: Some(max_log_bytes),
+            // Probe streams have independent bounded capture. This ceiling is
+            // above the entire work quota, so a probe can initialize large caches.
+            current: Some(boundary::MAX_LOG_BYTES),
+            maximum: Some(boundary::MAX_LOG_BYTES),
         },
     ) {
         return error.into();
@@ -631,6 +633,20 @@ fn reject_control_channels(root: &std::path::Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod review_resolution_tests {
+    #[test]
+    fn runtime_scans_ignore_dangling_links_and_reject_visible_sockets() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("absent", root.path().join("optional-library")).unwrap();
+        std::os::unix::fs::symlink(".", root.path().join("cycle")).unwrap();
+        super::reject_control_channels(root.path()).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(root.path().join("control")).unwrap();
+        assert!(super::reject_control_channels(root.path()).is_err());
+        drop(socket);
+    }
 }
 
 fn main() -> std::process::ExitCode {

@@ -1,6 +1,9 @@
 use super::*;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_TOOLS: usize = 32;
@@ -247,11 +250,14 @@ fn capture(
             "qualification requires a nonempty source selection",
         ));
     }
-    let inventories = request
-        .sources
-        .iter()
-        .map(|(name, spec)| Ok((name.clone(), inventory_checked(spec, check)?)))
-        .collect::<io::Result<BTreeMap<_, _>>>()?;
+    let mut inventories = BTreeMap::new();
+    let mut entries = 0usize;
+    let mut bytes = 0usize;
+    for (name, spec) in &request.sources {
+        let inventory = inventory_checked(spec, check)?;
+        inventory_budget(&inventory, &mut entries, &mut bytes)?;
+        inventories.insert(name.clone(), inventory);
+    }
     for inventory in inventories.values() {
         validate_source_links(inventory)?;
     }
@@ -611,6 +617,86 @@ fn retain_report(reader: impl Read, path: &Path) -> io::Result<Option<ExecutionR
     Ok(Some(report))
 }
 
+fn capture_log(
+    mut file: File,
+    limit: u64,
+    finished: Arc<AtomicBool>,
+) -> io::Result<(
+    std::process::Stdio,
+    std::thread::JoinHandle<io::Result<bool>>,
+)> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        // A socket cannot be reopened through a host /proc/fd path to keep a
+        // writer alive after namespace teardown, unlike a pipe.
+        let (mut reader, writer) = UnixStream::pair()?;
+        reader.set_read_timeout(Some(Duration::from_millis(100)))?;
+        let worker = std::thread::spawn(move || {
+            let mut remaining = limit;
+            let mut cleanup = None;
+            let mut buffer = [0; 65536];
+            loop {
+                if finished.load(Ordering::Relaxed) {
+                    let deadline =
+                        cleanup.get_or_insert_with(|| Instant::now() + Duration::from_secs(1));
+                    if Instant::now() >= *deadline {
+                        return Err(invalid("probe log cleanup deadline exceeded"));
+                    }
+                }
+                let count = match reader.read(&mut buffer) {
+                    Ok(0) => return Ok(false),
+                    Ok(count) => count,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        if finished.load(Ordering::Relaxed) {
+                            return Ok(false);
+                        }
+                        continue;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                };
+                let retain = count.min(remaining as usize);
+                file.write_all(&buffer[..retain])?;
+                remaining -= retain as u64;
+                // Closing wakes writers with EPIPE. The private join result
+                // latches overflow even if the producer handles that error.
+                if count > retain {
+                    return Ok(true);
+                }
+            }
+        });
+        Ok((std::process::Stdio::from(OwnedFd::from(writer)), worker))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (&mut file, limit, finished);
+        Err(invalid("probe capture requires Linux"))
+    }
+}
+
+fn finish_logs(streams: [std::thread::JoinHandle<io::Result<bool>>; 2]) -> io::Result<()> {
+    // Join both streams even when one fails, so no capture thread outlives a run.
+    let results = streams.map(|stream| {
+        stream
+            .join()
+            .map_err(|_| invalid("log capture thread panicked"))
+            .and_then(|result| result)
+    });
+    for result in results {
+        if result? {
+            return Err(invalid("producer exceeded its log stream bound"));
+        }
+    }
+    Ok(())
+}
+
 fn tool_version(
     tool: (&str, &Path, &str),
     request: &RunRequest,
@@ -645,25 +731,44 @@ fn tool_version(
         .write(true)
         .create_new(true)
         .open(&stderr_path)?;
+    let out_log = out.try_clone()?;
+    let err_log = err.try_clone()?;
+    let finished = Arc::new(AtomicBool::new(false));
+    let (stdout, out_worker) = capture_log(out_log, 1024 * 1024, Arc::clone(&finished))?;
+    let (stderr, err_worker) = match capture_log(err_log, 1024 * 1024, Arc::clone(&finished)) {
+        Ok(capture) => capture,
+        Err(error) => {
+            drop(stdout);
+            finished.store(true, Ordering::Relaxed);
+            let _ = out_worker.join();
+            return Err(error);
+        }
+    };
     command
         .arg("--version")
         .current_dir(&request.cwd)
         .env_clear()
         .env("LANG", "C")
         .stdin(report_writer)
-        .stdout(out.try_clone()?)
-        .stderr(err.try_clone()?);
+        .stdout(stdout)
+        .stderr(stderr);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn()?;
+    let child = command.spawn();
     drop(command);
-    let result = wait(&mut child, deadline, cancelled);
-    if result.is_err() {
-        stop(&mut child)?;
-    }
+    let result = child.and_then(|mut child| {
+        let result = wait(&mut child, deadline, cancelled);
+        if result.is_err() {
+            stop(&mut child)?;
+        }
+        result
+    });
+    finished.store(true, Ordering::Relaxed);
+    let logs = finish_logs([out_worker, err_worker]);
+    logs?;
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
@@ -1383,10 +1488,10 @@ fn publish_receipt(
     }
 }
 
-struct CheckedWriter<'a, W, F> {
-    inner: &'a mut W,
-    check: &'a mut F,
-    count: usize,
+pub(super) struct CheckedWriter<'a, W, F> {
+    pub(super) inner: &'a mut W,
+    pub(super) check: &'a mut F,
+    pub(super) count: usize,
 }
 impl<W: io::Write, F: FnMut() -> io::Result<()>> io::Write for CheckedWriter<'_, W, F> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -1503,7 +1608,10 @@ pub(crate) fn verify_run_bound(
     {
         return Err(invalid("native execution report did not confirm success"));
     }
+    let mut entries = 0;
+    let mut bytes = 0;
     for (name, inventory) in &receipt.inventories {
+        inventory_budget(inventory, &mut entries, &mut bytes)?;
         if inventory.schema_version != 1
             || inventory.files.is_empty()
             || inventory
@@ -1568,14 +1676,18 @@ pub(crate) fn verify_run_bound(
         ("executor", &programs.executor),
         ("setpriv", &programs.setpriv),
     ] {
-        if receipt.containment.get(name).map(|identity| &identity.path) != Some(path) {
+        if !canonical_absolute(path)
+            || receipt.containment.get(name).map(|identity| &identity.path) != Some(path)
+        {
             return Err(invalid(
                 "receipt containment selection differs from retained request",
             ));
         }
     }
-    if receipt.executable.as_ref().map(|identity| &identity.path)
-        != Some(&PathBuf::from(&request.command[0]))
+    if !canonical_absolute(Path::new(&request.command[0]))
+        || request.tools.values().any(|path| !canonical_absolute(path))
+        || receipt.executable.as_ref().map(|identity| &identity.path)
+            != Some(&PathBuf::from(&request.command[0]))
         || request
             .tools
             .iter()
@@ -1589,12 +1701,7 @@ pub(crate) fn verify_run_bound(
     let mut mounts = Vec::new();
     let mut directories = Vec::new();
     for (name, spec) in &request.sources {
-        if !spec.root.is_absolute()
-            || spec
-                .root
-                .components()
-                .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
-        {
+        if !canonical_absolute(&spec.root) {
             return Err(invalid(
                 "retained source root is not canonical and absolute",
             ));
