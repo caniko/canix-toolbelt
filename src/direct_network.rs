@@ -377,6 +377,10 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route.get("expires").is_some() {
             return Err(invalid("unsupported direct route lifetime"));
         }
+        // iproute2 spells RTA_TTL_PROPAGATE this way in JSON, even when false.
+        if route.get("ttl-propogate").is_some() {
+            return Err(invalid("unsupported direct route TTL propagation"));
+        }
         if route.get("flow").is_some() {
             return Err(invalid("unsupported direct route realms"));
         }
@@ -1223,6 +1227,45 @@ mod tests {
     fn executable(path: &Path, script: &str) {
         fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn ttl_snapshots_reject_reconciliation_before_commands_or_dns_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let ip = root.path().join("ip");
+        let attempted = root.path().join("unexpected-command");
+        let mut p = policy();
+        p.ip = ip.to_str().unwrap().into();
+        p.nft = p.ip.clone();
+        p.nmcli = p.ip.clone();
+        p.systemctl = p.ip.clone();
+        p.servers_file = root.path().join("servers").to_str().unwrap().into();
+        fs::write(&p.servers_file, "retained DNS\n").unwrap();
+        // Linux retains this attribute only for MPLS today. Supply the iproute2
+        // wire shape explicitly rather than claiming a native IPv4/IPv6 fixture.
+        for family in ["-4", "-6"] {
+            for propagation in [true, false] {
+                executable(
+                    &ip,
+                    &format!(
+                        "case \"$*\" in\n '-j -d link show') printf '%s' '[{{\"ifname\":\"enp1s0\",\"link_type\":\"ether\"}}]';;\n '{family} -j route show table main') printf '%s' '[{{\"dst\":\"default\",\"dev\":\"enp1s0\",\"ttl-propogate\":{propagation}}}]';;\n *'route show table main') printf '[]';;\n *) printf attempted >'{}'; exit 91;;\nesac",
+                        attempted.display()
+                    ),
+                );
+                let mut state = State {
+                    snapshot: Some("retained routes".into()),
+                    ..State::default()
+                };
+                let error = reconcile(&p, &mut state).unwrap_err();
+                assert!(error.to_string().contains("TTL propagation"), "{error}");
+                assert!(!attempted.exists());
+                assert_eq!(state.snapshot.as_deref(), Some("retained routes"));
+                assert_eq!(
+                    fs::read_to_string(&p.servers_file).unwrap(),
+                    "retained DNS\n"
+                );
+            }
+        }
     }
 
     #[test]

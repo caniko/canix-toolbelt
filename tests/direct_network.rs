@@ -470,6 +470,53 @@ fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() 
 }
 
 #[test]
+fn ttl_propagation_rejects_eligible_routes_without_blocking_omitted_paths() {
+    let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+    for propagation in [
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::Value::Null,
+        serde_json::json!("enabled"),
+        serde_json::json!({"malformed":true}),
+    ] {
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"enp1s0","gateway":"192.0.2.1"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0","gateway":"192.0.2.1","weight":2},
+                {"dev":"enp1s0","gateway":"192.0.2.2","weight":3}
+            ]}),
+            serde_json::json!({"dst":"2001:db8::/64","dev":"enp1s0","gateway":"fe80::1"}),
+            serde_json::json!({"dst":"2001:db8::/64","nexthops":[
+                {"dev":"enp1s0","gateway":"fe80::1","weight":2},
+                {"dev":"enp1s0","gateway":"fe80::2","weight":3}
+            ]}),
+        ] {
+            // iproute2's JSON printer uses this misspelled key for RTA_TTL_PROPAGATE.
+            route["ttl-propogate"] = propagation.clone();
+            let error = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap_err();
+            assert!(error.to_string().contains("TTL propagation"));
+        }
+        for mut route in [
+            serde_json::json!({"dst":"default","dev":"wg-proton"}),
+            serde_json::json!({"dst":"default","dev":"veth-container"}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"enp1s0"}, {"dev":"wg-proton"}
+            ]}),
+            serde_json::json!({"dst":"default","nexthops":[
+                {"dev":"wg-proton"}, {"dev":"enp1s0"}
+            ]}),
+        ] {
+            route["ttl-propogate"] = propagation.clone();
+            assert!(
+                select_routes(&policy(), &links, &serde_json::json!([route]))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
 fn route_lifetimes_reject_eligible_snapshots_instead_of_becoming_permanent() {
     let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
     for expires in [

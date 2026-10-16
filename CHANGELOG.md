@@ -8,15 +8,18 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 ### Fixed
 
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
+- Reject explicit TTL-propagation attributes in eligible direct-route snapshots
+  before effects; preserve omission of ineligible paths. This defensive boundary
+  is tested with controlled snapshots, not unsupported native IP-route fixtures.
 - Reject unsupported route/nexthop destination rewrites and authored `pervasive`
   flags before direct replay can drop forwarding policy. Preserve kernel status
   flags, authored `onlink`, and omission of VPN/container-only and mixed paths.
 - Reject expiration on eligible direct routes before replay can make them
   permanent or extend their lifetime during reconciliation. Preserve omission
   of VPN/container-only and mixed routes.
-- Honor authored `RootDirectoryStartOnly` on enrolled services without adding
-  readiness binds to their images. Host-control admission supports immutable
-  images without pre-created readiness targets, while retaining imaged payloads.
+- Require prepared immutable service images with readiness bind targets for
+  inline admission. `RootDirectoryStartOnly=true` remains an authored host-control
+  opt-in, not an automatic fallback for unprepared images.
 
 ## [0.5.0] - 2026-10-11
 

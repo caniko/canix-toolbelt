@@ -47,6 +47,13 @@ unsupported path options are never silently dropped during replay.
 Eligible routes carrying `expires` also reject before any effects: copying a
 sampled remaining lifetime would make a route permanent or extend its expiration
 on every reconciliation. VPN/container-only and mixed paths remain omitted.
+Eligible snapshots carrying `ttl-propogate` (iproute2's JSON spelling of
+`ttl-propagate`) also reject before effects, including explicit `false`, null
+or malformed values. Replay cannot preserve that authored TTL/hop-limit policy;
+VPN/container-only and mixed routes remain omitted as a whole.
+This is a defensive snapshot boundary: Linux currently retains this attribute
+for MPLS routes, not ordinary IPv4/IPv6 routes. Controlled snapshots test its
+reconciliation refusal; native IP-route fixtures do not establish TTL coverage.
 Route or nexthop `flow` attributes (realms used by traffic-control classification)
 also reject an eligible snapshot before effects rather than losing that policy.
 An eligible route with a `tos` selector rejects before effects, preventing replay
