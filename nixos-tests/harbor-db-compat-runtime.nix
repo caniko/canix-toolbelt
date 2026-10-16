@@ -7,6 +7,9 @@ pkgs.testers.runNixOSTest {
   nodes.machine = {config, ...}: {
     imports = [modules.pg-backup modules.postgres-lifecycle];
     virtualisation.memorySize = 1024;
+    # Preserve the first guest fault instead of losing it behind an hour of
+    # module-loader soft-lockup reports in the builder's bounded log tail.
+    boot.kernelParams = ["oops=panic" "softlockup_panic=1"];
     services.postgresql = {
       enable = true;
       package = pkgs.postgresql_17;

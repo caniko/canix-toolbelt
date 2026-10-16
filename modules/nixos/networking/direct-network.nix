@@ -22,8 +22,44 @@
   rootSlices = lib.unique (["system-direct.slice"] ++ cfg.systemSlices ++ map (serviceSlice cfg.systemSlices) (lib.attrValues cfg.systemServices));
   userSlices = user: lib.unique (user.slices ++ map (serviceSlice user.slices) (lib.attrValues user.services));
   anchor = slice: "direct-network-${lib.removeSuffix ".slice" slice}";
+  # RootDirectory/RootImage apply even to '+' commands. Keep readiness inline so
+  # denial follows the payload's Restart= policy, and supply only the client's
+  # runtime closure plus the live host socket directory inside alternate roots.
+  # Author-selected RootDirectoryStartOnly keeps all control commands on the
+  # host, so adding these binds would unnecessarily require image mount points.
+  rootedConfig = service:
+    ((service.RootDirectory or "") != "" || (service.RootImage or "") != "")
+    && !(builtins.elem (lib.toLower (toString (service.RootDirectoryStartOnly or false))) ["1" "yes" "true" "on"]);
+  rootedService = name: rootedConfig config.systemd.services.${name}.serviceConfig;
   binary = "${cfg.package}/bin/canix-toolbelt-direct-network";
   ready = "${binary} ready";
+  # Empty systemd assignments clear all preceding commands. Preserve the
+  # authored resets, then admit before the hooks that are actually effective.
+  insertAdmission = command: original: let
+    commands = lib.toList original;
+    reset = lib.lists.findFirstIndex (value: builtins.isString value && lib.trim value == "") null (lib.reverseList commands);
+    boundary = builtins.length commands - reset;
+  in
+    if reset == null
+    then [command] ++ commands
+    else lib.take boundary commands ++ [command] ++ lib.drop boundary commands;
+  rootedAdmission = pkgs.runCommand "direct-network-rooted-admission.conf" {} ''
+    printf '[Service]\nBindReadOnlyPaths=/run/direct-network\n' > "$out"
+    while IFS= read -r path; do
+      printf 'BindReadOnlyPaths=%s\n' "$path" >> "$out"
+    done < ${(pkgs.closureInfo {rootPaths = [cfg.package];})}/store-paths
+  '';
+  rootedServices = lib.filterAttrs (name: _: rootedService name) cfg.systemServices;
+  # The NixOS systemd module owns /etc/systemd/system as one immutable tree.
+  # Compose generated drop-ins through its package interface, never nested etc
+  # entries that would write through that tree's store-directory symlink.
+  rootedAdmissionUnits = pkgs.runCommand "direct-network-rooted-admission-units" {} (
+    lib.concatMapStringsSep "\n" (name: ''
+      directory="$out"/${lib.escapeShellArg "lib/systemd/system/${name}.service.d"}
+      mkdir -p "$directory"
+      ln -s ${rootedAdmission} "$directory/50-direct-network-rooted-admission.conf"
+    '') (lib.attrNames rootedServices)
+  );
   policyData = {
     socket = "/run/direct-network/ready.sock";
     serversFile = "/run/direct-network/servers";
@@ -41,7 +77,7 @@
     inherit (cfg) directInterfaces dnsServers dnsZones networkManagerDns;
   };
   policy = pkgs.writeText "direct-network-policy.json" (builtins.toJSON policyData);
-  mkUser = user: {
+  mkUserConfig = user: {
     # An empty Home Manager unit is a masked unit to systemd. Every declared
     # slice needs content even when it inherits all its resource policy.
     systemd.user.slices = lib.genAttrs (map (lib.removeSuffix ".slice") (userSlices user)) (name: {
@@ -70,10 +106,46 @@
             Requires = map (slice: "${anchor slice}.service") (userSlices user);
             After = map (slice: "${anchor slice}.service") (userSlices user);
           };
-          Service.Slice = lib.mkForce (serviceSlice user.slices parent);
+          Service = {
+            Slice = lib.mkForce (serviceSlice user.slices parent);
+          };
         })
         user.services)
     ];
+  };
+  mkUser = user: {config, ...}: {
+    # Home Manager leaves ExecStartPre in its freeform unit schema, whose
+    # scalar/list union cannot merge a scalar command with our ordered list.
+    # Coerce commands only for enrolled services. Keep the option tree static:
+    # submodule name is supplied through _module.args after options are loaded.
+    options.systemd.user.services = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
+        options.Service.ExecStartPre = lib.mkOption {
+          type = let
+            command = lib.types.either lib.types.str lib.types.path;
+            primitive = lib.types.oneOf [lib.types.bool lib.types.int lib.types.str lib.types.path];
+          in
+            if builtins.hasAttr name user.services
+            then lib.types.coercedTo command lib.toList (lib.types.listOf command)
+            else lib.types.either primitive (lib.types.listOf primitive);
+          default = [];
+          apply = commands:
+            if builtins.hasAttr name user.services
+            then insertAdmission ready commands
+            else commands;
+          description = "Pre-start commands, with direct-network admission for enrolled services.";
+        };
+      }));
+    };
+    config =
+      mkUserConfig user
+      // {
+        xdg.configFile = lib.mapAttrs' (name: _:
+          lib.nameValuePair "systemd/user/${name}.service.d/50-direct-network-rooted-admission.conf" (lib.mkIf (rootedConfig config.systemd.user.services.${name}.Service) {
+            source = rootedAdmission;
+          }))
+        user.services;
+      };
   };
 in {
   options.canix-toolbelt.networking.directNetwork = {
@@ -90,7 +162,11 @@ in {
           services = lib.mkOption {
             type = lib.types.attrsOf sliceType;
             default = {};
-            description = "Enabled Home Manager service names mapped to their existing parent resource slices.";
+            description = ''
+              Enabled Home Manager service names mapped to their existing parent resource slices.
+              Immutable service roots must contain the readiness closure's bind targets and
+              /run/direct-network when control commands use the service root; see docs/direct-network.md.
+            '';
           };
           slices = lib.mkOption {
             type = lib.types.listOf sliceType;
@@ -103,7 +179,11 @@ in {
     systemServices = lib.mkOption {
       type = lib.types.attrsOf sliceType;
       default = {};
-      description = "Enabled system-manager services mapped to their existing parent resource slices.";
+      description = ''
+        Enabled system-manager services mapped to their existing parent resource slices.
+        Immutable service roots must contain the readiness closure's bind targets and
+        /run/direct-network when control commands use the service root; see docs/direct-network.md.
+      '';
     };
     systemSlices = lib.mkOption {
       type = lib.types.listOf sliceType;
@@ -141,6 +221,20 @@ in {
       else content;
   };
 
+  # Inspect the fully merged freeform config only after its definitions are
+  # resolved. Conditional ExecStartPre definitions that read their own sibling
+  # RootDirectory/RootImage fields recurse while merging serviceConfig.
+  options.systemd.services = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
+      options.serviceConfig = lib.mkOption {
+        apply = service:
+          if cfg.enable && builtins.hasAttr name cfg.systemServices
+          then service // {ExecStartPre = insertAdmission "+${ready}" (service.ExecStartPre or []);}
+          else service;
+      };
+    }));
+  };
+
   config = lib.mkIf cfg.enable ({
       assertions = [
         {
@@ -171,7 +265,13 @@ in {
       # packets are redirected, while desktop DNS retains resolved's VPN policy.
       system.nssDatabases.hosts = lib.mkForce ["files" "mymachines" "myhostname" "dns"];
       environment.etc."direct-network-policy.json".text = builtins.toJSON policyData;
+      systemd.packages = lib.optional (rootedServices != {}) rootedAdmissionUnits;
       environment.systemPackages = [cfg.package];
+      users.groups.direct-network-dns = {};
+      users.users.direct-network-dns = {
+        isSystemUser = true;
+        group = "direct-network-dns";
+      };
       systemd.slices = lib.genAttrs (map (lib.removeSuffix ".slice") rootSlices) (name: {
         description = lib.mkDefault "Direct-network resource slice ${name}";
       });
@@ -198,7 +298,11 @@ in {
               ProtectHome = true;
               ReadWritePaths = ["/run/direct-network"];
               PrivateTmp = true;
-              CapabilityBoundingSet = ["CAP_NET_ADMIN"];
+              # Authenticate the unprivileged resolver's MainPID FD and network
+              # namespace through cross-UID, ptrace-controlled proc reads.
+              # Ptrace permission does not bypass the resolver-owned 0500 FD
+              # directory's separate DAC traversal/read check.
+              CapabilityBoundingSet = ["CAP_DAC_READ_SEARCH" "CAP_NET_ADMIN" "CAP_SYS_PTRACE"];
               NoNewPrivileges = true;
             };
           };
@@ -208,8 +312,12 @@ in {
             requires = ["direct-network.service"];
             after = ["direct-network.service"];
             serviceConfig = {
-              ExecStartPre = "${ready} --routes-only";
-              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
+              User = "direct-network-dns";
+              Group = "direct-network-dns";
+              # Routes bootstrap is root-only; the network-facing payload starts
+              # with its dedicated identity already established by systemd.
+              ExecStartPre = "+${ready} --routes-only";
+              ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --user=direct-network-dns --group=direct-network-dns --conf-file=/dev/null --no-resolv --no-hosts --bind-interfaces --listen-address=127.0.0.54,::1 --port=5354 --servers-file=/run/direct-network/servers --pid-file=";
               Slice = "system-direct.slice";
               Restart = "on-failure";
               RestartSec = "2s";
@@ -217,12 +325,17 @@ in {
               ProtectHome = true;
               PrivateTmp = true;
               NoNewPrivileges = true;
+              # DNS-only unprivileged port needs no capabilities. Keep the
+              # root-owned servers directory/file readable but not writable.
+              # An empty list emits no directive, retaining systemd's default
+              # capabilities instead of the explicit empty capability reset.
+              CapabilityBoundingSet = "";
             };
           };
         }
         (lib.genAttrs (map anchor rootSlices) (name: {
           description = "Keep the direct background resource slice enrolled";
-          requires = ["direct-network-dns.service"];
+          wants = ["direct-network-dns.service"];
           after = ["direct-network-dns.service"];
           wantedBy = ["multi-user.target"];
           serviceConfig = {
@@ -237,7 +350,13 @@ in {
         (lib.mapAttrs (_: parent: {
             requires = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
             after = ["${anchor (serviceSlice cfg.systemSlices parent)}.service"];
-            serviceConfig.Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
+            serviceConfig = {
+              Slice = lib.mkForce (serviceSlice cfg.systemSlices parent);
+              # Active anchors retain established workloads across DNS failure.
+              # Every new start still needs its own admission barrier. The narrow
+              # readiness client runs as root even when User is not enrolled; it
+              # cannot mutate the daemon's policy.
+            };
           })
           cfg.systemServices)
       ];

@@ -14,7 +14,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 AGENT, ZELLIJ, CONNECT, GPGCONF, BASH, GPG, DIRECT, RAGE, XVFB, XDOTOOL = sys.argv[1:11]
 sys.argv[1:11] = []
@@ -232,8 +233,20 @@ class PinentryIntegration(unittest.TestCase):
     @classmethod
     def wait_for(cls, condition):
         deadline = time.monotonic() + 15
+        last_observation_error = None
         while time.monotonic() < deadline:
-            result = condition()
+            # Conditions only inspect fixture state. A Zellij connection read
+            # may fail while simultaneous prompts change panes; retry that
+            # observation, never prompt dispatch or keystrokes, within this
+            # same deadline. Permanent errors remain failed qualification.
+            try:
+                result = condition()
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                last_observation_error = f"{error}; stdout={error.stdout!r}; stderr={error.stderr!r}"
+                result = None
+            except json.JSONDecodeError as error:
+                last_observation_error = f"invalid pane JSON: {error}; document={error.doc[:512]!r}"
+                result = None
             if result:
                 return result
             time.sleep(0.05)
@@ -248,9 +261,15 @@ class PinentryIntegration(unittest.TestCase):
                     failures[index] = stderr
                 except subprocess.TimeoutExpired:
                     failures[index] = "exited client still has open subprocess streams"
-        panes = cls.panes()
+        try:
+            panes = cls.panes()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            panes = f"observation unavailable: {error}; stdout={error.stdout!r}; stderr={error.stderr!r}"
+        except json.JSONDecodeError as error:
+            panes = f"observation unavailable: invalid pane JSON: {error}; document={error.doc[:512]!r}"
         raise AssertionError(f"timed out waiting for fixture state; deadline={deadline:.6f}; processes={states}; "
-                             f"age_states={traces}; failed_client_errors={failures}; panes={panes}")
+                             f"age_states={traces}; failed_client_errors={failures}; panes={panes}; "
+                             f"last_observation_error={last_observation_error}")
 
     @classmethod
     def query(cls, context, tty="/dev/pts/99999999", env=None):
@@ -299,6 +318,8 @@ class PinentryIntegration(unittest.TestCase):
         # Disposable fixtures only. Keep failure state in the retained builder
         # log before cleanup kills the child processes and closes their panes.
         try:
+            for path in self.root.glob("xvfb-*.log"):
+                print("pinentry fixture Xvfb stderr:", path.read_bytes()[-65536:].decode(errors="replace"), file=sys.stderr)
             panes = self.panes()
             print("pinentry fixture panes:", json.dumps(panes), file=sys.stderr)
             for candidate in panes:
@@ -558,10 +579,13 @@ class PinentryIntegration(unittest.TestCase):
 
     def desktop_query(self, agent, stale_qt=False):
         read_fd, write_fd = os.pipe()
-        server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
-                                  pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Xvfb emits keyboard-map warnings on every xdotool connection. An
+        # unread pipe can fill before Qt starts, blocking the server and even
+        # its termination. Keep the diagnostics without backpressuring Xvfb.
+        with tempfile.NamedTemporaryFile(prefix="xvfb-", suffix=".log", dir=self.root, delete=False) as server_log:
+            server = subprocess.Popen([XVFB, "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp"],
+                                      pass_fds=[write_fd], stdout=subprocess.DEVNULL, stderr=server_log)
         os.close(write_fd)
-        self.addCleanup(server.stderr.close)
         self.addCleanup(lambda: server.wait(timeout=5))
         self.addCleanup(server.terminate)
         self.assertTrue(select.select([read_fd], [], [], 5)[0], "Xvfb did not start")
@@ -615,6 +639,59 @@ class PinentryIntegration(unittest.TestCase):
             process.wait(timeout=15)
             os.close(master)
         cls.temp.cleanup()
+
+
+class FixtureObservationWait(unittest.TestCase):
+    def test_invalid_pane_json_is_only_a_failed_observation(self):
+        panes = [{"title": "Hardware key PIN", "id": 7}, {"title": "Hardware key PIN", "id": 8}]
+        context = SimpleNamespace(queries=[], zellij=Mock(side_effect=["{incomplete", json.dumps(panes)]))
+        observation = lambda: PinentryIntegration.panes.__func__(context)
+        with patch.object(time, "sleep"):
+            result = PinentryIntegration.wait_for.__func__(context, observation)
+        self.assertEqual(result, panes)
+        self.assertEqual(context.zellij.call_count, 2)
+
+    def test_persistent_invalid_pane_json_fails_at_the_original_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
+            context = SimpleNamespace(queries=[], root=Path(directory), zellij=Mock(return_value="{incomplete"))
+            context.panes = lambda: PinentryIntegration.panes.__func__(context)
+            clock = SimpleNamespace(now=0)
+            with patch.object(time, "monotonic", side_effect=lambda: clock.now), \
+                 patch.object(time, "sleep", side_effect=lambda _: setattr(clock, "now", clock.now + 16)), \
+                 self.assertRaisesRegex(AssertionError, "deadline=15.*invalid pane JSON.*incomplete"):
+                PinentryIntegration.wait_for.__func__(context, context.panes)
+            self.assertEqual(context.zellij.call_count, 2)
+            self.assertEqual(clock.now, 16)
+
+    def test_invalid_pane_json_never_proves_a_live_prompt_closed(self):
+        with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
+            live = json.dumps([{"title": "Hardware key PIN", "id": 7}])
+            context = SimpleNamespace(queries=[], root=Path(directory), zellij=Mock(side_effect=["{incomplete", live, live]))
+            context.panes = lambda: PinentryIntegration.panes.__func__(context)
+            closed = lambda: all(p["title"] != "Hardware key PIN" for p in context.panes())
+            clock = SimpleNamespace(now=0)
+            with patch.object(time, "monotonic", side_effect=lambda: clock.now), \
+                 patch.object(time, "sleep", side_effect=lambda _: setattr(clock, "now", clock.now + 8)), \
+                 self.assertRaisesRegex(AssertionError, "timed out waiting for fixture state.*deadline=15"):
+                PinentryIntegration.wait_for.__func__(context, closed)
+            self.assertEqual(context.zellij.call_count, 3)
+            self.assertEqual(clock.now, 16)
+
+    def test_transient_read_failure_preserves_the_pending_condition(self):
+        context = SimpleNamespace(queries=[], panes=list)
+        observation = Mock(side_effect=[subprocess.CalledProcessError(1, ["zellij", "action", "list-panes"], stderr="fixture connection unavailable"), ["prompt-one", "prompt-two"]])
+        with patch.object(time, "sleep"):
+            result = PinentryIntegration.wait_for.__func__(context, observation)
+        self.assertEqual(result, ["prompt-one", "prompt-two"])
+        self.assertEqual(observation.call_count, 2)
+
+    def test_persistent_read_failure_still_fails_at_the_original_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="pinentry-wait-", dir=os.environ.get("TMPDIR", "/data/scratch/tmp/opencode")) as directory:
+            context = SimpleNamespace(queries=[], root=Path(directory), panes=Mock(side_effect=subprocess.CalledProcessError(1, ["zellij", "action", "list-panes"], stderr="fixture final diagnostic unavailable")))
+            observation = Mock(side_effect=subprocess.TimeoutExpired(["zellij", "action", "list-panes"], 15, stderr="fixture observation timeout"))
+            with patch.object(time, "monotonic", side_effect=[0, 1, 16]), patch.object(time, "sleep"), self.assertRaisesRegex(AssertionError, "fixture observation timeout"):
+                PinentryIntegration.wait_for.__func__(context, observation)
+            self.assertEqual(observation.call_count, 1)
 
 
 class PaneDiscoveryTests(unittest.TestCase):

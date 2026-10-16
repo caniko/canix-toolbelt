@@ -8,6 +8,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import warnings
@@ -19,6 +20,109 @@ spec = importlib.util.spec_from_file_location(
     "producer_evidence", Path(__file__).resolve().parents[1] / "scripts/retain-producer-evidence.py")
 producer_evidence = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(producer_evidence)
+
+
+class HostedSourceIdentity(unittest.TestCase):
+    def checkout(self, event, ref_type, attempt, payload, *, checkout_matches=True):
+        """Run the real helper with private process-boundary fixtures."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "bin"
+            tools.mkdir()
+            head = root / "head"
+            head.write_text("b" * 40)
+            event_file = root / "event.json"
+            event_file.write_text(json.dumps(payload))
+            effects = root / "effects.jsonl"
+            stub = "#!" + sys.executable + "\n" + '''
+import json, os, pathlib, sys
+kind = pathlib.Path(sys.argv[0]).name
+head = pathlib.Path(os.environ["FIXTURE_HEAD"])
+if kind == "jq":
+    value = json.loads(pathlib.Path(sys.argv[-1]).read_text())
+    try:
+        for key in sys.argv[-2].lstrip(".").split("."):
+            value = value[key]
+    except (KeyError, TypeError):
+        sys.exit(1)
+    if not isinstance(value, str):
+        sys.exit(1)
+    print(value)
+else:
+    with pathlib.Path(os.environ["FIXTURE_EFFECTS"]).open("a") as trace:
+        trace.write(json.dumps(sys.argv[1:]) + "\\n")
+    if sys.argv[1:3] == ["checkout", "--detach"]:
+        if os.environ["FIXTURE_CHECKOUT_MATCHES"] == "1":
+            head.write_text(sys.argv[3])
+    elif sys.argv[1:3] == ["rev-parse", "HEAD"]:
+        print(head.read_text())
+'''
+            for name in ["git", "jq"]:
+                path = tools / name
+                path.write_text(stub)
+                path.chmod(0o700)
+            env = dict(os.environ)
+            env.update({"PATH": str(tools) + os.pathsep + env["PATH"],
+                        "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_EVENT_NAME": event,
+                        "GITHUB_REF_TYPE": ref_type, "GITHUB_RUN_ATTEMPT": str(attempt),
+                        "GITHUB_EVENT_PATH": str(event_file), "GITHUB_SHA": "b" * 40,
+                        "FIXTURE_HEAD": str(head), "FIXTURE_EFFECTS": str(effects),
+                        "FIXTURE_CHECKOUT_MATCHES": "1" if checkout_matches else "0"})
+            script = Path(__file__).resolve().parents[1] / "scripts/prepare-hosted-source.sh"
+            process = subprocess.run(["bash", str(script)], env=env, cwd=root,
+                                     capture_output=True, timeout=10, check=False)
+            return process.returncode, head.read_text(), effects.exists()
+
+    def test_trusted_verification_preserves_signed_source_instead_of_default_branch(self):
+        for attempt in [1, 2]:
+            with self.subTest(attempt=attempt):
+                status, head, effects = self.checkout(
+                    "workflow_run", "branch", attempt, {"workflow_run": {"head_sha": "a" * 40}})
+                self.assertEqual(status, 0)
+                self.assertEqual(head, "a" * 40)
+                self.assertTrue(effects)
+
+    def test_trusted_verification_has_no_default_branch_fallback(self):
+        for payload in [{}, {"workflow_run": {}}, {"workflow_run": {"head_sha": None}},
+                        {"workflow_run": {"head_sha": "not-a-revision"}}]:
+            with self.subTest(payload=payload):
+                status, head, effects = self.checkout("workflow_run", "branch", 1, payload)
+                self.assertNotEqual(status, 0)
+                self.assertEqual(head, "b" * 40)
+                self.assertFalse(effects)
+
+    def test_signed_tag_recovery_can_retry_its_original_source(self):
+        status, head, _ = self.checkout("push", "tag", 2, {})
+        self.assertEqual(status, 0)
+        self.assertEqual(head, "b" * 40)
+
+    def test_branch_pr_and_manual_qualification_retries_have_no_checkout_effect(self):
+        for event in ["push", "pull_request", "workflow_dispatch"]:
+            with self.subTest(event=event):
+                status, head, effects = self.checkout(
+                    event, "branch", 2, {"pull_request": {"head": {"sha": "a" * 40}}})
+                self.assertNotEqual(status, 0)
+                self.assertEqual(head, "b" * 40)
+                self.assertFalse(effects)
+
+    def test_original_pr_uses_its_head_instead_of_synthetic_merge(self):
+        status, head, _ = self.checkout(
+            "pull_request", "branch", 1, {"pull_request": {"head": {"sha": "a" * 40}}})
+        self.assertEqual(status, 0)
+        self.assertEqual(head, "a" * 40)
+
+    def test_unknown_event_has_no_checkout_effect(self):
+        status, head, effects = self.checkout("repository_dispatch", "branch", 1, {})
+        self.assertNotEqual(status, 0)
+        self.assertEqual(head, "b" * 40)
+        self.assertFalse(effects)
+
+    def test_wrong_observed_checkout_cannot_pass_signed_source_verification(self):
+        status, head, _ = self.checkout(
+            "workflow_run", "branch", 1, {"workflow_run": {"head_sha": "a" * 40}},
+            checkout_matches=False)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(head, "b" * 40)
 
 
 class ProducerIdentity(unittest.TestCase):
