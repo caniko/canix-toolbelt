@@ -341,9 +341,20 @@ fn review_resolution_probe_log_overflow_is_latched_even_when_handled() {
 fn review_resolution_portable_program_paths_must_be_canonical_and_absolute() {
     let (root, _) = run_fixture("true", 30);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    request.tools.insert("shell".into(), "/bin/sh".into());
+    // Ubuntu's /bin/sh is Dash, which rejects the required --version probe.
+    request.command[0] = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("bash"))
+        .find(|path| path.is_file())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
+    request
+        .tools
+        .insert("shell".into(), request.command[0].clone().into());
     let run = root.path().join("program-paths");
-    q::execute(&request, &run, &Default::default()).unwrap();
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
     q::verify_run(&run, None).unwrap();
     let original_request: serde_json::Value = q::read_json(&run.join("request.json")).unwrap();
     let original_receipt: serde_json::Value = q::read_json(&run.join("receipt.json")).unwrap();
