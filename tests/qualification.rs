@@ -2,6 +2,8 @@
 
 use canix_toolbelt::qualification::{self as q, InventorySpec};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use tempfile::tempdir;
 
 #[test]
@@ -36,6 +38,8 @@ fn inventories_reject_unrepresented_empty_directories() {
     let root = tempdir().unwrap();
     let out = tempdir().unwrap();
     fs::create_dir(root.path().join("tree")).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(root.path().join("tree"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(root.path().join("tree/file"), b"source").unwrap();
     let spec = InventorySpec {
         root: root.path().into(),
@@ -53,6 +57,42 @@ fn inventories_reject_unrepresented_empty_directories() {
         .unwrap();
     builder.finish().unwrap();
     assert!(q::verify_source_archive(&archive, &expected).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn finalization_rejects_unrepresented_directory_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempdir().unwrap();
+    let out = tempdir().unwrap();
+    let tree = root.path().join("tree");
+    fs::create_dir(&tree).unwrap();
+    fs::set_permissions(&tree, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(tree.join("file"), b"source").unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["tree".into()],
+    };
+    let expected = q::inventory(&spec).unwrap();
+    for mode in [0o700, 0o555, 0o775, 0o2755] {
+        fs::set_permissions(&tree, fs::Permissions::from_mode(mode)).unwrap();
+        let archive = out.path().join(format!("mode-{mode:o}.tar"));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        builder.append_dir_all("tree", &tree).unwrap();
+        builder.finish().unwrap();
+        let inventory_rejected = q::inventory(&spec).is_err();
+        let export_rejected =
+            q::export_source(&spec, &out.path().join(format!("export-{mode:o}.tar"))).is_err();
+        let archive_rejected = q::verify_source_archive(&archive, &expected).is_err();
+        assert!(
+            inventory_rejected && export_rejected && archive_rejected,
+            "mode {mode:o}: inventory={inventory_rejected}, export={export_rejected}, archive={archive_rejected}"
+        );
+    }
+    fs::set_permissions(&tree, fs::Permissions::from_mode(0o755)).unwrap();
+    let archive = out.path().join("canonical.tar");
+    assert_eq!(q::export_source(&spec, &archive).unwrap(), expected);
+    q::verify_source_archive(&archive, &expected).unwrap();
 }
 
 #[test]
@@ -251,7 +291,7 @@ fn private_work_tmpfs_is_writable_after_chroot() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn portable_receipts_and_seals_reject_malformed_input_digests() {
+fn finalization_portable_receipts_and_seals_reject_malformed_input_or_source_digests() {
     let (root, receipt) = run_fixture("true", 30);
     let run = root.path().join("run");
     let handoff = root.path().join("handoff");
@@ -269,17 +309,30 @@ fn portable_receipts_and_seals_reject_malformed_input_digests() {
         &handoff,
     )
     .unwrap();
-    for malformed in [
-        String::new(),
-        "g".repeat(64),
-        "a".repeat(63),
-        "a".repeat(65),
-    ] {
+    for (source, malformed) in [false, true].into_iter().flat_map(|source| {
+        [
+            String::new(),
+            "g".repeat(64),
+            "a".repeat(63),
+            "a".repeat(65),
+        ]
+        .into_iter()
+        .map(move |malformed| (source, malformed))
+    }) {
         let mut rewritten = receipt.clone();
-        rewritten
-            .composition
-            .inputs
-            .insert("lock".into(), malformed);
+        if source {
+            let inventory = rewritten.inventories.get_mut("producer").unwrap();
+            inventory.files.get_mut("source").unwrap().sha256 = malformed;
+            rewritten
+                .composition
+                .sources
+                .insert("producer".into(), q::fingerprint(inventory).unwrap());
+        } else {
+            rewritten
+                .composition
+                .inputs
+                .insert("lock".into(), malformed);
+        }
         rewritten.after = Some(rewritten.composition.clone());
         let bytes = q::json_bytes(&rewritten).unwrap();
         fs::write(run.join("receipt.json"), &bytes).unwrap();
@@ -295,6 +348,41 @@ fn portable_receipts_and_seals_reject_malformed_input_digests() {
         assert!(q::verify_run(&run, Some(&rewritten.composition)).is_err());
         assert!(q::verify_seal(&handoff, &rewritten.composition, &required).is_err());
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn finalization_rejects_unselected_symlink_targets() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 30);
+    fs::create_dir(root.path().join("sub")).unwrap();
+    fs::set_permissions(root.path().join("sub"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("target"), b"selected target").unwrap();
+    std::os::unix::fs::symlink("../target", root.path().join("sub/link")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.sources.get_mut("producer").unwrap().paths = vec!["sub".into()];
+    request.command[2] = "test -L sub/link && cat sub/link".into();
+    let rejected = root.path().join("unselected-link-target");
+    let error = q::execute(&request, &rejected, &Default::default()).unwrap_err();
+    assert!(error.to_string().contains("symlink target"), "{error}");
+    assert!(
+        !rejected.exists(),
+        "unmounted targets must fail before launch"
+    );
+    request
+        .sources
+        .get_mut("producer")
+        .unwrap()
+        .paths
+        .push("target".into());
+    let accepted = root.path().join("selected-link-target");
+    let receipt = q::execute(&request, &accepted, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_eq!(
+        fs::read(accepted.join("stdout.log")).unwrap(),
+        b"selected target"
+    );
+    q::verify_run(&accepted, None).unwrap();
 }
 
 #[cfg(target_os = "linux")]
@@ -441,6 +529,7 @@ fn runtime_dependencies_require_composition_bound_selection() {
     let (root, _) = run_fixture("true", 30);
     let cache = root.path().join("cache");
     fs::create_dir(&cache).unwrap();
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(cache.join("dependency"), b"first").unwrap();
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
     request.runtime_paths = vec![cache.clone()];
@@ -504,6 +593,7 @@ fn source_symlink_mounts_fail_closed_and_directory_selections_preserve_links() {
     let (root, _) = run_fixture("true", 30);
     let source = root.path().join("tree");
     fs::create_dir(&source).unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(source.join("target"), b"original").unwrap();
     symlink("target", source.join("link")).unwrap();
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
@@ -984,6 +1074,8 @@ fn legacy_receipt_integrity_is_distinct_from_acceptance() {
 fn source_archive_preserves_bytes_and_semantics_and_detects_corruption() {
     let root = tempdir().unwrap();
     fs::create_dir(root.path().join("src")).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(root.path().join("src"), fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(root.path().join("src/a"), b"source\n").unwrap();
     #[cfg(unix)]
     {
@@ -1244,6 +1336,11 @@ fn source_archive_roundtrips_long_link_targets_deterministically() {
     let root = tempdir().unwrap();
     let target = format!("{}/file", "nested".repeat(20));
     fs::create_dir_all(root.path().join(&target).parent().unwrap()).unwrap();
+    fs::set_permissions(
+        root.path().join(&target).parent().unwrap(),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     fs::write(root.path().join(&target), b"long link contents").unwrap();
     std::os::unix::fs::symlink(&target, root.path().join("link")).unwrap();
     let spec = InventorySpec {
@@ -1487,6 +1584,10 @@ fn execution_is_rejected_before_spawn_without_native_containment() {
 fn recursive_inventory_uses_portable_component_paths() {
     let root = tempdir().unwrap();
     fs::create_dir_all(root.path().join("src/nested")).unwrap();
+    #[cfg(unix)]
+    for path in ["src", "src/nested"] {
+        fs::set_permissions(root.path().join(path), fs::Permissions::from_mode(0o755)).unwrap();
+    }
     fs::write(root.path().join("src/nested/file"), b"portable").unwrap();
     let recursive = InventorySpec {
         root: root.path().into(),
@@ -1974,6 +2075,7 @@ fn source_archives_preserve_link_resolution_directories() {
     let out = tempdir().unwrap();
     fs::write(root.path().join("target"), b"original").unwrap();
     fs::create_dir(root.path().join("empty")).unwrap();
+    fs::set_permissions(root.path().join("empty"), fs::Permissions::from_mode(0o755)).unwrap();
     std::os::unix::fs::symlink("empty/../target", root.path().join("link")).unwrap();
     let spec = InventorySpec {
         root: root.path().into(),

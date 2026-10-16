@@ -24,6 +24,11 @@ are not part of the source contract.
 On Unix, selected files with multiple hard links also fail closed, including
 symlink targets and links outside the selected tree. Inventory v1 and its tar
 export do not represent inode aliases; select independent source copies instead.
+Selected and structural source directories must have mode `0755` on Unix;
+inventory v1 cannot bind any other directory mode, and archive verification rejects
+noncanonical directory headers rather than silently normalizing their semantics.
+Execution also requires every symlink target to be explicitly selected in the
+same source inventory, so hashing a target cannot admit an unmounted dangling link.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
 The private supervisor observes kernel syscall results for the producer and its
@@ -84,6 +89,8 @@ Source/input/tool/environment selections, inventory paths, receipt maps and seal
 gate/artifact selections also reject duplicate keys. Portable receipt verification
 requires every input, executable, tool, containment and boundary-policy digest to
 be 64 hexadecimal digits.
+Every retained source-file digest is subject to the same format check, even when
+an externally supplied inventory and its enclosing composition were rehashed.
 Rust callers can use `collect`, array conversion, or `.into()` on an existing
 `BTreeMap`; serialized bytes remain unchanged. Gate, request, execution-report and coverage JSON are parsed from
 the same opened bytes whose selected hashes are checked. Artifact copying reads

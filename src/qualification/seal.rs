@@ -217,22 +217,11 @@ pub fn export_source(spec: &InventorySpec, archive: &Path) -> io::Result<Invento
             return Err(invalid("archive is inside selected source"));
         }
     }
-    let mut directories = std::collections::BTreeSet::new();
-    for (name, source) in &before.files {
-        add_parent_directories(name, &mut directories)?;
-        if let Some(link) = &source.link {
-            let (_, traversed) = link_walk(name, Path::new(link))?;
-            directories.extend(traversed);
-        }
-    }
+    let directories = source_directories(&before.files)?;
     for name in &directories {
         // Lexical link walking is valid only for real directories. A directory
         // symlink can change the meaning of a following '..'; reject that case.
-        if !fs::symlink_metadata(root.join(name))?.is_dir() {
-            return Err(invalid(
-                "source link traverses a non-directory or directory symlink",
-            ));
-        }
+        canonical_source_directory(&root.join(name))?;
     }
     let output = fs::OpenOptions::new()
         .write(true)
@@ -275,6 +264,20 @@ pub fn export_source(spec: &InventorySpec, archive: &Path) -> io::Result<Invento
     Ok(before)
 }
 
+pub(super) fn source_directories(
+    files: &BTreeMap<String, SourceFile>,
+) -> io::Result<std::collections::BTreeSet<String>> {
+    let mut directories = std::collections::BTreeSet::new();
+    for (name, source) in files {
+        add_parent_directories(name, &mut directories)?;
+        if let Some(link) = &source.link {
+            let (_, traversed) = link_walk(name, Path::new(link))?;
+            directories.extend(traversed);
+        }
+    }
+    Ok(directories)
+}
+
 fn add_parent_directories(
     name: &str,
     directories: &mut std::collections::BTreeSet<String>,
@@ -287,7 +290,10 @@ fn add_parent_directories(
     Ok(())
 }
 
-fn link_walk(name: &str, link: &Path) -> io::Result<(String, std::collections::BTreeSet<String>)> {
+pub(super) fn link_walk(
+    name: &str,
+    link: &Path,
+) -> io::Result<(String, std::collections::BTreeSet<String>)> {
     if link.is_absolute() {
         return Err(invalid("absolute archive link"));
     }
@@ -423,6 +429,11 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
         let executable = entry.header().mode()? & 0o111 != 0;
         add_parent_directories(&name, &mut directories)?;
         if kind.is_dir() {
+            if name != "." && entry.header().mode()? & 0o7777 != 0o755 {
+                return Err(invalid(
+                    "source inventory v1 requires archive directory mode 0755",
+                ));
+            }
             directories.insert(name);
             continue;
         }

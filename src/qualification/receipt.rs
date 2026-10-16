@@ -249,6 +249,18 @@ fn capture(
         .iter()
         .map(|(name, spec)| Ok((name.clone(), inventory_checked(spec, check)?)))
         .collect::<io::Result<BTreeMap<_, _>>>()?;
+    for inventory in inventories.values() {
+        for (name, file) in &inventory.files {
+            if let Some(link) = &file.link {
+                let (target, _) = super::seal::link_walk(name, Path::new(link))?;
+                if !inventory.files.contains_key(&target) {
+                    return Err(invalid(
+                        "source symlink target requires an explicit selection in the same inventory",
+                    ));
+                }
+            }
+        }
+    }
     let sources = inventories
         .iter()
         .map(|(name, value)| Ok((name.clone(), fingerprint(value)?)))
@@ -308,6 +320,11 @@ fn stop(child: &mut Child) -> io::Result<()> {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
         }
         if Instant::now() >= cleanup_deadline {
+            // Setup may not yet consult PID 1's cancellation flag. Kill and
+            // reap unshare too: --kill-child=KILL then tears down its namespace.
+            // Forced cleanup never permits final capture or a passing receipt.
+            child.kill()?;
+            child.wait()?;
             // No final capture or receipt may follow unconfirmed cleanup.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -1188,6 +1205,10 @@ pub(crate) fn verify_run_bound(
     for (name, inventory) in &receipt.inventories {
         if inventory.schema_version != 1
             || inventory.files.is_empty()
+            || inventory
+                .files
+                .values()
+                .any(|file| !valid_digest(&file.sha256))
             || receipt.composition.sources.get(name) != Some(&fingerprint(inventory)?)
         {
             return Err(invalid("receipt source inventory identity differs"));
@@ -1261,6 +1282,31 @@ pub(crate) fn verify_run_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stop_reaps_uncooperative_launcher_after_grace_period() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; printf ready; exec sleep 60"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = [0; 5];
+        child.stdout.take().unwrap().read_exact(&mut ready).unwrap();
+        assert_eq!(&ready, b"ready");
+        let error = stop(&mut child).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let exited = child.try_wait().unwrap();
+        // Reap a leaked baseline child before failing the regression itself.
+        if exited.is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        assert!(
+            exited.is_some(),
+            "cleanup returned with the launcher still alive"
+        );
+    }
 
     #[test]
     fn huge_sparse_post_execution_inputs_respect_the_deadline() {

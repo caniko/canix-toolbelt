@@ -306,6 +306,7 @@ fn collect(
     let resolved = contained(root, path)?;
     let metadata = fs::symlink_metadata(root.join(path))?;
     if metadata.is_dir() {
+        canonical_source_directory(&root.join(path))?;
         let mut entries = fs::read_dir(root.join(path))?.peekable();
         if entries.peek().is_none() {
             return Err(invalid(
@@ -379,6 +380,23 @@ fn collect(
     Ok(())
 }
 
+pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Err(invalid(
+            "source link traverses a non-directory or directory symlink",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o7777 != 0o755 {
+            return Err(invalid("source inventory v1 requires directory mode 0755"));
+        }
+    }
+    Ok(())
+}
+
 /// Capture exact selected bytes; escaping symlinks and special files fail closed.
 pub fn inventory(spec: &InventorySpec) -> io::Result<Inventory> {
     inventory_checked(spec, &mut || Ok(()))
@@ -398,6 +416,9 @@ pub(crate) fn inventory_checked(
     }
     if files.is_empty() {
         return Err(invalid("source inventory is empty"));
+    }
+    for directory in seal::source_directories(&files)? {
+        canonical_source_directory(&root.join(directory))?;
     }
     Ok(Inventory {
         schema_version: 1,
