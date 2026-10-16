@@ -10,6 +10,9 @@ mod boundary;
 #[path = "../qualification/execution.rs"]
 mod execution;
 #[cfg(target_os = "linux")]
+#[path = "../qualification/syscall_watch.rs"]
+mod syscall_watch;
+#[cfg(target_os = "linux")]
 #[path = "../qualification/work_tree.rs"]
 mod work_tree;
 
@@ -17,7 +20,6 @@ mod work_tree;
 fn supervise() -> std::io::Result<i32> {
     use std::process::Command;
     use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
-    use std::time::Duration;
 
     // A fresh PID namespace plus its own /proc is mandatory. Refuse direct use.
     if std::process::id() != 1
@@ -75,7 +77,8 @@ fn supervise() -> std::io::Result<i32> {
     read_only_host(std::path::Path::new(&work))?;
     // Re-enter the remounted tree; inherited cwd refers to the old mount.
     std::env::set_current_dir(cwd)?;
-    let mut child = Command::new(setpriv)
+    syscall_watch::prepare()?;
+    let child = Command::new(setpriv)
         .args([
             "--bounding-set=-all",
             "--inh-caps=-all",
@@ -98,31 +101,15 @@ fn supervise() -> std::io::Result<i32> {
         // the producer inherit it or reach it through the supervisor's proc fds.
         .stdin(std::process::Stdio::null())
         .spawn()?;
-    let status = loop {
-        if cancelled.load(Ordering::Relaxed) {
-            return Ok(125);
-        }
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    // After reaping the leader, orphans have been reparented to PID 1. Consult
-    // kernel child accounting, not /proc, whose mount a privileged producer can
-    // replace. A live child, zombie, or unknown wait error invalidates completion.
-    // Exiting init makes the kernel kill/drain the whole namespace before the
-    // launcher can reap us. wait() uses waitpid(-1), covering all process groups.
-    let drained = match rustix::process::wait(rustix::process::WaitOptions::NOHANG) {
-        Err(rustix::io::Errno::CHILD) => true,
-        Ok(_) => false,
-        Err(error) => return Err(error.into()),
-    };
-    use std::os::unix::process::ExitStatusExt;
-    let execution = execution::ExecutionReport {
-        exit_code: status.code(),
-        signal: status.signal(),
-        descendants_drained: drained,
-    };
+    let execution = syscall_watch::watch(
+        child.id().try_into().map_err(std::io::Error::other)?,
+        &cancelled,
+    )?;
+    // The observer accounts for fork/clone descendants through kernel events,
+    // never a producer-controlled /proc listing. Any remaining tracee prevents
+    // retention and acceptance. Exiting PID 1 kills/drains the namespace before
+    // the launcher can reap us, including detached process groups.
+    let drained = execution.descendants_drained;
     let capacity = rustix::fs::statvfs(&work)?;
     if capacity.f_bavail == 0 || capacity.f_favail == 0 {
         return Err(std::io::Error::other(
@@ -148,7 +135,7 @@ fn supervise() -> std::io::Result<i32> {
     }
     rustix::fs::fsync(rustix::stdio::stdin())?;
     Ok(if drained {
-        status.code().unwrap_or(125)
+        execution.exit_code.unwrap_or(125)
     } else {
         125
     })
@@ -300,6 +287,9 @@ fn producer_exec() -> std::io::Error {
         },
     ) {
         return error.into();
+    }
+    if let Err(error) = syscall_watch::ready() {
+        return error;
     }
     std::process::Command::new(program)
         .arg0(argument_zero)

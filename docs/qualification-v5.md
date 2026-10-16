@@ -23,6 +23,17 @@ inventoried files or link resolution. Select explicit files when empty siblings
 are not part of the source contract.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
+The private supervisor observes kernel syscall results for the producer and its
+fork/clone descendants. `ENOSPC`, `EDQUOT`, and allocation/file-limit signals are
+latched even when a producer handles the failure, cleans up, and exits zero.
+Execution requires native x86_64/aarch64 Linux with `PTRACE_SEIZE`,
+`PTRACE_GET_SYSCALL_INFO`, and seccomp filtering available inside the namespace;
+missing observation fails closed. An inherited filter rejects `CLONE_UNTRACED`
+and makes `clone3` return `ENOSYS` so ordinary `clone` fallback stays observable.
+Linux AIO and io_uring setup also return `ENOSYS`: completion-queue errors are
+not syscall return values, so commands must use synchronous I/O fallback.
+Compat-architecture execution is not supported. Job-control stops use
+`PTRACE_LISTEN`; ordinary signals are forwarded rather than swallowed.
 After descendant drainage, the supervisor retains bounded regular files,
 directories and symlinks without following links. Work files are visible to
 the caller after completion; use the bounded log streams for live progress.
@@ -69,7 +80,14 @@ clears inherited repository-selection variables. Coverage requirements reject
 duplicate obligation IDs instead of silently replacing an original method set.
 All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retaining
 a completed work tree replaces prior children, preserving producer deletions and
-directory/file transitions between probes and the main command.
+directory/file transitions and directory permission modes between probes and the
+main command. Restrictive modes are restored after copying descendants.
+
+Deadline regressions separate namespace startup from the post-execution hashing
+witness. The end-to-end one-second deadline includes startup and may expire
+before the producer is launched. A separate test grows an initially captured
+input to 1 TiB and directly exercises the same capture/hash callback with a
+one-second deadline, without treating an early startup timeout as hashing proof.
 
 Portable verification establishes integrity and applicability. Provider custody,
 exact-source hosted qualification and live acceptance remain independent gates.

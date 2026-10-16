@@ -342,10 +342,10 @@ pub(crate) fn path_text(path: &Path) -> io::Result<String> {
                 let text = name.to_str().ok_or_else(|| {
                     invalid("non-UTF-8 paths cannot be represented in a portable inventory")
                 })?;
-                // Backslashes in Unix filenames are separators on Windows and
-                // cannot be encoded unambiguously by this portable wire format.
-                if text.contains('\\') {
-                    return Err(invalid("backslash in a portable path component"));
+                // Unix permits drive-relative names and backslashes that have
+                // different path semantics on Windows, including in link text.
+                if text.contains(['\\', ':']) {
+                    return Err(invalid("backslash or colon in a portable path component"));
                 }
                 Ok(text.to_owned())
             }

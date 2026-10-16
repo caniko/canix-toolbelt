@@ -128,6 +128,21 @@ fn inventory_rejects_escaping_links_and_records_internal_link_identity() {
     assert_eq!(snapshot.files["link"].link.as_deref(), Some("source"));
 }
 
+#[cfg(unix)]
+#[test]
+fn portable_source_links_reject_drive_relative_targets() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("C:target"), b"source").unwrap();
+    std::os::unix::fs::symlink("C:target", root.path().join("link")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["link".into()],
+    };
+    assert!(q::inventory(&spec).is_err());
+    let archive = root.path().join("source.tar");
+    assert!(q::export_source(&spec, &archive).is_err());
+}
+
 #[cfg(target_os = "linux")]
 fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Receipt) {
     // The no-op seed provisions a retained request for the test below it. Cold
@@ -308,6 +323,48 @@ fn aggregate_work_quota_prevents_many_individually_small_files_filling_host_disk
     assert!(!root.path().join("run/work/first").exists());
     assert!(!root.path().join("run/work/second").exists());
     assert!(q::verify_run(&root.path().join("run"), None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transient_work_quota_exhaustion_cannot_be_hidden_by_cleanup() {
+    for script in [
+        "cd \"$QUALIFICATION_WORK_DIR\"; if dd if=/dev/zero of=full bs=1M count=257; then exit 91; fi; rm -f full; printf quota-recovered",
+        "cd \"$QUALIFICATION_WORK_DIR\"; if mkdir $(seq -f d%g 1 17000) 2>/dev/null; then exit 91; fi; rmdir d*; printf quota-recovered",
+    ] {
+        let (root, receipt) = run_fixture(script, 60);
+        assert_eq!(
+            fs::read(root.path().join("run/stdout.log")).unwrap(),
+            b"quota-recovered"
+        );
+        assert_eq!(receipt.status, q::RunStatus::Failed, "{receipt:#?}");
+        assert!(
+            fs::read_to_string(root.path().join("run/stderr.log"))
+                .unwrap()
+                .contains("producer encountered a work-tree quota failure")
+        );
+        assert!(q::verify_run(&root.path().join("run"), None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn job_control_stop_and_continue_preserve_producer_completion() {
+    let (root, receipt) = run_fixture(
+        "(sleep 0.1; kill -CONT $$) & kill -STOP $$; wait; printf resumed",
+        10,
+    );
+    assert_eq!(
+        receipt.status,
+        q::RunStatus::Passed,
+        "{receipt:#?}; {}",
+        fs::read_to_string(root.path().join("run/stderr.log")).unwrap()
+    );
+    assert_eq!(
+        fs::read(root.path().join("run/stdout.log")).unwrap(),
+        b"resumed"
+    );
+    q::verify_run(&root.path().join("run"), None).unwrap();
 }
 
 #[cfg(target_os = "linux")]
@@ -1337,28 +1394,40 @@ fn privileged_producer_cannot_hide_children_by_overmounting_proc() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn huge_sparse_post_execution_inputs_respect_the_deadline() {
+fn startup_and_post_execution_capture_share_one_deadline() {
     let (root, _) = run_fixture("true", 5);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    request.command[2] = "printf started; sleep 0.2".into();
+    // Wait for the observer's mutation instead of racing a fixed producer sleep.
+    request.command[2] =
+        "printf started; while test \"$(stat -c %s input)\" != 1099511627776; do sleep 0.01; done"
+            .into();
     request.timeout_seconds = 1;
     let directory = root.path().join("growth");
     let started = std::time::Instant::now();
     let receipt = std::thread::scope(|scope| {
-        let task = scope.spawn(|| q::execute(&request, &directory, &Default::default()).unwrap());
-        while fs::read(directory.join("stdout.log")).unwrap_or_default() != b"started" {
-            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        let task = scope.spawn(|| q::execute(&request, &directory, &Default::default()));
+        while fs::read(directory.join("stdout.log")).unwrap_or_default() != b"started"
+            && !task.is_finished()
+            && started.elapsed() < std::time::Duration::from_secs(3)
+        {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        fs::OpenOptions::new()
-            .write(true)
-            .open(root.path().join("input"))
-            .unwrap()
-            .set_len(1 << 40)
-            .unwrap();
+        if fs::read(directory.join("stdout.log")).unwrap_or_default() == b"started" {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(root.path().join("input"))
+                .unwrap()
+                .set_len(1 << 40)
+                .unwrap();
+        }
         task.join().unwrap()
     });
-    assert_eq!(receipt.status, q::RunStatus::TimedOut);
+    // Initial capture is included in the same one-second deadline. It may
+    // expire before a producer exists; neither outcome can verify as passed.
+    match receipt {
+        Ok(receipt) => assert_eq!(receipt.status, q::RunStatus::TimedOut, "{receipt:#?}"),
+        Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}"),
+    }
     assert!(started.elapsed() < std::time::Duration::from_secs(4));
     assert!(q::verify_run(&directory, None).is_err());
 }

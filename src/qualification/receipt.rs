@@ -1226,8 +1226,45 @@ pub(crate) fn verify_run_bound(
 }
 
 #[cfg(test)]
-mod publication_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn huge_sparse_post_execution_inputs_respect_the_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("source"), b"source").unwrap();
+        let input = root.path().join("input");
+        fs::write(&input, b"pinned").unwrap();
+        let request: RunRequest = serde_json::from_value(serde_json::json!({
+            "cwd": root.path(),
+            "sources": {"fixture": {"root": root.path(), "paths": ["source"]}},
+            "inputs": {"input": input},
+            "command": ["true"],
+            "timeoutSeconds": 1,
+        }))
+        .unwrap();
+        capture(&request, &mut || Ok(())).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&input)
+            .unwrap()
+            .set_len(1 << 40)
+            .unwrap();
+        // Exercise the actual post-execution capture/hash path without spending
+        // its entire budget on a cold namespace launch. No deadline is enlarged.
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(request.timeout_seconds);
+        let error = capture(&request, &mut || {
+            if Instant::now() >= deadline {
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
 
     #[test]
     fn cancellation_is_observed_midway_through_json_serialization() {
