@@ -18,6 +18,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Exercise finalization cancellation with bounded socket-compatible output and
+  require successful native completion before the regression requests cancellation.
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
 - Require native owner/host observation fencing through dispatch; unsupported
   adapters fail before reads or effects, and lost authority invalidates an idle
