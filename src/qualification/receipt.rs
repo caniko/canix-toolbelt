@@ -622,6 +622,19 @@ pub fn execute(
         .iter()
         .map(|(name, path)| Ok((name.clone(), path.canonicalize()?)))
         .collect::<io::Result<_>>()?;
+    let selected_tools = effective_request
+        .tools
+        .iter()
+        .map(|(name, path)| {
+            Ok((
+                name.clone(),
+                ProgramIdentity {
+                    path: path.clone(),
+                    sha256: sha256_file_checked(path, &mut check)?,
+                },
+            ))
+        })
+        .collect::<io::Result<BTreeMap<_, _>>>()?;
     effective_request.containment = Some(ContainmentPrograms {
         unshare: containment["unshare"].path.clone(),
         executor: containment["executor"].path.clone(),
@@ -697,39 +710,64 @@ pub fn execute(
     fs::create_dir(&sandbox)?;
     // Public system runtime trees supply dynamic loaders and standard tools;
     // neither the host home, /etc nor host /run is recursively exposed.
-    let mut read_only_paths: Vec<PathBuf> = [
-        "/nix/store",
-        "/bin",
-        "/usr/bin",
-        "/usr/lib",
-        "/usr/lib64",
-        "/lib",
-        "/lib64",
-        "/run/current-system/sw",
-        "/dev/null",
-        "/dev/zero",
-        "/dev/random",
-        "/dev/urandom",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .filter(|path| path.exists())
-    .collect();
-    for spec in request.sources.values() {
-        let root = spec.root.canonicalize()?;
+    let read_only_paths: Vec<PathBuf> = super::boundary::SYSTEM_PATHS
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    let mut snapshot_mounts = Vec::new();
+    let mut snapshot_files = BTreeMap::new();
+    let mut snapshot_directories = Vec::new();
+    for (name, spec) in &request.sources {
         for path in &spec.paths {
-            read_only_paths.push(root.join(path));
+            snapshot_mounts.push(spec.root.join(path));
+        }
+        for directory in super::seal::source_directories(&inventories[name].files)? {
+            snapshot_directories.push(spec.root.join(directory));
+        }
+        for (path, file) in &inventories[name].files {
+            insert_snapshot(&mut snapshot_files, spec.root.join(path), file.clone())?;
         }
     }
-    read_only_paths.extend(request.inputs.values().cloned());
-    read_only_paths.extend(request.tools.values().cloned());
-    read_only_paths.extend(containment.values().map(|program| program.path.clone()));
-    if let Ok(program) = &executable {
-        read_only_paths.push(program.path.clone());
+    for (name, path) in &request.inputs {
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+            fs::metadata(path)?.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let executable = false;
+        insert_snapshot(
+            &mut snapshot_files,
+            path.clone(),
+            SourceFile {
+                sha256: composition.inputs[name].clone(),
+                executable,
+                link: None,
+            },
+        )?;
+        snapshot_mounts.push(path.clone());
     }
-    read_only_paths.extend(request.runtime_paths.iter().cloned());
+    for program in selected_tools
+        .values()
+        .chain(containment.values())
+        .chain(executable.as_ref().ok())
+    {
+        insert_snapshot(
+            &mut snapshot_files,
+            program.path.clone(),
+            SourceFile {
+                sha256: program.sha256.clone(),
+                executable: true,
+                link: None,
+            },
+        )?;
+        snapshot_mounts.push(program.path.clone());
+    }
+    snapshot_mounts.extend(request.runtime_paths.iter().cloned());
     if read_only_paths
         .iter()
+        .chain(&snapshot_mounts)
         .any(|path| !path.is_absolute() || path == Path::new("/"))
     {
         return Err(invalid(
@@ -738,6 +776,9 @@ pub fn execute(
     }
     let boundary = super::boundary::Boundary {
         read_only_paths,
+        snapshot_mounts,
+        snapshot_files,
+        snapshot_directories,
         environment: environment.clone(),
         sandbox,
     };
@@ -775,15 +816,13 @@ pub fn execute(
         if cancelled.load(Ordering::Relaxed) {
             return Ok((RunStatus::Cancelled, None));
         }
-        for (name, path) in &request.tools {
+        for (name, tool) in &selected_tools {
             relative(Path::new(name))?;
             if Path::new(name).components().count() != 1 {
                 return Err(invalid("tool labels must be single path components"));
             }
-            let path = path.canonicalize()?;
-            let sha256 = sha256_file_checked(&path, &mut check)?;
             let output = tool_version(
-                (&path, &request.tool_argument_zeros[name]),
+                (&tool.path, &request.tool_argument_zeros[name]),
                 request,
                 cancelled,
                 &destination,
@@ -795,8 +834,8 @@ pub fn execute(
             receipt.tools.insert(
                 name.clone(),
                 ToolEvidence {
-                    path,
-                    sha256,
+                    path: tool.path.clone(),
+                    sha256: tool.sha256.clone(),
                     version,
                 },
             );
@@ -987,6 +1026,20 @@ pub fn execute(
     }
     publish_receipt(&destination, &mut receipt, started, deadline, cancelled)?;
     Ok(receipt)
+}
+
+fn insert_snapshot(
+    files: &mut BTreeMap<PathBuf, SourceFile>,
+    path: PathBuf,
+    file: SourceFile,
+) -> io::Result<()> {
+    if files.get(&path).is_some_and(|selected| selected != &file) {
+        return Err(invalid(
+            "overlapping snapshot selections have different identities",
+        ));
+    }
+    files.insert(path, file);
+    Ok(())
 }
 
 // Publish only after cooperative serialization, bounded writes and durable sync.
@@ -1274,6 +1327,85 @@ pub(crate) fn verify_run_bound(
     {
         return Err(invalid(
             "receipt tool selection differs from retained request",
+        ));
+    }
+    let mut files = BTreeMap::new();
+    let mut mounts = Vec::new();
+    let mut directories = Vec::new();
+    for (name, spec) in &request.sources {
+        for path in &spec.paths {
+            mounts.push(spec.root.join(path));
+        }
+        for directory in super::seal::source_directories(&receipt.inventories[name].files)? {
+            directories.push(spec.root.join(directory));
+        }
+        for (path, file) in &receipt.inventories[name].files {
+            insert_snapshot(&mut files, spec.root.join(path), file.clone())?;
+        }
+    }
+    for (name, path) in &request.inputs {
+        let selected = boundary
+            .snapshot_files
+            .get(path)
+            .ok_or_else(|| invalid("missing input snapshot"))?;
+        insert_snapshot(
+            &mut files,
+            path.clone(),
+            SourceFile {
+                sha256: receipt.composition.inputs[name].clone(),
+                // Inputs bind bytes, not a Unix mode. The boundary retains its
+                // effective executable bit without consulting the original host.
+                executable: selected.executable,
+                link: None,
+            },
+        )?;
+        mounts.push(path.clone());
+    }
+    for (path, hash) in receipt
+        .tools
+        .values()
+        .map(|tool| (&tool.path, &tool.sha256))
+        .chain(
+            receipt
+                .containment
+                .values()
+                .chain(receipt.executable.iter())
+                .map(|program| (&program.path, &program.sha256)),
+        )
+    {
+        insert_snapshot(
+            &mut files,
+            path.clone(),
+            SourceFile {
+                sha256: hash.clone(),
+                executable: true,
+                link: None,
+            },
+        )?;
+        mounts.push(path.clone());
+    }
+    mounts.extend(request.runtime_paths.iter().cloned());
+    mounts.sort();
+    mounts.dedup();
+    directories.sort();
+    directories.dedup();
+    let mut actual_mounts = boundary.snapshot_mounts.clone();
+    actual_mounts.sort();
+    actual_mounts.dedup();
+    let mut actual_directories = boundary.snapshot_directories.clone();
+    actual_directories.sort();
+    actual_directories.dedup();
+    if files != boundary.snapshot_files
+        || mounts != actual_mounts
+        || directories != actual_directories
+        || boundary.read_only_paths.iter().any(|path| {
+            !super::boundary::SYSTEM_PATHS
+                .iter()
+                .any(|system| path == Path::new(system))
+        })
+    {
+        return Err(invalid(
+            "boundary snapshots differ from the retained composition and program selections",
         ));
     }
     Ok(receipt)

@@ -11,6 +11,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 mod boundary;
+pub use boundary::SourceFile;
 mod json;
 pub(crate) use json::{invalid, invalid_json, read_bound_json, regular_file};
 mod receipt;
@@ -136,18 +137,6 @@ pub struct InventorySpec {
     pub root: PathBuf,
     /// Root-relative files or directories, recursively selected.
     pub paths: Vec<PathBuf>,
-}
-
-/// One file's content and filesystem semantics.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceFile {
-    /// SHA-256 of file contents, including an internal symlink's target contents.
-    pub sha256: String,
-    /// Whether any Unix executable bit is set.
-    pub executable: bool,
-    /// Exact relative link target, when the selected entry is a symlink.
-    pub link: Option<String>,
 }
 
 /// Versioned source inventory. Link text and executable bits bind source identity.

@@ -268,6 +268,29 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
 }
 
 #[cfg(target_os = "linux")]
+fn record_launcher(request: &mut q::RunRequest, root: &std::path::Path) -> std::path::PathBuf {
+    let containment = request.containment.as_mut().unwrap();
+    let unshare = &containment.unshare;
+    let launcher = root.join("record-launcher");
+    let pid_file = root.join("launcher.pid");
+    fs::write(
+        &launcher,
+        format!("#!/bin/sh\nprintf '%s' \"$$\" > {pid_file:?}\nexec {unshare:?} \"$@\"\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    containment.unshare = launcher;
+    pid_file
+}
+
+#[cfg(target_os = "linux")]
+fn resume_launcher(pid_file: &std::path::Path) {
+    use rustix::process::{Pid, Signal, kill_process_group};
+    let group = Pid::from_raw(fs::read_to_string(pid_file).unwrap().parse().unwrap()).unwrap();
+    let _ = kill_process_group(group, Signal::CONT);
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn private_work_tmpfs_is_writable_after_chroot() {
     let (root, receipt) = run_fixture(
@@ -387,6 +410,159 @@ fn finalization_rejects_unselected_symlink_targets() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn finalization_execution_snapshots_cannot_observe_transient_host_substitutions() {
+    use std::time::{Duration, Instant};
+    for replacement in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        let runtime = root.path().join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+        let tool = root.path().join("tool");
+        let files = [
+            (
+                root.path().join("source"),
+                "original",
+                "tampered-source",
+                0o644,
+            ),
+            (root.path().join("input"), "pinned", "tampered-input", 0o644),
+            (
+                tool.clone(),
+                "#!/bin/sh\nprintf original-tool",
+                "#!/bin/sh\nprintf tampered-tool",
+                0o755,
+            ),
+            (
+                runtime.join("dependency"),
+                "original-runtime",
+                "tampered-runtime",
+                0o644,
+            ),
+        ];
+        let rewrite = |tampered: bool| {
+            for (path, original, substituted, mode) in &files {
+                let bytes = if tampered { substituted } else { original };
+                let target = if replacement {
+                    path.with_extension("swap")
+                } else {
+                    path.clone()
+                };
+                fs::write(&target, bytes).unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(*mode)).unwrap();
+                if replacement {
+                    fs::rename(target, path).unwrap();
+                }
+            }
+        };
+        rewrite(false);
+        request
+            .sources
+            .get_mut("producer")
+            .unwrap()
+            .paths
+            .push("runtime".into());
+        request.runtime_paths.push(runtime);
+        request.tools.insert("selected".into(), tool.clone());
+        request.command[2] = format!(
+            "printf ready; kill -STOP $$; cat source input; {tool:?}; cat runtime/dependency; if test -e runtime/injected; then printf injected; fi; printf consumed"
+        );
+        let unshare = request.containment.as_ref().unwrap().unshare.clone();
+        let pid_file = record_launcher(&mut request, root.path());
+        let released = root.path().join("launcher.released");
+        // The host-side fixture delays the *outer* reap until original bytes
+        // are restored. This barrier is absent from the producer namespace.
+        fs::write(
+            &request.containment.as_ref().unwrap().unshare,
+            format!(
+                r#"#!/bin/sh
+printf '%s' "$$" > {pid_file:?}
+{unshare:?} "$@"
+status=$?
+for argument in "$@"; do
+    if test "$argument" = --version; then exit "$status"; fi
+done
+while ! test -e {released:?}; do sleep 0.005; done
+exit "$status"
+"#
+            ),
+        )
+        .unwrap();
+        let run = root.path().join("transient-host-writes");
+        let receipt = std::thread::scope(|scope| {
+            let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !fs::read(run.join("stdout.log"))
+                .unwrap_or_default()
+                .starts_with(b"ready")
+                && !task.is_finished()
+                && Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            rewrite(true);
+            fs::write(root.path().join("runtime/injected"), b"unselected").unwrap();
+            // Only this request's fresh launcher process group is resumed. The
+            // producer stops before consumption; the host fixture gates capture.
+            // no host-writable input is used as a release/control channel.
+            while !fs::read(run.join("stdout.log"))
+                .unwrap_or_default()
+                .ends_with(b"consumed")
+                && !task.is_finished()
+                && Instant::now() < deadline
+            {
+                resume_launcher(&pid_file);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            rewrite(false);
+            fs::remove_file(root.path().join("runtime/injected")).unwrap();
+            fs::write(&released, b"restored").unwrap();
+            task.join().unwrap()
+        });
+        assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+        q::verify_run(&run, None).unwrap();
+        assert_eq!(
+            fs::read(run.join("stdout.log")).unwrap(),
+            b"readyoriginalpinnedoriginal-tooloriginal-runtimeconsumed",
+            "accepted transient, unrecorded bytes; replacement={replacement}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn finalization_snapshot_admission_checks_the_selected_bytes() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let unshare = request.containment.as_ref().unwrap().unshare.clone();
+    let launcher = root.path().join("substitute-input");
+    let input = root.path().join("input");
+    fs::write(
+        &launcher,
+        format!(
+            r#"#!/bin/sh
+printf tampered > {input:?}
+{unshare:?} "$@"
+status=$?
+printf pinned > {input:?}
+exit "$status"
+"#
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    request.containment.as_mut().unwrap().unshare = launcher;
+    request.command[2] = "cat input".into();
+    let run = root.path().join("snapshot-admission");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_ne!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    assert_ne!(fs::read(run.join("stdout.log")).unwrap(), b"tampered");
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn boundary_policy_substitution_during_launch_cannot_pass() {
     use std::os::unix::fs::PermissionsExt;
     let (root, _) = run_fixture("true", 30);
@@ -439,7 +615,8 @@ fn contained_boundary_snapshot_does_not_alias_the_host_policy_inode() {
     request
         .environment
         .insert("BOUNDARY_SENTINEL".into(), "expected".into());
-    request.command[2] = "printf ready; while test \"$(cat input)\" != release; do sleep 0.01; done; cat /.qualification-boundary.json".into();
+    request.command[2] = "printf ready; kill -STOP $$; cat /.qualification-boundary.json".into();
+    let pid_file = record_launcher(&mut request, root.path());
     let run = root.path().join("snapshot");
     let (receipt, original) = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
@@ -456,10 +633,13 @@ fn contained_boundary_snapshot_does_not_alias_the_host_policy_inode() {
         let mut substituted: serde_json::Value = serde_json::from_slice(&original).unwrap();
         substituted["environment"]["BOUNDARY_SENTINEL"] = "tampered".into();
         // Overwrite the same host inode after namespace admission, then release
-        // the producer through a separately selected input. Its private policy
+        // the producer through its isolated process group. Its private policy
         // must still expose only the admitted bytes, not this host-side change.
         fs::write(&path, q::json_bytes(&substituted).unwrap()).unwrap();
-        fs::write(root.path().join("input"), b"release").unwrap();
+        while !task.is_finished() && std::time::Instant::now() < deadline {
+            resume_launcher(&pid_file);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         (task.join().unwrap(), original)
     });
     let mut expected = b"ready".to_vec();
@@ -496,6 +676,62 @@ fn portable_receipts_bind_the_boundary_policy_and_its_environment() {
     missing.as_object_mut().unwrap().remove("boundarySha256");
     fs::write(run.join("receipt.json"), q::json_bytes(&missing).unwrap()).unwrap();
     assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn portable_receipts_require_exact_snapshot_selections() {
+    let (root, receipt) = run_fixture("true", 30);
+    let run = root.path().join("run");
+    let original: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    for kind in [
+        "missing-file",
+        "wrong-file",
+        "extra-file",
+        "missing-mount",
+        "extra-directory",
+        "host-bind",
+    ] {
+        let mut policy = original.clone();
+        let source = root.path().join("source");
+        let key = source.to_str().unwrap();
+        match kind {
+            "missing-file" => {
+                policy["snapshot_files"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+            }
+            "wrong-file" => {
+                policy["snapshot_files"][key]["sha256"] = "0".repeat(64).into();
+            }
+            "extra-file" => {
+                policy["snapshot_files"][root.path().join("secret").to_str().unwrap()] =
+                    policy["snapshot_files"][key].clone();
+            }
+            "missing-mount" => {
+                policy["snapshot_mounts"] = serde_json::json!([]);
+            }
+            "extra-directory" => {
+                policy["snapshot_directories"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!(root.path().join("extra")));
+            }
+            "host-bind" => {
+                policy["read_only_paths"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!(root.path()));
+            }
+            _ => unreachable!(),
+        }
+        fs::write(run.join("boundary.json"), q::json_bytes(&policy).unwrap()).unwrap();
+        let mut rewritten = receipt.clone();
+        rewritten.boundary_sha256 = q::sha256_file(&run.join("boundary.json")).unwrap();
+        fs::write(run.join("receipt.json"), q::json_bytes(&rewritten).unwrap()).unwrap();
+        assert!(q::verify_run(&run, None).is_err(), "accepted {kind}");
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -560,7 +796,8 @@ fn runtime_dependencies_require_composition_bound_selection() {
     assert_ne!(first.composition, second.composition);
 
     request.command[2] =
-        "printf ready; while test \"$(cat cache/dependency)\" != third; do sleep 0.01; done".into();
+        "printf ready; kill -STOP $$; test \"$(cat cache/dependency)\" = second".into();
+    let pid_file = record_launcher(&mut request, root.path());
     let changed_run = root.path().join("midrun-runtime-change");
     let changed = std::thread::scope(|scope| {
         let task = scope.spawn(|| q::execute(&request, &changed_run, &Default::default()).unwrap());
@@ -570,9 +807,18 @@ fn runtime_dependencies_require_composition_bound_selection() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         fs::write(cache.join("dependency"), b"third").unwrap();
+        while !task.is_finished() && std::time::Instant::now() < deadline {
+            resume_launcher(&pid_file);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         task.join().unwrap()
     });
     assert_eq!(changed.status, q::RunStatus::SourceChanged, "{changed:#?}");
+    assert_eq!(
+        changed.execution_exit,
+        Some(0),
+        "producer must still see the admitted runtime bytes"
+    );
     assert!(q::verify_run(&changed_run, None).is_err());
 
     // Portable verification must enforce the same selection, even after the

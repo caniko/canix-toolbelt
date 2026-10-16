@@ -49,6 +49,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   and receipt publication; bind exact selected JSON bytes and tool aliases,
   reject duplicate coverage requirements and nonportable evidence paths, and
   clear inherited Git repository selection. See [the v5 migration notes](docs/qualification-v5.md).
+- Snapshot selected source, input, tool and runtime files into a digest-checked
+  private execution view, so transient host writes cannot escape composition
+  binding. Reject unselected symlink targets, unrepresented directory modes and
+  malformed source-file digests, and kill/reap stalled launchers after graceful
+  cleanup expires. Portable verification requires the exact snapshot selections.
 - Preserve a qualification command's requested argv[0] after canonical executable
   hashing and namespace/privilege containment, including Nix multicall applets.
   `RunRequest` Rust initializers now set `argument_zero: None` for the default;

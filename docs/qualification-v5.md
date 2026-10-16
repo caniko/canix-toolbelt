@@ -4,8 +4,8 @@ Version 5 closes the host-file, host-control-socket and pre-containment loader
 environment gaps in earlier execution receipts. Earlier receipts are retained
 historical evidence and cannot satisfy new execution gates.
 
-The supervisor builds a private tmpfs root and exposes selected source paths,
-inputs, canonical programs, explicit runtime dependencies, public system tool
+The supervisor builds a private tmpfs root and exposes private copies of selected
+source paths, inputs, canonical programs and explicit runtime dependencies, plus public system tool
 and library trees, the immutable Nix store, four standard null/random devices,
 and its fresh PID-namespace `/proc`. Host home directories, host `/etc` and host
 control directories under `/run` are absent. Additional directory dependencies
@@ -14,8 +14,16 @@ abstract Unix sockets and the host network. Commands must use pre-provisioned
 offline dependencies; hosted checkout and dependency provisioning happen before
 execution.
 
-Source and dependency mounts remain read-only, including inherited `nosymfollow`
-flags. A source selected through a symlink is rejected before spawn; selecting
+Every probe and main execution copies only inventoried files into its private
+tmpfs, checks the copied bytes against the boundary's independently selected
+digests, recreates recorded relative links, and mounts that snapshot read-only.
+In-place writes, path replacement and transient extra host files cannot affect
+the producer's view. A mismatch during copying prevents producer launch. The
+snapshot root is capped at 1 GiB and 131,072 inodes; exceeding either bound fails
+closed, independently of the work-tree quota. Public system tool/library trees
+remain platform-owned runtime dependencies, not a claim to capture the operating
+system. They are the only permitted host directory binds.
+A source selected through a symlink is rejected before spawn; selecting
 its containing directory preserves the recorded symlink semantics instead.
 Inventory v1 cannot represent empty directories: recursive selections containing
 one fail closed, and source archives reject extra directories not implied by
@@ -54,8 +62,10 @@ Those admitted bytes are copied into the private tmpfs, never bind-mounted from
 the externally writable host inode. The final exec adapter checks the same
 identity again before applying the environment. Both version probes and the main
 producer use this policy identity. Retained `boundary.json` is mandatory in runs
-and seals; portable verification checks its digest and environment. Earlier
-schema-5 packets without this identity remain historical, not qualifying evidence.
+and seals; portable verification checks its digest, environment and exact snapshot
+file/directory/mount selections against the inventories, inputs and executable
+identities. Earlier schema-5 packets without these snapshot selections or the
+policy identity remain historical, not qualifying evidence.
 The producer's home is a fresh `work/home`. The default Cargo home is
 `work/cargo-home`. A supplied Cargo dependency cache needs an explicit recursive
 source selection (or file input selections), binding its contents before and
@@ -66,7 +76,9 @@ Every path must equal a selected source path or input file, so runtime bytes
 participate in the composition instead of merely exposing a mutable host path.
 Unbound runtime selections fail before spawn; portable verification enforces
 the same rule without accessing the original host. Changed dependencies produce
-a different composition, and detected mid-run changes cannot pass.
+a different composition, and detected mid-run changes cannot pass. Even when
+host bytes are restored before final capture, the producer consumes only the
+digest-checked private copies, never the transient substitutions.
 `RunRequest.toolArgumentZeros` optionally preserves tool
 aliases separately from their canonical byte-bound executable paths. Effective
 requests bind every selected alias. Rust callers initialize the new fields with

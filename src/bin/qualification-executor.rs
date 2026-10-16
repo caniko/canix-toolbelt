@@ -59,6 +59,13 @@ fn supervise() -> std::io::Result<i32> {
         Some(&boundary_sha256),
     )?;
     let policy: boundary::Boundary = serde_json::from_slice(&boundary_bytes)?;
+    if policy.read_only_paths.iter().any(|path| {
+        !boundary::SYSTEM_PATHS
+            .iter()
+            .any(|system| path == std::path::Path::new(system))
+    }) {
+        return Err(std::io::Error::other("unsupported public runtime mount"));
+    }
     let max_log_bytes = args
         .next()
         .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
@@ -79,7 +86,13 @@ fn supervise() -> std::io::Result<i32> {
     // mount handle, and it never follows work-tree symlinks during retention.
     use std::os::fd::AsRawFd;
     let retained_work = std::fs::File::open(&work)?;
-    minimal_root(&policy, &boundary_bytes, std::path::Path::new(&work), &cwd)?;
+    minimal_root(
+        &policy,
+        &boundary_bytes,
+        std::path::Path::new(&work),
+        &cwd,
+        &cancelled,
+    )?;
     read_only_host(std::path::Path::new(&work))?;
     // Re-enter the remounted tree; inherited cwd refers to the old mount.
     std::env::set_current_dir(cwd)?;
@@ -316,11 +329,20 @@ fn minimal_root(
     boundary_bytes: &[u8],
     work: &std::path::Path,
     cwd: &std::path::Path,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
     use rustix::mount::{MountFlags, mount, mount_bind, mount_bind_recursive};
     use std::io::Write;
     let root = &policy.sandbox;
-    mount("tmpfs", root, "tmpfs", MountFlags::NOSUID, c"size=64m")?;
+    // ponytail: a private input snapshot is capped at 1 GiB/131072 inodes.
+    // Larger selections need a separately qualified disk-snapshot engine.
+    mount(
+        "tmpfs",
+        root,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        c"size=1g,nr_inodes=131072",
+    )?;
     let target = |path: &std::path::Path| -> std::io::Result<std::path::PathBuf> {
         let path = path.strip_prefix("/").map_err(std::io::Error::other)?;
         if path
@@ -331,6 +353,68 @@ fn minimal_root(
         }
         Ok(root.join(path))
     };
+    let snapshot = root.join(".qualification-inputs");
+    std::fs::create_dir(&snapshot)?;
+    let snapshot_path = |path: &std::path::Path| -> std::io::Result<std::path::PathBuf> {
+        Ok(snapshot.join(
+            target(path)?
+                .strip_prefix(root)
+                .map_err(std::io::Error::other)?,
+        ))
+    };
+    for path in &policy.snapshot_directories {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = snapshot_path(path)?;
+        std::fs::create_dir_all(&directory)?;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755))?;
+    }
+    // Copy only inventoried files, never a live directory traversal. A host can
+    // still mutate the opened inode, but only a copy hashing to the independently
+    // selected digest can reach the producer. Symlinks are recreated from policy.
+    for (path, expected) in &policy.snapshot_files {
+        if expected.link.is_some() {
+            continue;
+        }
+        let destination = snapshot_path(path)?;
+        std::fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| std::io::Error::other("missing snapshot parent"))?,
+        )?;
+        snapshot_file(path, &destination, expected, cancelled)?;
+    }
+    for (path, expected) in &policy.snapshot_files {
+        if let Some(link) = &expected.link {
+            let destination = snapshot_path(path)?;
+            std::fs::create_dir_all(
+                destination
+                    .parent()
+                    .ok_or_else(|| std::io::Error::other("missing link parent"))?,
+            )?;
+            std::os::unix::fs::symlink(link, destination)?;
+        }
+    }
+    let mut selections = policy.snapshot_mounts.clone();
+    selections.sort_by_key(|path| path.components().count());
+    selections.dedup();
+    // Prepare placeholders while root contains only private tmpfs objects. No
+    // mkdir/create is allowed through a later public-system bind mount.
+    for path in &selections {
+        let source = snapshot_path(path)?;
+        let destination = target(path)?;
+        if source.is_dir() {
+            std::fs::create_dir_all(&destination)?;
+        } else {
+            std::fs::create_dir_all(
+                destination
+                    .parent()
+                    .ok_or_else(|| std::io::Error::other("missing snapshot mount parent"))?,
+            )?;
+            if !destination.exists() {
+                std::fs::File::create(destination)?;
+            }
+        }
+    }
     let mut paths = policy.read_only_paths.clone();
     paths.sort_by_key(|path| path.components().count());
     paths.dedup();
@@ -366,6 +450,11 @@ fn minimal_root(
             mount_bind(&source, &destination)?;
         }
     }
+    for path in selections {
+        // Selected paths are never live host bind mounts, including selections
+        // beneath the platform-owned runtime trees mounted above.
+        mount_bind(snapshot_path(&path)?, target(&path)?)?;
+    }
     let work_target = target(work)?;
     std::fs::create_dir_all(&work_target)?;
     mount(
@@ -391,6 +480,61 @@ fn minimal_root(
     std::fs::create_dir_all(target(cwd)?)?;
     rustix::process::chroot(root)?;
     std::env::set_current_dir("/")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn snapshot_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    expected: &boundary::SourceFile,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::{
+        io::{Read, Write},
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+        sync::atomic::Ordering,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW).bits() as i32)
+        .open(source)?;
+    let before = file.metadata()?;
+    if !before.is_file()
+        || before.len() > 1024 * 1024 * 1024
+        || (before.permissions().mode() & 0o111 != 0) != expected.executable
+    {
+        return Err(std::io::Error::other(
+            "unsupported snapshot file or executable mode changed",
+        ));
+    }
+    let mut input = (&file).take(before.len() + 1);
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        }
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+        output.write_all(&buffer[..count])?;
+    }
+    if input.limit() != 1 || format!("{:x}", hash.finalize()) != expected.sha256 {
+        return Err(std::io::Error::other("selected snapshot bytes differ"));
+    }
+    output.set_permissions(std::fs::Permissions::from_mode(if expected.executable {
+        0o755
+    } else {
+        0o644
+    }))?;
     Ok(())
 }
 
