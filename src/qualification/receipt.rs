@@ -275,15 +275,29 @@ fn capture(
 }
 
 fn validate_source_links(inventory: &Inventory) -> io::Result<()> {
-    for (name, file) in &inventory.files {
-        if let Some(link) = &file.link {
-            let (target, _) = super::seal::link_walk(name, Path::new(link))?;
-            if !inventory.files.contains_key(&target) {
-                return Err(invalid(
-                    "source symlink target requires an explicit selection in the same inventory",
-                ));
+    let mut checked = std::collections::BTreeSet::new();
+    for name in inventory.files.keys() {
+        let mut current = name.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        while !checked.contains(&current) {
+            if !seen.insert(current.clone()) {
+                return Err(invalid("cyclic source symlink"));
             }
+            let file = &inventory.files[&current];
+            let Some(link) = &file.link else { break };
+            let (target, _) = super::seal::link_walk(&current, Path::new(link))?;
+            let target_file = inventory.files.get(&target).ok_or_else(|| {
+                invalid(
+                    "source symlink target requires an explicit selection in the same inventory",
+                )
+            })?;
+            if file.sha256 != target_file.sha256 || file.executable != target_file.executable {
+                return Err(invalid("source symlink identity differs from its target"));
+            }
+            current = target;
         }
+        // Reuse completed chains, so long alias chains are not walked quadratically.
+        checked.extend(seen);
     }
     Ok(())
 }
@@ -1566,6 +1580,53 @@ pub(crate) fn verify_run_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_repair_source_link_chains_bind_terminal_identity_and_reject_cycles() {
+        let file = SourceFile {
+            sha256: "a".repeat(64),
+            executable: false,
+            link: None,
+        };
+        let inventory = Inventory {
+            schema_version: 1,
+            files: [
+                ("target".into(), file.clone()),
+                (
+                    "middle".into(),
+                    SourceFile {
+                        link: Some("target".into()),
+                        ..file.clone()
+                    },
+                ),
+                (
+                    "link".into(),
+                    SourceFile {
+                        link: Some("middle".into()),
+                        ..file.clone()
+                    },
+                ),
+            ]
+            .into(),
+        };
+        validate_source_links(&inventory).unwrap();
+        let mut accepted = Vec::new();
+        for change in ["digest", "mode", "cycle"] {
+            let mut altered = inventory.clone();
+            match change {
+                "digest" => altered.files.get_mut("link").unwrap().sha256 = "b".repeat(64),
+                "mode" => altered.files.get_mut("link").unwrap().executable = true,
+                _ => altered.files.get_mut("middle").unwrap().link = Some("link".into()),
+            }
+            if validate_source_links(&altered).is_ok() {
+                accepted.push(change);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "invalid link identities accepted: {accepted:?}"
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

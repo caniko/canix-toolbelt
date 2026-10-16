@@ -61,6 +61,14 @@ int main(int argc, char **argv) {
             return 95;
         }
         if (munmap((void *)mapping, size) || close(file) || unlink("mapping")) return 96;
+    } else if (!strcmp(argv[1], "blocked-output-limit")) {
+        sigset_t signals;
+        sigemptyset(&signals);
+        sigaddset(&signals, SIGXFSZ);
+        if (sigprocmask(SIG_BLOCK, &signals, NULL)) return 91;
+        if (lseek(STDOUT_FILENO, 512 * 1024 * 1024, SEEK_SET) < 0) return 92;
+        if (write(STDOUT_FILENO, "x", 1) != -1 || errno != EFBIG) return 93;
+        if (ftruncate(STDOUT_FILENO, 0) || lseek(STDOUT_FILENO, 0, SEEK_SET) < 0) return 94;
     } else if (!strcmp(argv[1], "thread-exec")) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, exec_thread, NULL)) return 91;

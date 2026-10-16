@@ -338,6 +338,9 @@ fn minimal_root(
 ) -> std::io::Result<()> {
     use rustix::mount::{MountFlags, mount, mount_bind, mount_bind_recursive};
     use std::io::Write;
+    // Only this single-threaded namespace init synthesizes private parents.
+    // Canonical creation modes must not change the producer's inherited umask.
+    let umask = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
     let root = &policy.sandbox;
     // ponytail: a private input snapshot is capped at 1 GiB/131072 inodes.
     // Larger selections need a separately qualified disk-snapshot engine.
@@ -346,7 +349,7 @@ fn minimal_root(
         root,
         "tmpfs",
         MountFlags::NOSUID | MountFlags::NODEV,
-        c"size=1g,nr_inodes=131072",
+        c"size=1g,nr_inodes=131072,mode=0755",
     )?;
     let target = |path: &std::path::Path| -> std::io::Result<std::path::PathBuf> {
         let path = path.strip_prefix("/").map_err(std::io::Error::other)?;
@@ -487,6 +490,7 @@ fn minimal_root(
     std::fs::create_dir_all(target(cwd)?)?;
     rustix::process::chroot(root)?;
     std::env::set_current_dir("/")?;
+    rustix::process::umask(umask);
     Ok(())
 }
 

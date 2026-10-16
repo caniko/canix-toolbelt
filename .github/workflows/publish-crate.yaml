@@ -125,12 +125,26 @@ jobs:
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
           # Ubuntu 24.04 mediates capabilities in newly created user namespaces.
-          # Permit only the Nix-store qualification launcher on this disposable runner;
+          # Permit the Nix-store launcher and builder on this disposable runner;
           # retain AppArmor and its global unprivileged-userns restriction.
           # https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/
           if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] &&
              [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
             cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+            nix_daemon="$(readlink -f "$(command -v nix-daemon)")"
+            case "$nix_daemon" in /nix/store/*/bin/*) ;; *) exit 1 ;; esac
+            # Nix's user namespace can hide host-root ownership. Bootstrap then correctly
+            # seals unshare into a memfd, which has no pathname attachment. Let that sealed
+            # launcher inherit userns admission from its trusted Nix builder instead.
+            sudo tee /etc/apparmor.d/canix-toolbelt-qualification-nix >/dev/null <<APPARMOR
+          profile canix-toolbelt-qualification-nix "$nix_daemon" flags=(unconfined) {
+            userns,
+          }
+          APPARMOR
+            sudo apparmor_parser --replace /etc/apparmor.d/canix-toolbelt-qualification-nix
+            sudo systemctl restart nix-daemon.service
+            nix_daemon_pid="$(systemctl show --property MainPID --value nix-daemon.service)"
+            sudo grep '^canix-toolbelt-qualification-nix ' "/proc/$nix_daemon_pid/attr/current"
             sudo tee /etc/apparmor.d/canix-toolbelt-qualification-unshare >/dev/null <<'APPARMOR'
           profile canix-toolbelt-qualification-unshare /nix/store/*/bin/unshare flags=(unconfined) {
             userns,

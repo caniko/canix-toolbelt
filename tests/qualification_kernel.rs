@@ -60,6 +60,7 @@ fn kernel_observation_covers_escape_flags_async_io_faults_and_thread_exec() {
         "clone3",
         "async-io",
         "mmap-quota",
+        "blocked-output-limit",
         "thread-exec",
         "syscalls",
     ];
@@ -88,7 +89,7 @@ fn kernel_observation_covers_escape_flags_async_io_faults_and_thread_exec() {
             },
             "{mode}: {stderr}"
         );
-        if mode == "mmap-quota" {
+        if matches!(mode, "mmap-quota" | "blocked-output-limit") {
             assert_eq!(receipt.status, q::RunStatus::Failed, "{mode}: {receipt:#?}");
             assert!(stderr.contains("producer encountered a work-tree quota failure"));
             assert!(q::verify_run(&directory, None).is_err());

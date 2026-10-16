@@ -30,18 +30,25 @@ one fail closed, and source archives reject extra directories not implied by
 inventoried files or link resolution. Select explicit files when empty siblings
 are not part of the source contract.
 On Unix, selected files with multiple hard links also fail closed, including
-symlink targets and links outside the selected tree. Inventory v1 and its tar
-export do not represent inode aliases; select independent source copies instead.
+symlink inodes, symlink targets and links outside the selected tree. Inventory v1
+and its tar export do not represent inode aliases; select independent source copies instead.
 Selected and structural source directories must have mode `0755` on Unix;
 inventory v1 cannot bind any other directory mode, and archive verification rejects
 noncanonical directory headers rather than silently normalizing their semantics.
+Regular archive files must use mode `0644` or `0755`; special or otherwise
+unrepresented permission bits cannot be hidden behind the executable flag.
+The redundant POSIX regular-file type bits emitted by Rust's tar encoder are allowed.
+Synthesized snapshot parents use canonical modes independently of the launcher's
+umask; the producer retains its originally inherited umask.
 Execution and portable run/seal verification require every symlink target to be
 explicitly selected in the same source inventory, so hashing a target cannot
 admit an unmounted dangling link.
+Link chains must terminate without cycles and every hop must agree with the
+terminal file's digest and executable flag.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
 The private supervisor observes kernel syscall results for the producer and its
-fork/clone descendants. `ENOSPC`, `EDQUOT`, and allocation/file-limit signals are
+fork/clone descendants. `ENOSPC`, `EDQUOT`, `EFBIG`, and allocation/file-limit signals are
 latched even when a producer handles the failure, cleans up, and exits zero.
 Execution requires native x86_64/aarch64 Linux with `PTRACE_SEIZE`,
 `PTRACE_GET_SYSCALL_INFO`, and seccomp filtering available inside the namespace;

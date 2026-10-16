@@ -156,7 +156,10 @@ fn quota_error(pid: libc::pid_t) -> io::Result<bool> {
         _ => return Err(io::Error::other("missing or short syscall observation")),
     }
     let result = i64::from_ne_bytes(info[24..32].try_into().unwrap());
-    Ok(info[32] != 0 && [-i64::from(libc::ENOSPC), -i64::from(libc::EDQUOT)].contains(&result))
+    Ok(info[32] != 0
+        && [libc::ENOSPC, libc::EDQUOT, libc::EFBIG]
+            .iter()
+            .any(|error| result == -i64::from(*error)))
 }
 
 #[allow(unsafe_code)]

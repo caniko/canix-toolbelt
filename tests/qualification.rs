@@ -74,8 +74,12 @@ fn finalization_rejects_unrepresented_directory_modes() {
         paths: vec!["tree".into()],
     };
     let expected = q::inventory(&spec).unwrap();
-    for mode in [0o700, 0o555, 0o775, 0o2755] {
+    for mode in [0o700, 0o555, 0o775] {
         fs::set_permissions(&tree, fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(
+            fs::metadata(&tree).unwrap().permissions().mode() & 0o7777,
+            mode
+        );
         let archive = out.path().join(format!("mode-{mode:o}.tar"));
         let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
         builder.append_dir_all("tree", &tree).unwrap();
@@ -93,6 +97,24 @@ fn finalization_rejects_unrepresented_directory_modes() {
     let archive = out.path().join("canonical.tar");
     assert_eq!(q::export_source(&spec, &archive).unwrap(), expected);
     q::verify_source_archive(&archive, &expected).unwrap();
+    // Nix filters setgid chmod. Feed that mode through the shared source/archive
+    // mode validator using a tar header instead of depending on that syscall.
+    let archive = out.path().join("setgid-directory.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Directory);
+    header.set_size(0);
+    header.set_mode(0o2755);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "tree", std::io::empty())
+        .unwrap();
+    builder
+        .append_path_with_name(tree.join("file"), "tree/file")
+        .unwrap();
+    builder.finish().unwrap();
+    drop(builder);
+    assert!(q::verify_source_archive(&archive, &expected).is_err());
 }
 
 #[test]
@@ -265,6 +287,104 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
             )
         });
     (root, receipt)
+}
+
+#[test]
+fn merge_repair_archive_regular_files_require_canonical_modes() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("source"), b"source").unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["source".into()],
+    };
+    let mut inventory = q::inventory(&spec).unwrap();
+    let mut admitted = Vec::new();
+    for mode in [
+        0o4755, 0o2755, 0o1755, 0o777, 0o700, 0o640, 0o4644, 0o666, 0, 0o755, 0o644, 0o104755,
+        0o40644, 0o100644, 0o100755,
+    ] {
+        inventory.files.get_mut("source").unwrap().executable = mode & 0o111 != 0;
+        let archive = root.path().join(format!("mode-{mode:o}.tar"));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(6);
+        header.set_mode(mode);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "source", &b"source"[..])
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        let accepted = q::verify_source_archive(&archive, &inventory).is_ok();
+        if accepted != matches!(mode, 0o644 | 0o755 | 0o100644 | 0o100755) {
+            admitted.push(mode);
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "incorrectly admitted/rejected modes: {admitted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn merge_repair_hard_linked_symlink_inodes_are_not_representable() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("target"), b"target").unwrap();
+    std::os::unix::fs::symlink("target", root.path().join("link")).unwrap();
+    fs::hard_link(root.path().join("link"), root.path().join("alias")).unwrap();
+    assert_eq!(fs::metadata(root.path().join("target")).unwrap().nlink(), 1);
+    assert_eq!(
+        fs::symlink_metadata(root.path().join("link"))
+            .unwrap()
+            .nlink(),
+        2
+    );
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["target".into(), "link".into(), "alias".into()],
+    };
+    let archive = root.path().join("source.tar");
+    let inventoried = q::inventory(&spec).is_ok();
+    let exported = q::export_source(&spec, &archive).is_ok();
+    assert!(
+        !inventoried && !exported,
+        "inventory={inventoried}, export={exported}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn merge_repair_snapshot_parent_modes_do_not_inherit_launcher_umask() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let unshare = request.containment.as_ref().unwrap().unshare.clone();
+    let launcher = root.path().join("umask-launcher");
+    request.containment.as_mut().unwrap().unshare = launcher.clone();
+    let mut failures = Vec::new();
+    for mask in [0o022, 0o077, 0o777] {
+        fs::write(
+            &launcher,
+            format!("#!/bin/sh\numask {mask:04o}\nexec {unshare:?} \"$@\"\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        request.command[2] = format!(
+            "set -eu; test \"$(stat -c %a .)\" = 755; test \"$(stat -c %a ..)\" = 755; test \"$(stat -c %a /.qualification-boundary.json)\" = 644; test \"$(umask)\" = {mask:04o}; cat source"
+        );
+        let run = root.path().join(format!("mask-{mask:o}"));
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        if receipt.status != q::RunStatus::Passed {
+            failures.push((mask, fs::read_to_string(run.join("stderr.log")).unwrap()));
+        } else {
+            q::verify_run(&run, None).unwrap();
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "umask-dependent execution: {failures:?}"
+    );
 }
 
 #[cfg(target_os = "linux")]

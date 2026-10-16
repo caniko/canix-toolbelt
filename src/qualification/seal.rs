@@ -429,7 +429,7 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
         let executable = entry.header().mode()? & 0o111 != 0;
         add_parent_directories(&name, &mut directories)?;
         if kind.is_dir() {
-            if name != "." && entry.header().mode()? & 0o7777 != 0o755 {
+            if name != "." && !super::canonical_directory_mode(entry.header().mode()?) {
                 return Err(invalid(
                     "source inventory v1 requires archive directory mode 0755",
                 ));
@@ -446,6 +446,13 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
             links.insert(name.clone(), link.clone());
             Some(path_text(&link)?)
         } else if kind.is_file() {
+            // Rust tar includes the redundant POSIX regular-file type bits.
+            // Neither encoding may carry unrepresented permission bits.
+            if !matches!(entry.header().mode()?, 0o644 | 0o755 | 0o100644 | 0o100755) {
+                return Err(invalid(
+                    "source inventory v1 requires archive file mode 0644 or 0755",
+                ));
+            }
             let mut buffer = [0; 65536];
             loop {
                 let n = entry.read(&mut buffer)?;

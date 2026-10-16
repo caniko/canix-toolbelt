@@ -331,7 +331,7 @@ fn collect(
         use std::os::unix::fs::MetadataExt;
         // Inventory v1 and its tar export cannot preserve inode aliases, even
         // when the other link lies outside the selected paths or source root.
-        if fs::metadata(&resolved)?.nlink() != 1 {
+        if metadata.nlink() != 1 || fs::metadata(&resolved)?.nlink() != 1 {
             return Err(invalid(
                 "source hard links cannot be represented by inventory v1",
             ));
@@ -369,6 +369,10 @@ fn collect(
     Ok(())
 }
 
+pub(super) fn canonical_directory_mode(mode: u32) -> bool {
+    mode & 0o7777 == 0o755
+}
+
 pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() {
@@ -379,7 +383,7 @@ pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o7777 != 0o755 {
+        if !canonical_directory_mode(metadata.permissions().mode()) {
             return Err(invalid("source inventory v1 requires directory mode 0755"));
         }
     }
