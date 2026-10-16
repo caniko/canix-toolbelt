@@ -363,9 +363,9 @@ pub fn normalize_roborev_local(
         .get("structured_output")
         .ok_or_else(|| Error("canonical review output missing".into()))?;
     if document["schema_version"].as_u64() != Some(2)
-        || !document["summary"]
+        || document["summary"]
             .as_str()
-            .is_some_and(|s| !s.trim().is_empty())
+            .is_none_or(|s| s.trim().is_empty())
         || !matches!(document["verdict"].as_str(), Some("pass" | "fail"))
     {
         return Err(Error("malformed or legacy review content".into()));

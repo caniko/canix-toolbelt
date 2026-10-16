@@ -784,9 +784,7 @@ pub fn cycle(
                 || !message_id(&pending["body"]["id"])
                 || pending["body"]["delivery"] != "steer"
                 || !message_id(&pending["physicalMessageID"])
-                || !pending["preparedAt"]
-                    .as_str()
-                    .is_some_and(|at| !at.is_empty()))
+                || pending["preparedAt"].as_str().is_none_or(str::is_empty))
         {
             return Err(invalid("malformed retained pending compaction"));
         }
