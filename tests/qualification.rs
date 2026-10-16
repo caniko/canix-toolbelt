@@ -3341,7 +3341,7 @@ fn wall_clock_start_includes_initial_evidence_capture() {
 fn cancellation_during_log_finalization_never_commits_passed_evidence() {
     let (root, _) = run_fixture("true", 5);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    request.command[2] = "truncate -s 512M /proc/self/fd/1".into();
+    request.command[2] = "head -c 67108864 /dev/zero".into();
     request.timeout_seconds = 30;
     let run = root.path().join("final-cancel");
     let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -3350,11 +3350,16 @@ fn cancellation_during_log_finalization_never_commits_passed_evidence() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         // Native progress is published only after final composition capture.
         // Do not guess that capture finished after an arbitrary sleep on a
-        // loaded runner; cancel while the bounded sparse log is being hashed.
-        while q::read_json::<serde_json::Value>(&run.join("finalizing.json")).is_err() {
+        // loaded runner; cancel while the bounded stream log is being published.
+        // stdout is a socket, so produce bytes instead of reopening /proc/fd.
+        let finalizing = loop {
+            if let Ok(progress) = q::read_json::<serde_json::Value>(&run.join("finalizing.json")) {
+                break progress;
+            }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        };
+        assert_eq!(finalizing["status"], "passed", "{finalizing:#?}");
         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         task.join().unwrap()
     });
@@ -3362,7 +3367,12 @@ fn cancellation_during_log_finalization_never_commits_passed_evidence() {
         receipt.after.is_some(),
         "cancelled before final capture completed"
     );
+    assert_eq!(receipt.execution_exit, Some(0), "{receipt:#?}");
     assert_eq!(receipt.status, q::RunStatus::Cancelled);
+    assert_eq!(
+        fs::metadata(run.join("stdout.log")).unwrap().len(),
+        67108864
+    );
     assert!(q::verify_run(&run, None).is_err());
 }
 
