@@ -18,6 +18,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Use Bash for the portable program-path fixture's required version probe and
+  require successful fixture execution before checking tampered evidence paths.
 - Exercise finalization cancellation with bounded socket-compatible output and
   require successful native completion before the regression requests cancellation.
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
