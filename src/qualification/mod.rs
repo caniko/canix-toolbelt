@@ -160,7 +160,16 @@ pub(crate) fn sha256_file_checked(
     check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<String> {
     check()?;
-    let file = regular_file(path)?;
+    sha256_open_file_checked(regular_file(path)?, check)
+}
+
+fn sha256_open_file_checked(
+    file: File,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    use std::io::Seek;
+    let mut file = file;
+    file.rewind()?;
     let before = file.metadata()?;
     let bound = before
         .len()
@@ -413,10 +422,63 @@ pub(crate) fn inventory_checked(
     for directory in seal::source_directories(&files)? {
         canonical_source_directory(&root.join(directory))?;
     }
-    Ok(Inventory {
+    let inventory = Inventory {
         schema_version: 1,
         files,
-    })
+    };
+    validate_inventory_selection(spec, &inventory)?;
+    Ok(inventory)
+}
+
+// Shared lexical admission: portable receipts cannot consult the producer host.
+fn validate_inventory_selection(spec: &InventorySpec, inventory: &Inventory) -> io::Result<()> {
+    if spec.paths.is_empty() {
+        return Err(invalid("source selection is empty"));
+    }
+    let selections = spec
+        .paths
+        .iter()
+        .map(|path| {
+            relative(path)?;
+            Ok(path
+                .components()
+                .filter(|part| *part != Component::CurDir)
+                .collect::<PathBuf>())
+        })
+        .collect::<io::Result<std::collections::BTreeSet<_>>>()?;
+    let files = inventory
+        .files
+        .keys()
+        .map(|file| {
+            let path = Path::new(file);
+            relative(path)?;
+            if path_text(path)? != *file
+                || path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
+            {
+                return Err(invalid("source inventory paths must be canonical"));
+            }
+            Ok(path.to_path_buf())
+        })
+        .collect::<io::Result<std::collections::BTreeSet<_>>>()?;
+    for path in &selections {
+        if !files
+            .range(path.clone()..)
+            .next()
+            .is_some_and(|file| file.starts_with(path))
+        {
+            return Err(invalid("source selection is absent from its inventory"));
+        }
+    }
+    for file in files {
+        if !file.ancestors().any(|parent| selections.contains(parent)) {
+            return Err(invalid(
+                "source inventory entry is outside the retained selection",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Select Git-tracked and unignored untracked files using NUL-delimited names.

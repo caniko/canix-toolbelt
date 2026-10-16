@@ -356,6 +356,231 @@ fn merge_repair_hard_linked_symlink_inodes_are_not_representable() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn successor_portable_source_selections_must_cover_the_retained_inventory() {
+    let (root, _) = run_fixture("true", 30);
+    fs::create_dir(root.path().join("sub")).unwrap();
+    fs::set_permissions(root.path().join("sub"), fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("../source", root.path().join("sub/link")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request
+        .sources
+        .get_mut("producer")
+        .unwrap()
+        .paths
+        .push("sub".into());
+    let run = root.path().join("selected-run");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    let request: q::RunRequest = q::read_json(&run.join("request.json")).unwrap();
+    let boundary: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    let handoff = root.path().join("handoff");
+    q::seal(
+        &q::SealRequest {
+            composition: receipt.composition.clone(),
+            gates: [("build".into(), run.clone())].into(),
+            expected_receipts: [(
+                "build".into(),
+                q::sha256_file(&run.join("receipt.json")).unwrap(),
+            )]
+            .into(),
+            artifacts: Default::default(),
+        },
+        &handoff,
+    )
+    .unwrap();
+    let original_seal = fs::read(handoff.join("seal.json")).unwrap();
+    let mut admitted = Vec::new();
+    for (paths, expected) in [
+        (vec![], false),
+        (vec!["unrelated"], false),
+        (vec!["../source"], false),
+        (vec!["source", "absent"], false),
+        (vec!["source", "./sub/link"], false),
+        (vec!["source", "./sub"], true),
+    ] {
+        let mut request = request.clone();
+        request.sources.get_mut("producer").unwrap().paths = paths.iter().map(Into::into).collect();
+        let mut boundary = boundary.clone();
+        let mounts = boundary["snapshot_mounts"].as_array_mut().unwrap();
+        mounts.retain(|path| {
+            ![root.path().join("source"), root.path().join("sub")]
+                .iter()
+                .any(|selected| path.as_str() == selected.to_str())
+        });
+        mounts.extend(
+            paths
+                .iter()
+                .map(|path| serde_json::json!(root.path().join(path))),
+        );
+        fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+        fs::write(run.join("boundary.json"), q::json_bytes(&boundary).unwrap()).unwrap();
+        let mut changed = receipt.clone();
+        changed.request_sha256 = q::sha256_file(&run.join("request.json")).unwrap();
+        changed.boundary_sha256 = q::sha256_file(&run.join("boundary.json")).unwrap();
+        fs::write(run.join("receipt.json"), q::json_bytes(&changed).unwrap()).unwrap();
+        let required: q::ArtifactIndex = [(
+            "build".into(),
+            q::sha256_file(&run.join("receipt.json")).unwrap(),
+        )]
+        .into();
+        let mut seal: q::Seal = serde_json::from_slice(&original_seal).unwrap();
+        seal.gates = required.clone();
+        for file in ["request.json", "boundary.json", "receipt.json"] {
+            let path = format!("gates/build/{file}");
+            fs::copy(run.join(file), handoff.join(&path)).unwrap();
+            seal.artifacts
+                .insert(path, q::sha256_file(&run.join(file)).unwrap());
+        }
+        fs::write(handoff.join("seal.json"), q::json_bytes(&seal).unwrap()).unwrap();
+        if q::verify_run(&run, None).is_ok() != expected
+            || q::verify_seal(&handoff, &changed.composition, &required).is_ok() != expected
+        {
+            admitted.push(paths);
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "incorrect source selection verdicts: {admitted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn successor_source_snapshot_timestamps_match_canonical_archive_times() {
+    let (root, _) = run_fixture("true", 30);
+    fs::create_dir(root.path().join("selected")).unwrap();
+    fs::set_permissions(
+        root.path().join("selected"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    fs::write(root.path().join("selected/file"), b"selected").unwrap();
+    std::os::unix::fs::symlink("file", root.path().join("selected/link")).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request
+        .sources
+        .get_mut("producer")
+        .unwrap()
+        .paths
+        .push("selected".into());
+    let script = "set -eu; for path in . .. source selected selected/file selected/link; do stat -c '%X:%Y' \"$path\"; test \"$(stat -c '%X:%Y' \"$path\")\" = 0:0; done";
+    request.command[2] = script.into();
+    let tool = root.path().join("timestamp-tool");
+    fs::write(&tool, format!("#!/bin/sh\n{script}\n")).unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    request.tools.insert("timestamps".into(), tool);
+    let mut compositions = Vec::new();
+    for time in [1, 2] {
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(time);
+        fs::File::open(root.path().join("selected/file"))
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_accessed(timestamp)
+                    .set_modified(timestamp),
+            )
+            .unwrap();
+        let run = root.path().join(format!("timestamps-{time}"));
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        assert_eq!(
+            receipt.status,
+            q::RunStatus::Passed,
+            "{receipt:#?}; {}",
+            fs::read_to_string(run.join("stdout.log")).unwrap()
+        );
+        assert_eq!(receipt.tools["timestamps"].version, "0:0\n".repeat(6));
+        q::verify_run(&run, None).unwrap();
+        compositions.push(receipt.composition);
+    }
+    assert_eq!(compositions[0], compositions[1]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn successor_replaced_log_paths_cannot_become_qualified_output() {
+    let mut accepted = Vec::new();
+    for probe in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        request.command[2] = "printf native-output; printf native-error >&2".into();
+        if probe {
+            request.tools.insert("probe".into(), "/bin/sh".into());
+        }
+        let run = root.path().join("replaced-logs");
+        let unshare = request.containment.as_ref().unwrap().unshare.clone();
+        let mv = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("mv"))
+            .find(|path| path.is_file())
+            .unwrap();
+        let launcher = root.path().join("replace-logs-launcher");
+        let logs = if probe {
+            ["tool-probe.log", "tool-probe.log.stderr"]
+        } else {
+            ["stdout.log", "stderr.log"]
+        };
+        fs::write(&launcher, format!("#!/bin/sh\n{unshare:?} \"$@\"\nstatus=$?\nfor log in {:?} {:?}; do {mv:?} \"$log\" \"$log.original\"; printf forged > \"$log\"; done\nexit \"$status\"\n", run.join(logs[0]), run.join(logs[1]))).unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        request.containment.as_mut().unwrap().unshare = launcher;
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        if receipt.status == q::RunStatus::Passed || q::verify_run(&run, None).is_ok() {
+            accepted.push(probe);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "forged log paths accepted, probe={accepted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn successor_host_work_injection_cannot_cross_invocation_boundaries() {
+    let mut accepted = Vec::new();
+    for after_probe in [false, true] {
+        let (root, _) = run_fixture("true", 30);
+        let mut request: q::RunRequest =
+            q::read_json(&root.path().join("run/request.json")).unwrap();
+        let run = root.path().join("injected-work");
+        let tool = root.path().join("seed-work");
+        fs::write(
+            &tool,
+            b"#!/bin/sh\nprintf approved > \"$QUALIFICATION_WORK_DIR/config\"\nprintf version\n",
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        if after_probe {
+            request.tools.insert("seed".into(), tool);
+        }
+        request.command[2] =
+            "test \"$(cat \"$QUALIFICATION_WORK_DIR/config\")\" = injected && printf injected-main"
+                .into();
+        let unshare = request.containment.as_ref().unwrap().unshare.clone();
+        let launcher = root.path().join("inject-work-launcher");
+        let injection = format!("printf injected > {:?}\n", run.join("work/config"));
+        fs::write(
+            &launcher,
+            format!(
+                "#!/bin/sh\n{}\n{unshare:?} \"$@\"\nstatus=$?\n{}\nexit \"$status\"\n",
+                if after_probe { "" } else { &injection },
+                if after_probe { &injection } else { "" }
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        request.containment.as_mut().unwrap().unshare = launcher;
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        if receipt.status == q::RunStatus::Passed || q::verify_run(&run, None).is_ok() {
+            accepted.push(after_probe);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "injected work qualified, after_probe={accepted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn merge_repair_snapshot_parent_modes_do_not_inherit_launcher_umask() {
     let (root, _) = run_fixture("true", 30);
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();

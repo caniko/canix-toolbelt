@@ -216,6 +216,7 @@ pub fn watch(leader: libc::pid_t, cancelled: &AtomicBool) -> io::Result<Executio
                 ));
             }
             return Ok(ExecutionReport {
+                work_sha256: None,
                 exit_code: libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status)),
                 signal: libc::WIFSIGNALED(status).then(|| libc::WTERMSIG(status)),
                 descendants_drained: traced.is_empty(),

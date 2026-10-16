@@ -10,4 +10,6 @@ pub struct ExecutionReport {
     pub signal: Option<i32>,
     /// Kernel child accounting confirmed ECHILD after reaping the leader.
     pub descendants_drained: bool,
+    /// Identity of bytes, names, types and modes retained from the private work tree.
+    pub work_sha256: Option<String>,
 }

@@ -47,6 +47,10 @@ fn supervise() -> std::io::Result<i32> {
     let work = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing work tree"))?;
+    let work_sha256 = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| std::io::Error::other("missing prior work identity"))?;
     let boundary_path = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing boundary policy"))?;
@@ -95,6 +99,7 @@ fn supervise() -> std::io::Result<i32> {
         &policy,
         &boundary_bytes,
         std::path::Path::new(&work),
+        &work_sha256,
         &cwd,
         &cancelled,
     )?;
@@ -126,7 +131,7 @@ fn supervise() -> std::io::Result<i32> {
         // the producer inherit it or reach it through the supervisor's proc fds.
         .stdin(std::process::Stdio::null())
         .spawn()?;
-    let execution = syscall_watch::watch(
+    let mut execution = syscall_watch::watch(
         child.id().try_into().map_err(std::io::Error::other)?,
         &cancelled,
     )?;
@@ -144,9 +149,11 @@ fn supervise() -> std::io::Result<i32> {
     if drained {
         let retained =
             std::path::PathBuf::from(format!("/proc/self/fd/{}", retained_work.as_raw_fd()));
-        work_tree::copy_tree(std::path::Path::new(&work), &retained, &|| {
-            cancelled.load(Ordering::Relaxed)
-        })?;
+        execution.work_sha256 = Some(work_tree::copy_tree(
+            std::path::Path::new(&work),
+            &retained,
+            &|| cancelled.load(Ordering::Relaxed),
+        )?);
     }
     let mut bytes = serde_json::to_vec_pretty(&execution)?;
     bytes.push(b'\n');
@@ -158,7 +165,6 @@ fn supervise() -> std::io::Result<i32> {
         }
         remaining = &remaining[count..];
     }
-    rustix::fs::fsync(rustix::stdio::stdin())?;
     Ok(if drained {
         execution.exit_code.unwrap_or(125)
     } else {
@@ -333,6 +339,7 @@ fn minimal_root(
     policy: &boundary::Boundary,
     boundary_bytes: &[u8],
     work: &std::path::Path,
+    work_sha256: &str,
     cwd: &std::path::Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
@@ -423,6 +430,48 @@ fn minimal_root(
             }
         }
     }
+    // Finish all private filesystem creation before attaching public trees.
+    // Timestamp normalization must never traverse a host-backed mount.
+    let work_target = target(work)?;
+    std::fs::create_dir_all(&work_target)?;
+    mount(
+        "tmpfs",
+        &work_target,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        c"size=256m,nr_inodes=16384",
+    )?;
+    if work_sha256 == "-" {
+        // The first invocation starts fresh; host-side pre-launch injection is
+        // never admitted as an initial producer input.
+        std::fs::set_permissions(
+            &work_target,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )?;
+        for name in ["home", "cargo-home"] {
+            std::fs::create_dir(work_target.join(name))?;
+        }
+    } else {
+        let restored = work_tree::copy_tree(work, &work_target, &|| {
+            cancelled.load(std::sync::atomic::Ordering::Relaxed)
+        })?;
+        if restored != work_sha256 {
+            return Err(std::io::Error::other(
+                "retained work differs from the preceding private execution",
+            ));
+        }
+    }
+    let config = root.join(".qualification-boundary.json");
+    // Copy admitted bytes, never bind the externally writable host policy inode.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&config)?
+        .write_all(boundary_bytes)?;
+    let proc = root.join("proc");
+    std::fs::create_dir(&proc)?;
+    std::fs::create_dir_all(target(cwd)?)?;
+    canonical_snapshot_times(root, &work_target, cancelled)?;
     let mut paths = policy.read_only_paths.clone();
     paths.sort_by_key(|path| path.components().count());
     paths.dedup();
@@ -463,34 +512,48 @@ fn minimal_root(
         // beneath the platform-owned runtime trees mounted above.
         mount_bind(snapshot_path(&path)?, target(&path)?)?;
     }
-    let work_target = target(work)?;
-    std::fs::create_dir_all(&work_target)?;
-    mount(
-        "tmpfs",
-        &work_target,
-        "tmpfs",
-        MountFlags::NOSUID | MountFlags::NODEV,
-        c"size=256m,nr_inodes=16384",
-    )?;
-    work_tree::copy_tree(work, &work_target, &|| {
-        cancelled.load(std::sync::atomic::Ordering::Relaxed)
-    })?;
-    let config = root.join(".qualification-boundary.json");
-    // Copy the admitted snapshot into our private tmpfs, not a bind of the
-    // externally writable host inode. Non-dumpable PID 1 owns the only view;
-    // read_only_host protects it before the final exec adapter reads it again.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&config)?
-        .write_all(boundary_bytes)?;
-    let proc = root.join("proc");
-    std::fs::create_dir(&proc)?;
     mount_bind_recursive("/proc", &proc)?;
-    std::fs::create_dir_all(target(cwd)?)?;
     rustix::process::chroot(root)?;
     std::env::set_current_dir("/")?;
     rustix::process::umask(umask);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_snapshot_times(
+    root: &std::path::Path,
+    work: &std::path::Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        }
+        if path == work {
+            continue;
+        }
+        if std::fs::symlink_metadata(&path)?.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+        }
+        rustix::fs::utimensat(
+            rustix::fs::CWD,
+            &path,
+            &rustix::fs::Timestamps {
+                last_access: rustix::fs::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+                last_modification: rustix::fs::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
+            },
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+    }
     Ok(())
 }
 

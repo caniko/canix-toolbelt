@@ -40,6 +40,9 @@ unrepresented permission bits cannot be hidden behind the executable flag.
 The redundant POSIX regular-file type bits emitted by Rust's tar encoder are allowed.
 Synthesized snapshot parents use canonical modes independently of the launcher's
 umask; the producer retains its originally inherited umask.
+Private copied files, symlinks, selected directories and synthesized parents
+use access and modification timestamp zero, matching source archives. This
+normalization completes before any public host tree is attached.
 Execution and portable run/seal verification require every symlink target to be
 explicitly selected in the same source inventory, so hashing a target cannot
 admit an unmounted dangling link.
@@ -72,7 +75,9 @@ identity again before applying the environment. Both version probes and the main
 producer use this policy identity. Retained `boundary.json` is mandatory in runs
 and seals; portable verification checks its digest, environment and exact snapshot
 file/directory/mount selections against the inventories, inputs and executable
-identities. Earlier schema-5 packets without these snapshot selections or the
+identities. Each retained source selection is nonempty, uses root-relative paths
+and covers exactly its inventory entries; unrelated or missing selections fail
+portable verification too. Earlier schema-5 packets without these snapshot selections or the
 policy identity remain historical, not qualifying evidence.
 Bootstrap runs before that private root exists. Mutable launcher/executor bytes
 are copied into anonymous executable files, sealed against writes and resizing,
@@ -109,7 +114,9 @@ version strings may not exceed 8 MiB. The probe that exceeds that aggregate budg
 is retained as failed evidence (at most one additional 2 MiB stdout/stderr pair);
 no later probes or main command run. Portable verification enforces the same
 count and aggregate-version limits. Reaching the main-stream limit is
-non-acceptance even if a shell masks a failed child. Evidence JSON is limited to
+non-acceptance even if a shell masks a failed child. Main and probe log capture
+retains the original opened descriptors; substituted public log paths cannot
+become the selected producer output. Evidence JSON is limited to
 64 MiB. Receipt publication
 checks cancellation and deadlines during serialization, between writes and
 after durable sync, then atomically exposes the completed receipt. Interrupted
@@ -140,7 +147,14 @@ main command. Restrictive modes are restored after copying descendants. Retentio
 and startup restoration run under privileged PID 1 before producer capabilities
 are dropped, so mode-`000` files and nested directories remain copyable; their
 original modes are preserved for the next producer to inspect and change.
-Retention rejects multiply linked work files instead of silently changing inode-alias
+The first invocation starts with a fresh private work tree rather than trusting
+pre-launch host files. Every later restoration must match the preceding private
+tree's SHA-256 over names, types, modes, link text and file bytes. PID 1 supplies
+that identity over a bounded private Unix socket; the caller does not select it
+from the writable retained report. Replaced reports cannot redirect restoration.
+Portable acceptance requires the final native report's work identity; older
+schema-5 packets missing it remain historical evidence.
+Retention rejects multiply linked work files and symlink inodes instead of silently changing inode-alias
 semantics between commands. Startup restoration observes cancellation; cleanup
 also kills and reaps a launcher that exceeds the graceful five-second budget.
 Both Cargo-metadata CLI commands use the same bounded regular-file reader as

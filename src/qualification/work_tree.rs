@@ -1,8 +1,12 @@
 //! Bounded retention for the private tmpfs work tree, after producer drainage.
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{self, Read, Write},
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::Path,
 };
 
@@ -13,7 +17,7 @@ pub fn copy_tree(
     source: &Path,
     destination: &Path,
     cancelled: &impl Fn() -> bool,
-) -> io::Result<()> {
+) -> io::Result<String> {
     fs::create_dir_all(destination)?;
     // Each probe/command starts from the preceding retained tree. Replacing its
     // children preserves deletions and type changes instead of resurrecting
@@ -52,10 +56,35 @@ pub fn copy_tree(
     let mut entries = 0;
     let mut bytes = 0u64;
     let mut directories = Vec::new();
+    let root = source;
+    let mut hash = Sha256::new();
+    hash.update(b"qualification-work-v1\0");
     while let Some((source, destination)) = pending.pop() {
         fs::create_dir_all(&destination)?;
-        directories.push((destination.clone(), fs::metadata(&source)?.permissions()));
-        for entry in fs::read_dir(source)? {
+        let permissions = fs::metadata(&source)?.permissions();
+        hash.update(b"d");
+        digest_part(
+            &mut hash,
+            source
+                .strip_prefix(root)
+                .map_err(io::Error::other)?
+                .as_os_str()
+                .as_bytes(),
+        );
+        hash.update((permissions.mode() & 0o7777).to_le_bytes());
+        directories.push((destination.clone(), permissions));
+        let mut children = Vec::new();
+        for entry in fs::read_dir(&source)? {
+            if cancelled() {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            if children.len() >= MAX_ENTRIES - entries {
+                return Err(io::Error::other("work retention inode budget exceeded"));
+            }
+            children.push(entry?);
+        }
+        children.sort_by_key(|entry| entry.file_name());
+        for entry in children {
             if cancelled() {
                 return Err(io::Error::from(io::ErrorKind::Interrupted));
             }
@@ -63,13 +92,29 @@ pub fn copy_tree(
             if entries > MAX_ENTRIES {
                 return Err(io::Error::other("work retention inode budget exceeded"));
             }
-            let entry = entry?;
             let metadata = fs::symlink_metadata(entry.path())?;
             let target = destination.join(entry.file_name());
             if metadata.is_dir() {
                 pending.push((entry.path(), target));
             } else if metadata.file_type().is_symlink() {
-                std::os::unix::fs::symlink(fs::read_link(entry.path())?, target)?;
+                if metadata.nlink() != 1 {
+                    return Err(io::Error::other(
+                        "work retention rejects hard-linked symlinks",
+                    ));
+                }
+                let link = fs::read_link(entry.path())?;
+                hash.update(b"l");
+                digest_part(
+                    &mut hash,
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .map_err(io::Error::other)?
+                        .as_os_str()
+                        .as_bytes(),
+                );
+                digest_part(&mut hash, link.as_os_str().as_bytes());
+                std::os::unix::fs::symlink(link, target)?;
             } else if metadata.is_file() {
                 if metadata.nlink() != 1 {
                     return Err(io::Error::other(
@@ -80,13 +125,31 @@ pub fn copy_tree(
                     .checked_add(metadata.len())
                     .filter(|size| *size <= MAX_BYTES)
                     .ok_or_else(|| io::Error::other("work retention byte budget exceeded"))?;
-                let mut input = fs::File::open(entry.path())?.take(metadata.len());
+                let mut input = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(
+                        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+                    )
+                    .open(entry.path())?
+                    .take(metadata.len());
                 let mut output = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&target)?;
                 let mut buffer = [0u8; 65536];
                 let mut copied = 0;
+                hash.update(b"f");
+                digest_part(
+                    &mut hash,
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .map_err(io::Error::other)?
+                        .as_os_str()
+                        .as_bytes(),
+                );
+                hash.update((metadata.permissions().mode() & 0o7777).to_le_bytes());
+                hash.update(metadata.len().to_le_bytes());
                 loop {
                     if cancelled() {
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
@@ -96,6 +159,7 @@ pub fn copy_tree(
                         break;
                     }
                     output.write_all(&buffer[..count])?;
+                    hash.update(&buffer[..count]);
                     copied += count as u64;
                 }
                 if copied != metadata.len() {
@@ -114,7 +178,12 @@ pub fn copy_tree(
         }
         fs::set_permissions(directory, permissions)?;
     }
-    Ok(())
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn digest_part(hash: &mut Sha256, bytes: &[u8]) {
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
 }
 
 #[cfg(test)]
@@ -131,8 +200,11 @@ mod tests {
         fs::write(source.join("private/file"), b"artifact").unwrap();
         fs::set_permissions(&source, fs::Permissions::from_mode(0o710)).unwrap();
         fs::set_permissions(source.join("private"), fs::Permissions::from_mode(0o700)).unwrap();
-        copy_tree(&source, &retained, &|| false).unwrap();
-        copy_tree(&retained, &restored, &|| false).unwrap();
+        let selected = copy_tree(&source, &retained, &|| false).unwrap();
+        assert_eq!(
+            selected,
+            copy_tree(&retained, &restored, &|| false).unwrap()
+        );
         for destination in [&retained, &restored] {
             assert_eq!(
                 fs::metadata(destination).unwrap().permissions().mode() & 0o7777,

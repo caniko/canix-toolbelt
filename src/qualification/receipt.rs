@@ -538,7 +538,7 @@ fn contained_command(
     tools: &Bootstrap,
     executable: &Path,
     argument_zero: &std::ffi::OsStr,
-    work: &Path,
+    work: (&Path, Option<&str>),
     boundary: &Path,
     boundary_sha256: &str,
     max_log_bytes: u64,
@@ -563,7 +563,8 @@ fn contained_command(
             "--",
         ])
         .arg(tools.path("executor"))
-        .arg(work)
+        .arg(work.0)
+        .arg(work.1.unwrap_or("-"))
         .arg(boundary)
         .arg(boundary_sha256)
         .arg(max_log_bytes.to_string())
@@ -574,15 +575,52 @@ fn contained_command(
     command
 }
 
+fn report_channel() -> io::Result<(impl Read, std::process::Stdio)> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        // Unlike regular files or pipes, a socket cannot be reopened for writes
+        // through a same-UID process's /proc/.../fd pathname.
+        let (reader, writer) = UnixStream::pair()?;
+        reader.set_read_timeout(Some(Duration::from_secs(1)))?;
+        Ok((reader, std::process::Stdio::from(OwnedFd::from(writer))))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err::<(io::Empty, std::process::Stdio), _>(invalid("native reports require Linux"))
+}
+
+fn retain_report(reader: impl Read, path: &Path) -> io::Result<Option<ExecutionReport>> {
+    let mut bytes = Vec::new();
+    reader.take(4097).read_to_end(&mut bytes)?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if bytes.len() > 4096 {
+        return Err(invalid("native report exceeds 4 KiB"));
+    }
+    let report = serde_json::from_slice(&bytes).map_err(invalid_json)?;
+    // Parse the private channel, then publish those exact bytes for relocation.
+    // Host-side report replacement cannot select the next invocation's work.
+    use std::io::Write;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    output.write_all(&bytes)?;
+    output.sync_all()?;
+    Ok(Some(report))
+}
+
 fn tool_version(
     tool: (&str, &Path, &str),
     request: &RunRequest,
     cancelled: &AtomicBool,
     directory: &Path,
     deadline: Instant,
-    receipt: &Receipt,
+    evidence: (&Receipt, Option<&str>),
     bootstrap: &Bootstrap,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<(Vec<u8>, String)> {
+    let (receipt, work_sha256) = evidence;
     let (name, program, argument_zero) = tool;
     let name = format!("tool-{name}.log");
     let path = directory.join(&name);
@@ -591,30 +629,37 @@ fn tool_version(
         bootstrap,
         program,
         std::ffi::OsStr::new(argument_zero),
-        &directory.join("work"),
+        (&directory.join("work"), work_sha256),
         &directory.join("boundary.json"),
         &receipt.boundary_sha256,
         1024 * 1024,
     );
+    let (report_reader, report_writer) = report_channel()?;
+    let mut out = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    let mut err = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&stderr_path)?;
     command
         .arg("--version")
         .current_dir(&request.cwd)
         .env_clear()
         .env("LANG", "C")
-        .stdin(
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(directory.join(format!("{name}.execution.json")))?,
-        )
-        .stdout(File::create(&path)?)
-        .stderr(File::create(&stderr_path)?);
+        .stdin(report_writer)
+        .stdout(out.try_clone()?)
+        .stderr(err.try_clone()?);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
     let mut child = command.spawn()?;
+    drop(command);
     let result = wait(&mut child, deadline, cancelled);
     if result.is_err() {
         stop(&mut child)?;
@@ -622,9 +667,21 @@ fn tool_version(
     if result? != (RunStatus::Passed, Some(0)) {
         return Err(invalid("tool --version did not complete successfully"));
     }
+    let report = retain_report(
+        report_reader,
+        &directory.join(format!("{name}.execution.json")),
+    )?
+    .filter(|report| {
+        report.exit_code == Some(0) && report.signal.is_none() && report.descendants_drained
+    })
+    .ok_or_else(|| invalid("tool version lacks a successful native report"))?;
+    let work_sha256 = report
+        .work_sha256
+        .ok_or_else(|| invalid("tool version lacks a private work identity"))?;
     let mut output = Vec::new();
-    for stream in [&path, &stderr_path] {
-        let file = regular_file(stream)?;
+    for (file, stream) in [(&mut out, &path), (&mut err, &stderr_path)] {
+        use std::io::Seek;
+        file.rewind()?;
         let length = file.metadata()?.len();
         if length > 1024 * 1024 {
             return Err(invalid("tool version stream exceeds 1 MiB"));
@@ -634,8 +691,11 @@ fn tool_version(
         if output.len() - start != length as usize {
             return Err(invalid("tool version stream changed during bounded read"));
         }
+        if sha256_file(stream)? != format!("{:x}", Sha256::digest(&output[start..])) {
+            return Err(invalid("tool version log was replaced"));
+        }
     }
-    Ok(output)
+    Ok((output, work_sha256))
 }
 
 /// Execute once into a newly created evidence directory. Existing evidence is never reused.
@@ -963,27 +1023,38 @@ pub fn execute(
         error: None,
     };
     // Create logs even for cancellation or spawn failures, for a complete failed receipt.
-    let out = File::create(destination.join("stdout.log"))?;
-    let err = File::create(destination.join("stderr.log"))?;
+    let out = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(destination.join("stdout.log"))?;
+    let err = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(destination.join("stderr.log"))?;
+    let mut native_report = None;
     let outcome = (|| -> io::Result<(RunStatus, Option<i32>)> {
         if cancelled.load(Ordering::Relaxed) {
             return Ok((RunStatus::Cancelled, None));
         }
         let mut version_bytes = 0usize;
+        let mut work_sha256 = None;
         for (name, tool) in &selected_tools {
             relative(Path::new(name))?;
             if Path::new(name).components().count() != 1 {
                 return Err(invalid("tool labels must be single path components"));
             }
-            let output = tool_version(
+            let (output, retained_work) = tool_version(
                 (name, &tool.path, &request.tool_argument_zeros[name]),
                 request,
                 cancelled,
                 &destination,
                 started + Duration::from_secs(request.timeout_seconds),
-                &receipt,
+                (&receipt, work_sha256.as_deref()),
                 &bootstrap,
             )?;
+            work_sha256 = Some(retained_work);
             version_bytes = version_bytes.saturating_add(output.len());
             if version_bytes > MAX_TOOL_VERSION_BYTES {
                 return Err(invalid("aggregate tool version evidence exceeds 8 MiB"));
@@ -1008,30 +1079,27 @@ pub fn execute(
                     .as_deref()
                     .unwrap_or(&request.command[0]),
             ),
-            &work,
+            (&work, work_sha256.as_deref()),
             &destination.join("boundary.json"),
             &receipt.boundary_sha256,
             super::boundary::MAX_LOG_BYTES,
         );
+        let (report_reader, report_writer) = report_channel()?;
         command
             .args(&request.command[1..])
             .current_dir(&cwd)
             .env_clear()
             .env("LANG", "C")
-            .stdin(
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(destination.join("execution.json"))?,
-            )
-            .stdout(out)
-            .stderr(err);
+            .stdin(report_writer)
+            .stdout(out.try_clone()?)
+            .stderr(err.try_clone()?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
         let mut child = command.spawn()?;
+        drop(command);
         let outcome = wait(
             &mut child,
             started + Duration::from_secs(request.timeout_seconds),
@@ -1040,7 +1108,9 @@ pub fn execute(
         if outcome.is_err() {
             stop(&mut child)?;
         }
-        outcome
+        let outcome = outcome?;
+        native_report = retain_report(report_reader, &destination.join("execution.json"))?;
+        Ok(outcome)
     })();
     let outcome = match outcome {
         Err(error) if error.kind() == io::ErrorKind::TimedOut => return Err(error),
@@ -1060,8 +1130,8 @@ pub fn execute(
         }
     }
     let execution_path = destination.join("execution.json");
-    if execution_path.metadata().is_ok_and(|meta| meta.len() != 0) {
-        let report: ExecutionReport = read_json(&execution_path)?;
+    let native_report_sha256 = native_report.as_ref().map(fingerprint).transpose()?;
+    if let Some(report) = native_report {
         receipt.execution_exit = report.exit_code;
         receipt.execution_signal = report.signal;
         if receipt.status == RunStatus::Passed
@@ -1082,8 +1152,8 @@ pub fn execute(
     {
         receipt.status = RunStatus::TimedOut;
     }
-    if ["stdout.log", "stderr.log"].into_iter().any(|name| {
-        fs::metadata(destination.join(name))
+    if [&out, &err].into_iter().any(|file| {
+        file.metadata()
             .is_ok_and(|metadata| metadata.len() >= super::boundary::MAX_LOG_BYTES)
     }) {
         receipt.status = RunStatus::Failed;
@@ -1158,13 +1228,26 @@ pub fn execute(
             }
         }
         if execution_path.exists() {
-            receipt.execution_report_sha256 =
-                Some(sha256_file_checked(&execution_path, &mut finalize)?);
+            let hash = sha256_file_checked(&execution_path, &mut finalize)?;
+            if native_report_sha256.as_ref() != Some(&hash) {
+                return Err(invalid(
+                    "retained native report differs from its private channel",
+                ));
+            }
+            receipt.execution_report_sha256 = Some(hash);
         }
-        receipt.stdout_sha256 =
-            sha256_file_checked(&destination.join("stdout.log"), &mut finalize)?;
-        receipt.stderr_sha256 =
-            sha256_file_checked(&destination.join("stderr.log"), &mut finalize)?;
+        receipt.stdout_sha256 = sha256_open_file_checked(out.try_clone()?, &mut finalize)?;
+        receipt.stderr_sha256 = sha256_open_file_checked(err.try_clone()?, &mut finalize)?;
+        for (name, expected) in [
+            ("stdout.log", &receipt.stdout_sha256),
+            ("stderr.log", &receipt.stderr_sha256),
+        ] {
+            if sha256_file_checked(&destination.join(name), &mut finalize)? != *expected {
+                return Err(invalid(
+                    "producer log path differs from its original descriptor",
+                ));
+            }
+        }
         finalize()?;
         Ok(())
     })();
@@ -1410,7 +1493,14 @@ pub(crate) fn verify_run_bound(
                 .ok_or_else(|| invalid("missing native execution report identity"))?,
         ),
     )?;
-    if report.exit_code != Some(0) || report.signal.is_some() || !report.descendants_drained {
+    if report.exit_code != Some(0)
+        || report.signal.is_some()
+        || !report.descendants_drained
+        || report
+            .work_sha256
+            .as_deref()
+            .is_none_or(|hash| !valid_digest(hash))
+    {
         return Err(invalid("native execution report did not confirm success"));
     }
     for (name, inventory) in &receipt.inventories {
@@ -1499,7 +1589,30 @@ pub(crate) fn verify_run_bound(
     let mut mounts = Vec::new();
     let mut directories = Vec::new();
     for (name, spec) in &request.sources {
+        if !spec.root.is_absolute()
+            || spec
+                .root
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        {
+            return Err(invalid(
+                "retained source root is not canonical and absolute",
+            ));
+        }
+        validate_inventory_selection(spec, &receipt.inventories[name])?;
         for path in &spec.paths {
+            let selected: PathBuf = path
+                .components()
+                .filter(|part| *part != Component::CurDir)
+                .collect();
+            if selected.ancestors().any(|parent| {
+                parent
+                    .to_str()
+                    .and_then(|key| receipt.inventories[name].files.get(key))
+                    .is_some_and(|entry| entry.link.is_some())
+            }) {
+                return Err(invalid("retained source mount traverses a symlink"));
+            }
             mounts.push(spec.root.join(path));
         }
         for directory in super::seal::source_directories(&receipt.inventories[name].files)? {
@@ -1681,7 +1794,7 @@ mod tests {
                 &bootstrap,
                 Path::new("/producer"),
                 std::ffi::OsStr::new("producer"),
-                root.path(),
+                (root.path(), None),
                 &root.path().join("boundary.json"),
                 &"a".repeat(64),
                 1,
