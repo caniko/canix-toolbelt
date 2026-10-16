@@ -111,6 +111,7 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
         fs::create_dir(directory.join("gates").join(name))?;
         for file in [
             "request.json",
+            "boundary.json",
             "receipt.json",
             "execution.json",
             "stdout.log",
@@ -176,6 +177,7 @@ pub fn verify_seal(
         gate_label(name)?;
         for file in [
             "request.json",
+            "boundary.json",
             "receipt.json",
             "execution.json",
             "stdout.log",

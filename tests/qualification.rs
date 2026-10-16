@@ -143,6 +143,35 @@ fn portable_source_links_reject_drive_relative_targets() {
     assert!(q::export_source(&spec, &archive).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn inventory_and_export_reject_hard_linked_source_files() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("source"), b"source").unwrap();
+    fs::hard_link(root.path().join("source"), root.path().join("alias")).unwrap();
+    std::os::unix::fs::symlink("source", root.path().join("link")).unwrap();
+    let archive = root.path().join("source.tar");
+    for paths in [vec!["source", "alias"], vec!["source"], vec!["link"]] {
+        let spec = InventorySpec {
+            root: root.path().into(),
+            paths: paths.into_iter().map(Into::into).collect(),
+        };
+        let error = q::inventory(&spec).unwrap_err();
+        assert!(error.to_string().contains("hard link"), "{error}");
+        assert!(q::export_source(&spec, &archive).is_err());
+        assert!(!archive.exists());
+    }
+    // A byte-identical independent copy is representable; an inode alias is not.
+    fs::remove_file(root.path().join("alias")).unwrap();
+    fs::copy(root.path().join("source"), root.path().join("alias")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["source".into(), "alias".into(), "link".into()],
+    };
+    let inventory = q::export_source(&spec, &archive).unwrap();
+    q::verify_source_archive(&archive, &inventory).unwrap();
+}
+
 #[cfg(target_os = "linux")]
 fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Receipt) {
     // The no-op seed provisions a retained request for the test below it. Cold
@@ -196,6 +225,189 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
             )
         });
     (root, receipt)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn private_work_tmpfs_is_writable_after_chroot() {
+    let (root, receipt) = run_fixture(
+        r#"set -eu
+        test "$(stat -f -c %T "$QUALIFICATION_WORK_DIR")" = tmpfs
+        for dir in "$QUALIFICATION_WORK_DIR" "$TMPDIR" "$HOME" "$CARGO_HOME" "$CARGO_TARGET_DIR"; do
+            mkdir -p "$dir"
+            printf writable > "$dir/probe"
+        done
+        if (printf changed > source) 2>/dev/null; then exit 91; fi"#,
+        30,
+    );
+    let run = root.path().join("run");
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    for name in ["probe", "home/probe", "cargo-home/probe", "target/probe"] {
+        assert_eq!(fs::read(run.join("work").join(name)).unwrap(), b"writable");
+    }
+    assert_eq!(fs::read(root.path().join("source")).unwrap(), b"original");
+    q::verify_run(&run, Some(&receipt.composition)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn portable_receipts_and_seals_reject_malformed_input_digests() {
+    let (root, receipt) = run_fixture("true", 30);
+    let run = root.path().join("run");
+    let handoff = root.path().join("handoff");
+    q::seal(
+        &q::SealRequest {
+            composition: receipt.composition.clone(),
+            gates: [("build".into(), run.clone())].into(),
+            expected_receipts: [(
+                "build".into(),
+                q::sha256_file(&run.join("receipt.json")).unwrap(),
+            )]
+            .into(),
+            artifacts: Default::default(),
+        },
+        &handoff,
+    )
+    .unwrap();
+    for malformed in [
+        String::new(),
+        "g".repeat(64),
+        "a".repeat(63),
+        "a".repeat(65),
+    ] {
+        let mut rewritten = receipt.clone();
+        rewritten
+            .composition
+            .inputs
+            .insert("lock".into(), malformed);
+        rewritten.after = Some(rewritten.composition.clone());
+        let bytes = q::json_bytes(&rewritten).unwrap();
+        fs::write(run.join("receipt.json"), &bytes).unwrap();
+        fs::write(handoff.join("gates/build/receipt.json"), &bytes).unwrap();
+        let hash = q::sha256_file(&run.join("receipt.json")).unwrap();
+        let required: q::ArtifactIndex = [("build".into(), hash.clone())].into();
+        let mut seal: q::Seal = q::read_json(&handoff.join("seal.json")).unwrap();
+        seal.composition = rewritten.composition.clone();
+        seal.gates = required.clone();
+        seal.artifacts
+            .insert("gates/build/receipt.json".into(), hash);
+        fs::write(handoff.join("seal.json"), q::json_bytes(&seal).unwrap()).unwrap();
+        assert!(q::verify_run(&run, Some(&rewritten.composition)).is_err());
+        assert!(q::verify_seal(&handoff, &rewritten.composition, &required).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn boundary_policy_substitution_during_launch_cannot_pass() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let unshare = request.containment.as_ref().unwrap().unshare.clone();
+    let launcher = root.path().join("substitute-policy");
+    request.containment.as_mut().unwrap().unshare = launcher.clone();
+    request
+        .environment
+        .insert("BOUNDARY_SENTINEL".into(), "expected".into());
+    request.command[2] =
+        "printf '%s' \"$BOUNDARY_SENTINEL\"; test \"$BOUNDARY_SENTINEL\" = tampered".into();
+    for (label, replace) in [
+        ("in-place", "cat \"$policy.swap\" > \"$policy\""),
+        ("replacement", "mv \"$policy.swap\" \"$policy\""),
+    ] {
+        // Mutate exactly between host serialization and PID 1 opening the file.
+        // The launcher runs outside containment, like another same-UID writer.
+        fs::write(
+            &launcher,
+            format!(r##"#!/bin/sh
+set -eu
+for policy in "$@"; do
+    case "$policy" in
+        */boundary.json)
+            sed 's/"BOUNDARY_SENTINEL": "expected"/"BOUNDARY_SENTINEL": "tampered"/' "$policy" > "$policy.swap"
+            {replace}
+            break
+            ;;
+    esac
+done
+exec {unshare:?} "$@"
+"##),
+        )
+        .unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        let run = root.path().join(label);
+        let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+        assert_ne!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+        assert_ne!(fs::read(run.join("stdout.log")).unwrap(), b"tampered");
+        assert!(q::verify_run(&run, None).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn contained_boundary_snapshot_does_not_alias_the_host_policy_inode() {
+    let (root, _) = run_fixture("true", 30);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request
+        .environment
+        .insert("BOUNDARY_SENTINEL".into(), "expected".into());
+    request.command[2] = "printf ready; while test \"$(cat input)\" != release; do sleep 0.01; done; cat /.qualification-boundary.json".into();
+    let run = root.path().join("snapshot");
+    let (receipt, original) = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while fs::read(run.join("stdout.log")).unwrap_or_default() != b"ready"
+            && !task.is_finished()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(fs::read(run.join("stdout.log")).unwrap(), b"ready");
+        let path = run.join("boundary.json");
+        let original = fs::read(&path).unwrap();
+        let mut substituted: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        substituted["environment"]["BOUNDARY_SENTINEL"] = "tampered".into();
+        // Overwrite the same host inode after namespace admission, then release
+        // the producer through a separately selected input. Its private policy
+        // must still expose only the admitted bytes, not this host-side change.
+        fs::write(&path, q::json_bytes(&substituted).unwrap()).unwrap();
+        fs::write(root.path().join("input"), b"release").unwrap();
+        (task.join().unwrap(), original)
+    });
+    let mut expected = b"ready".to_vec();
+    expected.extend_from_slice(&original);
+    assert_eq!(fs::read(run.join("stdout.log")).unwrap(), expected);
+    assert_eq!(receipt.status, q::RunStatus::SourceChanged, "{receipt:#?}");
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn portable_receipts_bind_the_boundary_policy_and_its_environment() {
+    let (root, receipt) = run_fixture("true", 30);
+    let run = root.path().join("run");
+    let path = run.join("boundary.json");
+    assert_eq!(receipt.boundary_sha256, q::sha256_file(&path).unwrap());
+    let mut policy: serde_json::Value = q::read_json(&path).unwrap();
+    policy["environment"]["BOUNDARY_SENTINEL"] = "tampered".into();
+    fs::write(&path, q::json_bytes(&policy).unwrap()).unwrap();
+    assert!(q::verify_run(&run, None).is_err());
+    let mut rewritten = receipt;
+    rewritten.boundary_sha256 = q::sha256_file(&path).unwrap();
+    fs::write(run.join("receipt.json"), q::json_bytes(&rewritten).unwrap()).unwrap();
+    // Recomputing a digest must not excuse a policy/environment mismatch.
+    assert!(q::verify_run(&run, None).is_err());
+    policy["environment"] = serde_json::to_value(&rewritten.environment).unwrap();
+    fs::write(&path, q::json_bytes(&policy).unwrap()).unwrap();
+    rewritten.boundary_sha256 = q::sha256_file(&path).unwrap();
+    fs::write(run.join("receipt.json"), q::json_bytes(&rewritten).unwrap()).unwrap();
+    q::verify_run(&run, None).unwrap();
+    // Earlier schema-5 packets without policy custody are historical evidence,
+    // not a compatibility shortcut around the now-required boundary identity.
+    let mut missing = serde_json::to_value(&rewritten).unwrap();
+    missing.as_object_mut().unwrap().remove("boundarySha256");
+    fs::write(run.join("receipt.json"), q::json_bytes(&missing).unwrap()).unwrap();
+    assert!(q::verify_run(&run, None).is_err());
 }
 
 #[cfg(target_os = "linux")]
@@ -528,6 +740,7 @@ fn in_root_absolute_artifact_links_cannot_claim_portable_evidence() {
     for name in [
         "receipt.json",
         "request.json",
+        "boundary.json",
         "execution.json",
         "stdout.log",
         "stderr.log",
@@ -804,6 +1017,10 @@ fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     };
     let seal = q::seal(&request, &root.path().join("sealed")).unwrap();
     assert_eq!(seal.gates.len(), 1);
+    assert_eq!(
+        seal.artifacts["gates/required/boundary.json"],
+        receipt.boundary_sha256
+    );
     q::verify_seal(
         &root.path().join("sealed"),
         &request.composition,
@@ -1438,6 +1655,11 @@ fn transient_source_input_and_alias_writes_are_blocked_but_work_is_writable() {
     let (root, _) = run_fixture("true", 5);
     fs::hard_link(root.path().join("source"), root.path().join("alias")).unwrap();
     let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    let rejected = root.path().join("hard-linked-source");
+    let error = q::execute(&request, &rejected, &Default::default()).unwrap_err();
+    assert!(error.to_string().contains("hard link"), "{error}");
+    assert!(!rejected.exists(), "inode aliases must fail before launch");
+    fs::remove_file(root.path().join("alias")).unwrap();
     for (i, script) in [
         "printf temporary > source || exit 17; cat source; printf original > source",
         "printf temporary > input || exit 17; cat input; printf pinned > input",

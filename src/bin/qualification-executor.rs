@@ -10,6 +10,9 @@ mod boundary;
 #[path = "../qualification/execution.rs"]
 mod execution;
 #[cfg(target_os = "linux")]
+#[path = "../qualification/json.rs"]
+mod json;
+#[cfg(target_os = "linux")]
 #[path = "../qualification/syscall_watch.rs"]
 mod syscall_watch;
 #[cfg(target_os = "linux")]
@@ -47,7 +50,15 @@ fn supervise() -> std::io::Result<i32> {
     let boundary_path = args
         .next()
         .ok_or_else(|| std::io::Error::other("missing boundary policy"))?;
-    let policy: boundary::Boundary = serde_json::from_reader(std::fs::File::open(&boundary_path)?)?;
+    let boundary_sha256 = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| std::io::Error::other("missing boundary policy identity"))?;
+    let boundary_bytes = json::read_bound_bytes(
+        json::regular_file(std::path::Path::new(&boundary_path))?,
+        Some(&boundary_sha256),
+    )?;
+    let policy: boundary::Boundary = serde_json::from_slice(&boundary_bytes)?;
     let max_log_bytes = args
         .next()
         .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
@@ -68,12 +79,7 @@ fn supervise() -> std::io::Result<i32> {
     // mount handle, and it never follows work-tree symlinks during retention.
     use std::os::fd::AsRawFd;
     let retained_work = std::fs::File::open(&work)?;
-    minimal_root(
-        &policy,
-        std::path::Path::new(&boundary_path),
-        std::path::Path::new(&work),
-        &cwd,
-    )?;
+    minimal_root(&policy, &boundary_bytes, std::path::Path::new(&work), &cwd)?;
     read_only_host(std::path::Path::new(&work))?;
     // Re-enter the remounted tree; inherited cwd refers to the old mount.
     std::env::set_current_dir(cwd)?;
@@ -93,6 +99,7 @@ fn supervise() -> std::io::Result<i32> {
         .arg(executor)
         .arg("--producer-exec")
         .arg(max_log_bytes.to_string())
+        .arg(boundary_sha256)
         .arg(program)
         .arg(argument_zero)
         .args(args)
@@ -240,9 +247,9 @@ fn read_only_host(work: &std::path::Path) -> std::io::Result<()> {
         mount_remount(&mount, flags, "")
             .map_err(|e| std::io::Error::other(format!("protect {}: {e}", mount.display())))?;
     }
-    // The host caller creates this empty directory before launch, so no existing
-    // source/input hardlink aliases can be writable through it. Cross-mount link
-    // creation fails with EXDEV. Sources cannot be changed via alternate paths.
+    // minimal_root has already chrooted: `work` now names the private quota tmpfs,
+    // not the host-side retained directory. Re-enable writes on that actual mount
+    // after the blanket protection above. Cross-mount hard links fail with EXDEV.
     mount_bind(work, work).map_err(|e| std::io::Error::other(format!("bind work: {e}")))?;
     mount_remount(
         work,
@@ -264,6 +271,9 @@ fn producer_exec() -> std::io::Error {
     else {
         return std::io::Error::other("invalid producer output bound");
     };
+    let Some(boundary_sha256) = args.next().and_then(|value| value.into_string().ok()) else {
+        return std::io::Error::other("missing producer boundary identity");
+    };
     let Some(program) = args.next() else {
         return std::io::Error::other("missing producer executable");
     };
@@ -273,9 +283,10 @@ fn producer_exec() -> std::io::Error {
     if std::process::id() == 1 {
         return std::io::Error::other("producer exec cannot replace namespace init");
     }
-    let policy: boundary::Boundary = match std::fs::File::open("/.qualification-boundary.json")
-        .and_then(|file| serde_json::from_reader(file).map_err(std::io::Error::other))
-    {
+    let policy: boundary::Boundary = match json::read_bound_json(
+        std::path::Path::new("/.qualification-boundary.json"),
+        Some(&boundary_sha256),
+    ) {
         Ok(policy) => policy,
         Err(error) => return error,
     };
@@ -302,11 +313,12 @@ fn producer_exec() -> std::io::Error {
 #[cfg(target_os = "linux")]
 fn minimal_root(
     policy: &boundary::Boundary,
-    policy_path: &std::path::Path,
+    boundary_bytes: &[u8],
     work: &std::path::Path,
     cwd: &std::path::Path,
 ) -> std::io::Result<()> {
     use rustix::mount::{MountFlags, mount, mount_bind, mount_bind_recursive};
+    use std::io::Write;
     let root = &policy.sandbox;
     mount("tmpfs", root, "tmpfs", MountFlags::NOSUID, c"size=64m")?;
     let target = |path: &std::path::Path| -> std::io::Result<std::path::PathBuf> {
@@ -365,8 +377,14 @@ fn minimal_root(
     )?;
     work_tree::copy_tree(work, &work_target, &|| false)?;
     let config = root.join(".qualification-boundary.json");
-    std::fs::File::create(&config)?;
-    mount_bind(policy_path, &config)?;
+    // Copy the admitted snapshot into our private tmpfs, not a bind of the
+    // externally writable host inode. Non-dumpable PID 1 owns the only view;
+    // read_only_host protects it before the final exec adapter reads it again.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&config)?
+        .write_all(boundary_bytes)?;
     let proc = root.join("proc");
     std::fs::create_dir(&proc)?;
     mount_bind_recursive("/proc", &proc)?;

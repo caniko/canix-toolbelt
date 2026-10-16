@@ -122,6 +122,8 @@ pub struct Receipt {
     pub inventories: BTreeMap<String, Inventory>,
     /// Request-file SHA-256, binding argv, cwd, timeout and explicit environment.
     pub request_sha256: String,
+    /// SHA-256 of the exact boundary policy admitted by every contained execution.
+    pub boundary_sha256: String,
     /// stdout.log SHA-256.
     pub stdout_sha256: String,
     /// stderr.log SHA-256.
@@ -385,6 +387,7 @@ fn contained_command(
     argument_zero: &std::ffi::OsStr,
     work: &Path,
     boundary: &Path,
+    boundary_sha256: &str,
     max_log_bytes: u64,
 ) -> Command {
     let mut command = Command::new(&tools["unshare"].path);
@@ -404,6 +407,7 @@ fn contained_command(
         .arg(&tools["executor"].path)
         .arg(work)
         .arg(boundary)
+        .arg(boundary_sha256)
         .arg(max_log_bytes.to_string())
         .arg(&tools["setpriv"].path)
         .arg(executable)
@@ -429,6 +433,7 @@ fn tool_version(
         std::ffi::OsStr::new(argument_zero),
         &directory.join("work"),
         &directory.join("boundary.json"),
+        &receipt.boundary_sha256,
         1024 * 1024,
     );
     command
@@ -714,14 +719,15 @@ pub fn execute(
             "runtime mounts must be absolute paths below the host root",
         ));
     }
-    write_json(
-        &destination.join("boundary.json"),
-        &super::boundary::Boundary {
-            read_only_paths,
-            environment: environment.clone(),
-            sandbox,
-        },
-    )?;
+    let boundary = super::boundary::Boundary {
+        read_only_paths,
+        environment: environment.clone(),
+        sandbox,
+    };
+    // Select the bytes from trusted memory, never by re-hashing a writable path
+    // after publication. PID 1 must admit this identity before parsing or mounting.
+    let boundary_sha256 = fingerprint(&boundary)?;
+    write_json(&destination.join("boundary.json"), &boundary)?;
     write_json(&destination.join("request.json"), request)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
     let mut receipt = Receipt {
@@ -734,6 +740,7 @@ pub fn execute(
         after: None,
         inventories,
         request_sha256: sha256_file(&destination.join("request.json"))?,
+        boundary_sha256,
         stdout_sha256: String::new(),
         stderr_sha256: String::new(),
         tools: BTreeMap::new(),
@@ -789,6 +796,7 @@ pub fn execute(
             ),
             &work,
             &destination.join("boundary.json"),
+            &receipt.boundary_sha256,
             super::boundary::MAX_LOG_BYTES,
         );
         command
@@ -908,6 +916,14 @@ pub fn execute(
         }
     };
     let finalization = (|| -> io::Result<()> {
+        if sha256_file_checked(&destination.join("boundary.json"), &mut finalize)
+            .ok()
+            .as_ref()
+            != Some(&receipt.boundary_sha256)
+        {
+            receipt.status = RunStatus::SourceChanged;
+            receipt.error = Some("boundary policy changed during execution".into());
+        }
         for tool in receipt.tools.values() {
             if sha256_file_checked(&tool.path, &mut finalize).ok().as_ref() != Some(&tool.sha256) {
                 receipt.status = RunStatus::SourceChanged;
@@ -1103,6 +1119,7 @@ pub(crate) fn verify_run_bound(
     for name in [
         "receipt.json",
         "request.json",
+        "boundary.json",
         "execution.json",
         "stdout.log",
         "stderr.log",
@@ -1133,6 +1150,14 @@ pub(crate) fn verify_run_bound(
     let valid_digest =
         |hash: &str| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
     if receipt
+        .composition
+        .inputs
+        .values()
+        .any(|hash| !valid_digest(hash))
+    {
+        return Err(invalid("receipt input identity is not a SHA-256 digest"));
+    }
+    if receipt
         .executable
         .iter()
         .chain(receipt.containment.values())
@@ -1141,8 +1166,11 @@ pub(crate) fn verify_run_bound(
             .tools
             .values()
             .any(|tool| !valid_digest(&tool.sha256))
+        || !valid_digest(&receipt.boundary_sha256)
     {
-        return Err(invalid("receipt program identity is not a SHA-256 digest"));
+        return Err(invalid(
+            "receipt program or boundary identity is not a SHA-256 digest",
+        ));
     }
     let report_path = directory.join("execution.json");
     let report: ExecutionReport = read_bound_json(
@@ -1180,6 +1208,10 @@ pub(crate) fn verify_run_bound(
         &directory.join("request.json"),
         Some(&receipt.request_sha256),
     )?;
+    let boundary: super::boundary::Boundary = read_bound_json(
+        &directory.join("boundary.json"),
+        Some(&receipt.boundary_sha256),
+    )?;
     validate_runtime_selection(&request)?;
     if request.command.is_empty()
         || request.command[0].is_empty()
@@ -1191,6 +1223,7 @@ pub(crate) fn verify_run_bound(
         || request.sources.keys().ne(receipt.inventories.keys())
         || request.inputs.keys().ne(receipt.composition.inputs.keys())
         || request.environment != receipt.environment
+        || boundary.environment != receipt.environment
     {
         return Err(invalid("receipt requirements differ from retained request"));
     }

@@ -11,6 +11,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 mod boundary;
+mod json;
+pub(crate) use json::{invalid, invalid_json, read_bound_json, regular_file};
 mod receipt;
 pub use receipt::*;
 mod coverage;
@@ -159,31 +161,6 @@ pub struct Inventory {
     pub files: BTreeMap<String, SourceFile>,
 }
 
-pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
-}
-
-pub(crate) fn regular_file(path: &Path) -> io::Result<File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // Validate the opened descriptor, not a racy path stat. In particular,
-        // opening a FIFO must never wait for a writer before we can reject it.
-        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
-    }
-    #[cfg(not(unix))]
-    if !fs::metadata(path)?.is_file() {
-        return Err(invalid("not a regular file"));
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(invalid(format!("not a regular file: {}", path.display())));
-    }
-    Ok(file)
-}
-
 /// Hash an opened regular file incrementally. Devices and FIFOs are rejected.
 pub fn sha256_file(path: &Path) -> io::Result<String> {
     sha256_file_checked(path, &mut || Ok(()))
@@ -230,47 +207,9 @@ pub fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(crate) fn invalid_json(error: serde_json::Error) -> io::Error {
-    invalid(error.to_string())
-}
-
 /// Load at most 64 MiB of typed JSON from one opened regular-file descriptor.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
     read_bound_json(path, None)
-}
-
-// Parse exactly the bytes whose independently selected digest was checked.
-// Reopening the path after hashing would allow another attempt to substitute
-// its passing document. Bound the read even if a concurrent writer grows it.
-pub(crate) fn read_bound_json<T: serde::de::DeserializeOwned>(
-    path: &Path,
-    expected: Option<&str>,
-) -> io::Result<T> {
-    let file = regular_file(path)?;
-    read_bound_json_file(file, expected)
-}
-
-fn read_bound_json_file<T: serde::de::DeserializeOwned>(
-    file: File,
-    expected: Option<&str>,
-) -> io::Result<T> {
-    let before = file.metadata()?;
-    if before.len() > 64 * 1024 * 1024 {
-        return Err(invalid("evidence JSON exceeds 64 MiB"));
-    }
-    let mut bytes = Vec::new();
-    (&file).take(before.len() + 1).read_to_end(&mut bytes)?;
-    let after = file.metadata()?;
-    if bytes.len() as u64 != before.len()
-        || after.len() != before.len()
-        || before.modified()? != after.modified()?
-    {
-        return Err(invalid("evidence JSON changed while reading"));
-    }
-    if expected.is_some_and(|hash| format!("{:x}", Sha256::digest(&bytes)) != hash) {
-        return Err(invalid("selected evidence JSON digest differs"));
-    }
-    serde_json::from_slice(&bytes).map_err(invalid_json)
 }
 
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
@@ -396,6 +335,17 @@ fn collect(
             "not a regular source file: {}",
             path.display()
         )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Inventory v1 and its tar export cannot preserve inode aliases, even
+        // when the other link lies outside the selected paths or source root.
+        if fs::metadata(&resolved)?.nlink() != 1 {
+            return Err(invalid(
+                "source hard links cannot be represented by inventory v1",
+            ));
+        }
     }
     let link = if metadata.file_type().is_symlink() {
         let target = fs::read_link(root.join(path))?;
@@ -545,7 +495,8 @@ mod evidence_tests {
         let selected = regular_file(&path).unwrap();
         fs::rename(&path, root.path().join("selected.json")).unwrap();
         fs::write(&path, br#"{"status":"passed"}"#).unwrap();
-        let observed: serde_json::Value = read_bound_json_file(selected, Some(&expected)).unwrap();
+        let observed: serde_json::Value =
+            json::read_bound_json_file(selected, Some(&expected)).unwrap();
         assert_eq!(observed["status"], "failed");
         assert!(read_bound_json::<serde_json::Value>(&path, Some(&expected)).is_err());
     }

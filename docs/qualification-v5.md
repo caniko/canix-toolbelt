@@ -21,6 +21,9 @@ Inventory v1 cannot represent empty directories: recursive selections containing
 one fail closed, and source archives reject extra directories not implied by
 inventoried files or link resolution. Select explicit files when empty siblings
 are not part of the source contract.
+On Unix, selected files with multiple hard links also fail closed, including
+symlink targets and links outside the selected tree. Inventory v1 and its tar
+export do not represent inode aliases; select independent source copies instead.
 Only the fresh work tree is writable. It is backed by a separate tmpfs capped
 at 256 MiB and 16,384 inodes. Capacity exhaustion cannot yield passing evidence.
 The private supervisor observes kernel syscall results for the producer and its
@@ -40,7 +43,15 @@ the caller after completion; use the bounded log streams for live progress.
 The launcher and privilege limiter
 use sanitized environments; recorded producer settings, including loader
 variables, are applied by the final exec adapter after containment and capability
-removal. The producer's home is a fresh `work/home`. The default Cargo home is
+removal. Before parsing any policy or mounting its paths, PID 1 checks the opened
+policy bytes against the host caller's in-memory `boundarySha256` selection.
+Those admitted bytes are copied into the private tmpfs, never bind-mounted from
+the externally writable host inode. The final exec adapter checks the same
+identity again before applying the environment. Both version probes and the main
+producer use this policy identity. Retained `boundary.json` is mandatory in runs
+and seals; portable verification checks its digest and environment. Earlier
+schema-5 packets without this identity remain historical, not qualifying evidence.
+The producer's home is a fresh `work/home`. The default Cargo home is
 `work/cargo-home`. A supplied Cargo dependency cache needs an explicit recursive
 source selection (or file input selections), binding its contents before and
 after execution. Do not expose a cache containing credentials or control channels.
@@ -71,7 +82,8 @@ source links. `ArtifactIndex` is a transparent newtype over a sorted map and
 rejects duplicate JSON keys in standalone indexes and embedded requirements.
 Source/input/tool/environment selections, inventory paths, receipt maps and seal
 gate/artifact selections also reject duplicate keys. Portable receipt verification
-requires every executable, tool and containment digest to be 64 hexadecimal digits.
+requires every input, executable, tool, containment and boundary-policy digest to
+be 64 hexadecimal digits.
 Rust callers can use `collect`, array conversion, or `.into()` on an existing
 `BTreeMap`; serialized bytes remain unchanged. Gate, request, execution-report and coverage JSON are parsed from
 the same opened bytes whose selected hashes are checked. Artifact copying reads
