@@ -204,12 +204,15 @@ pub fn dispatch(
             name,
             version,
         } => result(
-            &graph::Metadata::parse(&fs::read(metadata)?)?.parents(&name, version.as_deref())?,
+            &graph::Metadata::parse(&json::read_bound_bytes(regular_file(&metadata)?, None)?)?
+                .parents(&name, version.as_deref())?,
             true,
         ),
         QualificationCommand::GraphDelta { before, after } => {
-            let before = graph::Metadata::parse(&fs::read(before)?)?;
-            let after = graph::Metadata::parse(&fs::read(after)?)?;
+            let before =
+                graph::Metadata::parse(&json::read_bound_bytes(regular_file(&before)?, None)?)?;
+            let after =
+                graph::Metadata::parse(&json::read_bound_bytes(regular_file(&after)?, None)?)?;
             result(&before.delta(&after), true)
         }
         QualificationCommand::ExportSource { request, out } => {

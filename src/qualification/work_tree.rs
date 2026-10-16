@@ -2,7 +2,7 @@
 use std::{
     fs,
     io::{self, Read, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
 };
 
@@ -71,6 +71,11 @@ pub fn copy_tree(
             } else if metadata.file_type().is_symlink() {
                 std::os::unix::fs::symlink(fs::read_link(entry.path())?, target)?;
             } else if metadata.is_file() {
+                if metadata.nlink() != 1 {
+                    return Err(io::Error::other(
+                        "work retention rejects hard links instead of changing inode aliases",
+                    ));
+                }
                 bytes = bytes
                     .checked_add(metadata.len())
                     .filter(|size| *size <= MAX_BYTES)

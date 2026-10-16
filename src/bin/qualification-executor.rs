@@ -464,7 +464,9 @@ fn minimal_root(
         MountFlags::NOSUID | MountFlags::NODEV,
         c"size=256m,nr_inodes=16384",
     )?;
-    work_tree::copy_tree(work, &work_target, &|| false)?;
+    work_tree::copy_tree(work, &work_target, &|| {
+        cancelled.load(std::sync::atomic::Ordering::Relaxed)
+    })?;
     let config = root.join(".qualification-boundary.json");
     // Copy the admitted snapshot into our private tmpfs, not a bind of the
     // externally writable host inode. Non-dumpable PID 1 owns the only view;

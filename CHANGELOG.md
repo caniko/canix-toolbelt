@@ -54,6 +54,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   binding. Reject unselected symlink targets, unrepresented directory modes and
   malformed source-file digests, and kill/reap stalled launchers after graceful
   cleanup expires. Portable verification requires the exact snapshot selections.
+- Reject hard-linked work artifacts rather than losing alias semantics between
+  probes, honor startup restoration cancellation, bound Cargo-metadata CLI reads,
+  and distinguish local-path package changes in graph deltas.
 - Preserve a qualification command's requested argv[0] after canonical executable
   hashing and namespace/privilege containment, including Nix multicall applets.
   `RunRequest` Rust initializers now set `argument_zero: None` for the default;

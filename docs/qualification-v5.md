@@ -112,7 +112,14 @@ duplicate obligation IDs instead of silently replacing an original method set.
 All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retaining
 a completed work tree replaces prior children, preserving producer deletions and
 directory/file transitions and directory permission modes between probes and the
-main command. Restrictive modes are restored after copying descendants.
+main command. Restrictive modes are restored after copying descendants. Retention
+rejects multiply linked work files instead of silently changing inode-alias
+semantics between commands. Startup restoration observes cancellation; cleanup
+also kills and reaps a launcher that exceeds the graceful five-second budget.
+Both Cargo-metadata CLI commands use the same bounded regular-file reader as
+other evidence inputs, rejecting oversized files and FIFOs before parsing. Local
+package graph identities retain Cargo's path-bearing package ID when `source`
+is null, so switching same-version local dependencies remains visible.
 
 Deadline regressions separate namespace startup from the post-execution hashing
 witness. The end-to-end one-second deadline includes startup and may expire

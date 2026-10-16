@@ -10,7 +10,7 @@ pub struct PackageIdentity {
     pub name: String,
     /// Full package version.
     pub version: String,
-    /// Registry/Git source; absent for local paths.
+    /// Registry/Git source, or Cargo's path-bearing package ID for local packages.
     pub source: Option<String>,
 }
 
@@ -85,7 +85,14 @@ impl Metadata {
         let packages: BTreeMap<_, _> = document
             .packages
             .into_iter()
-            .map(|p| (p.id.clone(), p))
+            .map(|mut package| {
+                // Cargo's null source does not make two local distributions
+                // identical. Its opaque package ID retains their distinct paths.
+                if package.identity.source.is_none() {
+                    package.identity.source = Some(package.id.clone());
+                }
+                (package.id.clone(), package)
+            })
             .collect();
         let node_count = resolve.nodes.len();
         let nodes: BTreeMap<_, _> = resolve

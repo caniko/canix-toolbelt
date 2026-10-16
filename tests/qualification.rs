@@ -1452,6 +1452,131 @@ fn graph_delta_detects_same_version_distribution_changes() {
 }
 
 #[test]
+fn review_repair_graph_delta_distinguishes_same_version_local_packages() {
+    let metadata = |directory: &str| {
+        let id = format!("path+file:///{directory}/local#1.0.0");
+        q::graph::Metadata::parse(
+            &serde_json::to_vec(&serde_json::json!({
+                "packages": [{"id": id, "name": "local", "version": "1.0.0", "source": null}],
+                "workspace_members": [id],
+                "resolve": {"nodes": [{"id": id, "features": [], "deps": []}]}
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let before = metadata("before");
+    let same = metadata("before");
+    assert!(before.delta(&same).removed.is_empty());
+    assert!(before.delta(&same).added.is_empty());
+    let delta = before.delta(&metadata("after"));
+    assert_eq!(delta.removed.len(), 1);
+    assert_eq!(delta.added.len(), 1);
+    assert_eq!(
+        delta.removed[0].source.as_deref(),
+        Some("path+file:///before/local#1.0.0")
+    );
+    assert_eq!(
+        delta.added[0].source.as_deref(),
+        Some("path+file:///after/local#1.0.0")
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_repair_work_retention_cannot_silently_break_hard_links() {
+    let (root, _) = run_fixture("true", 30);
+    let probe = root.path().join("linking-probe");
+    fs::write(&probe, "#!/bin/sh\ncd \"$QUALIFICATION_WORK_DIR\" || exit\nprintf artifact > a\nln a b || exit\nprintf version\n").unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.tools.insert("probe".into(), probe);
+    request.command[2] = "printf main-ran; cd \"$QUALIFICATION_WORK_DIR\"; test ! a -ef b".into();
+    let run = root.path().join("work-links");
+    let receipt = q::execute(&request, &run, &Default::default()).unwrap();
+    assert_eq!(receipt.status, q::RunStatus::Failed, "{receipt:#?}");
+    assert!(
+        fs::read(run.join("stdout.log")).unwrap().is_empty(),
+        "main must not run on altered work semantics"
+    );
+    assert!(
+        fs::read_to_string(run.join("tool-probe.log.stderr"))
+            .unwrap()
+            .contains("hard links")
+    );
+    assert!(q::verify_run(&run, None).is_err());
+}
+
+#[cfg(feature = "qualification-cli")]
+#[test]
+fn review_repair_graph_cli_rejects_oversized_metadata_before_parsing() {
+    use q::cli::{QualificationCommand, dispatch};
+    let root = tempdir().unwrap();
+    let metadata = root.path().join("large.json");
+    fs::File::create(&metadata)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    for command in [
+        QualificationCommand::Parents {
+            metadata: metadata.clone(),
+            name: "local".into(),
+            version: None,
+        },
+        QualificationCommand::GraphDelta {
+            before: metadata.clone(),
+            after: metadata.clone(),
+        },
+    ] {
+        let error = dispatch(command, &Default::default())
+            .err()
+            .expect("oversized metadata was admitted");
+        assert!(error.to_string().contains("64 MiB"), "{error}");
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "qualification-cli"))]
+#[test]
+fn review_repair_graph_cli_rejects_fifos_without_a_writer() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let root = tempdir().unwrap();
+    let fifo = root.path().join("metadata");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    let fifo = fifo.to_str().unwrap();
+    for args in [["parents", fifo, "local"], ["graph-delta", fifo, fifo]] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_canix-toolbelt"))
+            .arg("qualification")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(
+            status.is_some_and(|status| !status.success()),
+            "metadata CLI blocked opening an untrusted FIFO"
+        );
+    }
+}
+
+#[test]
 fn parent_path_ties_preserve_the_python_cargo_edge_order() {
     let packages = ["root", "z-first", "a-second", "parent", "dependency"]
         .map(|id| serde_json::json!({"id":id,"name":id,"version":"1.0.0","source":null}));
@@ -2392,39 +2517,44 @@ fn seal_metadata_cannot_live_outside_the_handoff() {
 #[cfg(all(target_os = "linux", feature = "qualification-cli"))]
 #[test]
 fn non_run_cli_operations_keep_default_termination_signals() {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::process::CommandExt;
     let root = tempdir().unwrap();
-    let fifo = root.path().join("metadata");
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    let ready = root.path().join("git-ready");
+    let git = root.path().join("git-probe");
+    fs::write(
+        &git,
+        format!("#!/bin/sh\nprintf ready > {ready:?}\nexec sleep 60\n"),
     )
     .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
     for signal in [rustix::process::Signal::INT, rustix::process::Signal::TERM] {
+        if ready.exists() {
+            fs::remove_file(&ready).unwrap();
+        }
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_canix-toolbelt"))
-            .args(["qualification", "parents"])
-            .arg(&fifo)
-            .arg("app")
+            .args(["qualification", "inventory", "--git", "--root"])
+            .arg(root.path())
+            .arg("--git-program")
+            .arg(&git)
+            .process_group(0)
             .spawn()
             .unwrap();
-        // Opening a writer proves the command reached its blocking metadata
-        // read after dispatch and signal setup, rather than signalling startup.
+        // Metadata FIFOs now fail closed, so use the explicit Git-selection
+        // operation to witness dispatch before signalling. Its isolated process
+        // group lets this fixture reap the helper instead of leaking a sleeper.
         let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let writer = loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
-                .open(&fifo)
-            {
-                Ok(file) => break file,
-                Err(_) => {
-                    assert!(std::time::Instant::now() < ready_deadline);
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
+        while !ready.exists() {
+            if std::time::Instant::now() >= ready_deadline {
+                let _ = rustix::process::kill_process_group(
+                    rustix::process::Pid::from_raw(child.id() as i32).unwrap(),
+                    rustix::process::Signal::KILL,
+                );
+                child.wait().unwrap();
+                panic!("non-run Git selection did not reach dispatch");
             }
-        };
-        rustix::process::kill_process(
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        rustix::process::kill_process_group(
             rustix::process::Pid::from_raw(child.id() as i32).unwrap(),
             signal,
         )
@@ -2435,7 +2565,11 @@ fn non_run_cli_operations_keep_default_termination_signals() {
                 break status;
             }
             if std::time::Instant::now() >= deadline {
-                child.kill().unwrap();
+                rustix::process::kill_process_group(
+                    rustix::process::Pid::from_raw(child.id() as i32).unwrap(),
+                    rustix::process::Signal::KILL,
+                )
+                .unwrap();
                 child.wait().unwrap();
                 panic!("non-run command ignored {signal:?}");
             }
@@ -2443,6 +2577,5 @@ fn non_run_cli_operations_keep_default_termination_signals() {
         };
         use std::os::unix::process::ExitStatusExt;
         assert_eq!(status.signal(), Some(signal.as_raw()));
-        drop(writer);
     }
 }
