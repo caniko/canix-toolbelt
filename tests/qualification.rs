@@ -8,6 +8,78 @@ use tempfile::tempdir;
 
 #[cfg(unix)]
 #[test]
+fn current_review_source_file_modes_must_be_representable() {
+    let root = tempdir().unwrap();
+    let out = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::write(&source, b"source").unwrap();
+    std::os::unix::fs::symlink("source", root.path().join("alias")).unwrap();
+    for mode in [0o600, 0o666, 0o700, 0o744, 0o775, 0o644, 0o755] {
+        fs::set_permissions(&source, fs::Permissions::from_mode(mode)).unwrap();
+        for selection in ["source", "alias"] {
+            let spec = InventorySpec {
+                root: root.path().into(),
+                paths: vec![selection.into()],
+            };
+            let representable = matches!(mode, 0o644 | 0o755);
+            assert_eq!(
+                q::inventory(&spec).is_ok(),
+                representable,
+                "{selection}: {mode:o}"
+            );
+            if !representable {
+                assert!(
+                    q::export_source(&spec, &out.path().join(format!("{selection}-{mode:o}.tar")))
+                        .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn current_review_local_pax_metadata_cannot_add_unrepresented_semantics() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("source"), b"source").unwrap();
+    let expected = q::inventory(&InventorySpec {
+        root: root.path().into(),
+        paths: vec!["source".into()],
+    })
+    .unwrap();
+    let legacy = [("source".into(), expected.files["source"].sha256.clone())].into();
+    for (index, key, value) in [
+        (0, "SCHILY.xattr.user.qualification", "metadata"),
+        (1, "SCHILY.acl.access", "user::rw-,group::r--,other::r--"),
+        (2, "mtime", "123"),
+        (3, "uid", "123"),
+    ] {
+        let archive = root.path().join(format!("pax-{index}.tar"));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        builder
+            .append_pax_extensions([(key, value.as_bytes())])
+            .unwrap();
+        let mut header = tar::Header::new_ustar();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_mode(0o644);
+        header.set_size(6);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "source", &b"source"[..])
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        assert!(
+            q::verify_source_archive(&archive, &expected).is_err(),
+            "admitted local PAX {key}"
+        );
+        assert_eq!(q::verify_legacy_archive(&archive, &legacy).unwrap(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn final_review_archive_root_mode_and_timestamps_are_canonical() {
     let root = tempdir().unwrap();
     fs::create_dir(root.path().join("src")).unwrap();
@@ -257,6 +329,7 @@ fn late_review_portable_receipts_require_effective_arguments_deadline_and_work_p
         "HOME",
         "missingHome",
         "sandbox",
+        "missingNull",
     ] {
         let mut request = original_request.clone();
         let mut receipt = original_receipt.clone();
@@ -273,6 +346,11 @@ fn late_review_portable_receipts_require_effective_arguments_deadline_and_work_p
                     (request["timeoutSeconds"].as_u64().unwrap() * 1000 + 1).into()
             }
             "sandbox" => boundary["sandbox"] = "/unrelated/sandbox".into(),
+            "missingNull" => {
+                let mounts = boundary["read_only_paths"].as_array_mut().unwrap();
+                assert!(mounts.iter().any(|path| path == "/dev/null"));
+                mounts.retain(|path| path != "/dev/null");
+            }
             name => {
                 let key = if name == "missingHome" { "HOME" } else { name };
                 for environment in [

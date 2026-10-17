@@ -445,7 +445,13 @@ fn collect(
     #[cfg(unix)]
     let executable = {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(&resolved)?.permissions().mode() & 0o111 != 0
+        let mode = fs::metadata(&resolved)?.permissions().mode() & 0o7777;
+        if !matches!(mode, 0o644 | 0o755) {
+            return Err(invalid(
+                "source inventory v1 requires file mode 0644 or 0755",
+            ));
+        }
+        mode == 0o755
     };
     #[cfg(not(unix))]
     let executable = false;

@@ -1976,6 +1976,10 @@ pub(crate) fn verify_run_bound(
     if files != boundary.snapshot_files
         || mounts != actual_mounts
         || directories != actual_directories
+        || !boundary
+            .read_only_paths
+            .iter()
+            .any(|path| path == Path::new("/dev/null"))
         || boundary.read_only_paths.iter().any(|path| {
             !super::boundary::SYSTEM_PATHS
                 .iter()

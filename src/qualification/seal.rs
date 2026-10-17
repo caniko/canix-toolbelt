@@ -461,6 +461,11 @@ fn archive_inventory_from_file(
             }
             continue;
         }
+        if canonical_semantics && entry.pax_extensions()?.is_some() {
+            return Err(invalid(
+                "canonical source archives do not support local PAX metadata",
+            ));
+        }
         let path = entry.path()?.into_owned();
         if canonical_semantics && entry.header().mtime()? != 0 {
             return Err(invalid("canonical source archives require timestamp zero"));
