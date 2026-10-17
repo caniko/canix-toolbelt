@@ -160,17 +160,21 @@ pub(crate) fn sha256_file_checked(
     check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<String> {
     check()?;
-    sha256_open_file_checked(regular_file(path)?, check)
+    sha256_open_file_checked(regular_file(path)?, u64::MAX, check)
 }
 
 fn sha256_open_file_checked(
     file: File,
+    max_bytes: u64,
     check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<String> {
     use std::io::Seek;
     let mut file = file;
     file.rewind()?;
     let before = file.metadata()?;
+    if before.len() > max_bytes {
+        return Err(invalid("retained log size exceeds the producer limit"));
+    }
     let bound = before
         .len()
         .checked_add(1)
@@ -225,6 +229,25 @@ pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> 
         .open(path)?;
     file.write_all(&json_bytes(value)?)?;
     file.sync_all()
+}
+
+fn write_bound_json_checked(
+    path: &Path,
+    value: &impl Serialize,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    // Select trusted memory before exposing a path that another process can edit.
+    let selected = fingerprint(value)?;
+    write_json(path, value)?;
+    check()?;
+    if sha256_open_file_checked(regular_file(path)?, MAX_SOURCE_JSON_BYTES as u64, check)?
+        != selected
+    {
+        return Err(invalid(
+            "published JSON differs from selected in-memory evidence",
+        ));
+    }
+    Ok(selected)
 }
 
 /// SHA-256 identity of the canonical serialization of a typed value.
@@ -348,6 +371,14 @@ pub(crate) fn path_text(path: &Path) -> io::Result<String> {
         .map(|parts| parts.join("/"))
 }
 
+fn source_link_text(path: &Path) -> io::Result<String> {
+    let text = path_text(path)?;
+    if path.as_os_str() != Path::new(&text).as_os_str() {
+        return Err(invalid("source symlink spelling is not canonical"));
+    }
+    Ok(text)
+}
+
 fn collect(
     root: &Path,
     path: &Path,
@@ -407,7 +438,7 @@ fn collect(
         if target.is_absolute() {
             return Err(invalid("absolute symlinks are not portable source"));
         }
-        Some(path_text(&target)?)
+        Some(source_link_text(&target)?)
     } else {
         None
     };
@@ -551,8 +582,52 @@ fn validate_inventory_selection(spec: &InventorySpec, inventory: &Inventory) -> 
 
 /// Select Git-tracked and unignored untracked files using NUL-delimited names.
 /// Gitlinks require an explicit independent inventory, rather than hidden recursion.
+/// Discovery requires Unix nonblocking descriptors and process-group cleanup.
+#[cfg(not(unix))]
+pub fn git_inventory_spec(_root: &Path, _git: &Path) -> io::Result<InventorySpec> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "bounded Git discovery requires Unix",
+    ))
+}
+
+/// Select Git-tracked and unignored untracked files with bounded output and cleanup.
+#[cfg(unix)]
 pub fn git_inventory_spec(root: &Path, git: &Path) -> io::Result<InventorySpec> {
-    let output = std::process::Command::new(git)
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    struct Reader<'a, R> {
+        input: R,
+        finished: &'a AtomicBool,
+        deadline: Instant,
+    }
+    impl<R: Read> Read for Reader<'_, R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            loop {
+                if Instant::now() >= self.deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Git discovery deadline exceeded",
+                    ));
+                }
+                match self.input.read(buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if self.finished.load(Ordering::Relaxed) {
+                            return Err(invalid("Git stream stayed open after process completion"));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    result => return result,
+                }
+            }
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut child = std::process::Command::new(git)
         .env_remove("GIT_DIR")
         .env_remove("GIT_COMMON_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -566,44 +641,175 @@ pub fn git_inventory_spec(root: &Path, git: &Path) -> io::Result<InventorySpec> 
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z", "-co", "--exclude-standard"])
-        .output()?;
-    if !output.status.success() {
-        return Err(invalid(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let group = rustix::process::Pid::from_raw(child.id() as i32)
+        .ok_or_else(|| invalid("invalid Git process group"))?;
+    let result = (|| {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| invalid("missing Git stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| invalid("missing Git stderr"))?;
+        rustix::fs::fcntl_setfl(
+            &stdout,
+            rustix::fs::fcntl_getfl(&stdout)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        rustix::fs::fcntl_setfl(
+            &stderr,
+            rustix::fs::fcntl_getfl(&stderr)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        let failed = AtomicBool::new(false);
+        let finished = AtomicBool::new(false);
+        let paths = std::thread::scope(|scope| -> io::Result<_> {
+            let paths = scope.spawn(|| {
+                let result = (|| -> io::Result<_> {
+                    let input = Reader {
+                        input: stdout,
+                        finished: &finished,
+                        deadline,
+                    };
+                    let mut reader = BufReader::new(input.take(MAX_SOURCE_JSON_BYTES as u64 + 1));
+                    let mut paths = std::collections::BTreeSet::new();
+                    let mut bytes = 0usize;
+                    let mut consumed = 0usize;
+                    let mut name = Vec::new();
+                    while reader.read_until(0, &mut name)? != 0 {
+                        consumed = consumed.saturating_add(name.len());
+                        if consumed > MAX_SOURCE_JSON_BYTES {
+                            return Err(invalid("Git output byte budget exceeded"));
+                        }
+                        if name.pop() != Some(0) {
+                            return Err(invalid("unterminated Git inventory path"));
+                        }
+                        if !name.is_empty() {
+                            let text = std::str::from_utf8(&name)
+                                .map_err(|error| invalid(error.to_string()))?;
+                            let path = PathBuf::from(text);
+                            relative(&path)?;
+                            if !paths.contains(&path) {
+                                bytes = bytes.saturating_add(source_entry_bytes(
+                                    text,
+                                    &SourceFile {
+                                        sha256: String::new(),
+                                        executable: false,
+                                        link: None,
+                                    },
+                                ));
+                                if paths.len() >= MAX_SOURCE_FILES || bytes > MAX_SOURCE_JSON_BYTES
+                                {
+                                    return Err(invalid(
+                                        "Git inventory entry or serialized-size budget exceeded",
+                                    ));
+                                }
+                                if root.join(&path).is_dir() {
+                                    return Err(invalid(format!(
+                                        "gitlink requires a separate source selection: {}",
+                                        path.display()
+                                    )));
+                                }
+                                paths.insert(path);
+                            }
+                        }
+                        name.clear();
+                    }
+                    Ok(paths)
+                })();
+                if result.is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+                result
+            });
+            let diagnostics = scope.spawn(|| {
+                let result = (|| -> io::Result<_> {
+                    let mut bytes = Vec::new();
+                    Reader {
+                        input: stderr,
+                        finished: &finished,
+                        deadline,
+                    }
+                    .take(65537)
+                    .read_to_end(&mut bytes)?;
+                    if bytes.len() > 65536 {
+                        return Err(invalid("Git diagnostic budget exceeded"));
+                    }
+                    Ok(bytes)
+                })();
+                if result.is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+                result
+            });
+            let status = loop {
+                if failed.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                    let _ =
+                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                    let _ = child.kill();
+                }
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(error);
+                    }
+                }
+            };
+            finished.store(true, Ordering::Relaxed);
+            let paths = paths
+                .join()
+                .map_err(|_| invalid("Git inventory reader panicked"))?;
+            let diagnostics = diagnostics
+                .join()
+                .map_err(|_| invalid("Git diagnostic reader panicked"))?;
+            let paths = paths?;
+            let diagnostics = diagnostics?;
+            if !status?.success() {
+                return Err(invalid(String::from_utf8_lossy(&diagnostics)));
+            }
+            Ok(paths.into_iter().collect())
+        })?;
+        Ok(InventorySpec {
+            root: root.into(),
+            paths,
+        })
+    })();
+    if result.is_err() {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        let _ = child.kill();
+        child.wait()?;
     }
-    let mut paths = Vec::new();
-    for name in output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|name| !name.is_empty())
-    {
-        let path = PathBuf::from(std::str::from_utf8(name).map_err(|e| invalid(e.to_string()))?);
-        if root.join(&path).is_dir() {
-            return Err(invalid(format!(
-                "gitlink requires a separate source selection: {}",
-                path.display()
-            )));
-        }
-        paths.push(path);
-    }
-    paths.sort();
-    paths.dedup();
-    Ok(InventorySpec {
-        root: root.into(),
-        paths,
-    })
+    result
 }
 
 /// Verify every selected artifact's bytes. Extra files do not establish acceptance.
 pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
+    verify_index_bounded(root, index, |_| u64::MAX)
+}
+
+fn verify_index_bounded(
+    root: &Path,
+    index: &ArtifactIndex,
+    limit: impl Fn(&str) -> u64,
+) -> io::Result<usize> {
     if index.is_empty() {
         return Err(invalid("artifact index is empty"));
     }
     let root = root.canonicalize()?;
     for (path, expected) in index {
         artifact_key(path)?;
-        if sha256_file(&evidence_path(&root, Path::new(path))?)? != *expected {
+        if sha256_open_file_checked(
+            regular_file(&evidence_path(&root, Path::new(path))?)?,
+            limit(path),
+            &mut || Ok(()),
+        )? != *expected
+        {
             return Err(invalid(format!("artifact hash mismatch: {path}")));
         }
     }
@@ -613,6 +819,37 @@ pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
+
+    #[test]
+    fn late_review_json_publication_cannot_select_a_substituted_request() {
+        for replace in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("request.json");
+            let value = serde_json::json!({"command":["/bin/sh", "-c", "original"]});
+            let mut changed = false;
+            let result = write_bound_json_checked(&path, &value, &mut || {
+                if !changed {
+                    if replace {
+                        fs::rename(&path, root.path().join("original.json"))?;
+                    }
+                    fs::write(
+                        &path,
+                        json_bytes(
+                            &serde_json::json!({"command":["/bin/sh", "-c", "substituted"]}),
+                        )?,
+                    )?;
+                    changed = true;
+                }
+                Ok(())
+            });
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("selected in-memory")
+            );
+        }
+    }
 
     #[test]
     fn review_resolution_inventory_refuses_an_entry_before_exceeding_its_limit() {

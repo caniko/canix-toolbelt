@@ -291,6 +291,7 @@ fn validate_source_links(inventory: &Inventory) -> io::Result<()> {
             }
             let file = &inventory.files[&current];
             let Some(link) = &file.link else { break };
+            source_link_text(Path::new(link))?;
             let (target, _) = super::seal::link_walk(&current, Path::new(link))?;
             let target_file = inventory.files.get(&target).ok_or_else(|| {
                 invalid(
@@ -751,6 +752,7 @@ fn capture_logs(
 fn publish_log(
     log: Option<&CapturedLog>,
     path: &Path,
+    limit: u64,
     check: &mut impl FnMut() -> io::Result<()>,
 ) -> io::Result<String> {
     use std::io::{Seek, Write};
@@ -761,7 +763,7 @@ fn publish_log(
     let expected = if let Some(log) = log {
         let mut input = log.file.try_clone()?;
         input.rewind()?;
-        if sha256_open_file_checked(input.try_clone()?, check)? != log.sha256 {
+        if sha256_open_file_checked(input.try_clone()?, limit, check)? != log.sha256 {
             return Err(invalid(
                 "sealed producer log differs from its private channel",
             ));
@@ -782,7 +784,7 @@ fn publish_log(
     };
     output.sync_all()?;
     check()?;
-    if sha256_file_checked(path, check)? != expected {
+    if sha256_open_file_checked(regular_file(path)?, limit, check)? != expected {
         return Err(invalid(
             "published producer log differs from its private channel",
         ));
@@ -846,8 +848,8 @@ fn tool_version(
             Ok(())
         }
     };
-    publish_log(Some(&out), &path, &mut check)?;
-    publish_log(Some(&err), &stderr_path, &mut check)?;
+    publish_log(Some(&out), &path, 1024 * 1024, &mut check)?;
+    publish_log(Some(&err), &stderr_path, 1024 * 1024, &mut check)?;
     if out.overflow || err.overflow {
         return Err(invalid("producer exceeded its log stream bound"));
     }
@@ -880,7 +882,8 @@ fn tool_version(
             return Err(invalid("tool version stream changed during bounded read"));
         }
         if log.sha256 != format!("{:x}", Sha256::digest(&output[start..]))
-            || sha256_file(stream)? != log.sha256
+            || sha256_open_file_checked(regular_file(stream)?, 1024 * 1024, &mut check)?
+                != log.sha256
         {
             return Err(invalid("tool version log was replaced"));
         }
@@ -1219,11 +1222,13 @@ pub fn execute(
         environment: environment.clone(),
         sandbox,
     };
+    boundary.validate_snapshot_inodes(&request.cwd, &work)?;
     // Select the bytes from trusted memory, never by re-hashing a writable path
     // after publication. PID 1 must admit this identity before parsing or mounting.
-    let boundary_sha256 = fingerprint(&boundary)?;
-    write_json(&destination.join("boundary.json"), &boundary)?;
-    write_json(&destination.join("request.json"), request)?;
+    let boundary_sha256 =
+        write_bound_json_checked(&destination.join("boundary.json"), &boundary, &mut check)?;
+    let request_sha256 =
+        write_bound_json_checked(&destination.join("request.json"), request, &mut check)?;
     write_json(&destination.join("pending.json"), &RunStatus::Pending)?;
     let mut receipt = Receipt {
         schema_version: 5,
@@ -1234,7 +1239,7 @@ pub fn execute(
         composition,
         after: None,
         inventories,
-        request_sha256: sha256_file(&destination.join("request.json"))?,
+        request_sha256,
         boundary_sha256,
         stdout_sha256: String::new(),
         stderr_sha256: String::new(),
@@ -1433,11 +1438,13 @@ pub fn execute(
         receipt.stdout_sha256 = publish_log(
             main_logs.as_ref().map(|logs| &logs[0]),
             &destination.join("stdout.log"),
+            super::boundary::MAX_LOG_BYTES,
             &mut cleanup,
         )?;
         receipt.stderr_sha256 = publish_log(
             main_logs.as_ref().map(|logs| &logs[1]),
             &destination.join("stderr.log"),
+            super::boundary::MAX_LOG_BYTES,
             &mut cleanup,
         )?;
         Ok(())
@@ -1790,7 +1797,12 @@ pub(crate) fn verify_run_bound(
         ("stdout.log", &receipt.stdout_sha256),
         ("stderr.log", &receipt.stderr_sha256),
     ] {
-        if sha256_file(&directory.join(name))? != *hash {
+        if sha256_open_file_checked(
+            regular_file(&directory.join(name))?,
+            super::boundary::MAX_LOG_BYTES,
+            &mut || Ok(()),
+        )? != *hash
+        {
             return Err(invalid(format!("receipt artifact changed: {name}")));
         }
     }
@@ -1817,8 +1829,9 @@ pub(crate) fn verify_run_bound(
     validate_runtime_selection(&request)?;
     if request.command.is_empty()
         || request.command[0].is_empty()
-        || request.argument_zero.as_ref().is_some_and(String::is_empty)
+        || request.argument_zero.as_ref().is_none_or(String::is_empty)
         || !(1..=86400).contains(&request.timeout_seconds)
+        || receipt.elapsed_ms >= u128::from(request.timeout_seconds) * 1000
         || request.tools.keys().ne(receipt.tools.keys())
         || request.tools.keys().ne(request.tool_argument_zeros.keys())
         || request.tool_argument_zeros.values().any(String::is_empty)
@@ -1829,6 +1842,21 @@ pub(crate) fn verify_run_bound(
     {
         return Err(invalid("receipt requirements differ from retained request"));
     }
+    let work = boundary.sandbox.with_file_name("work");
+    if boundary.sandbox.file_name() != Some(std::ffi::OsStr::new("sandbox"))
+        || [
+            ("QUALIFICATION_WORK_DIR", work.clone()),
+            ("TMPDIR", work.clone()),
+            ("HOME", work.join("home")),
+        ]
+        .iter()
+        .any(|(name, path)| request.environment.get(*name).map(String::as_str) != path.to_str())
+    {
+        return Err(invalid(
+            "retained synthesized work environment differs from sandbox",
+        ));
+    }
+    boundary.validate_snapshot_inodes(&request.cwd, &work)?;
     let programs = request
         .containment
         .as_ref()

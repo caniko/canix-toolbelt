@@ -381,6 +381,7 @@ fn minimal_root(
     cwd: &std::path::Path,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<()> {
+    policy.validate_snapshot_inodes(cwd, work)?;
     use rustix::mount::{MountFlags, mount, mount_bind, mount_bind_recursive};
     use std::io::Write;
     // Only this single-threaded namespace init synthesizes private parents.

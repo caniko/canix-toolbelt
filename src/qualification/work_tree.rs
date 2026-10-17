@@ -79,6 +79,8 @@ pub fn copy_tree_opened(
     use rustix::fs::{
         AtFlags, Mode, OFlags, fchmod, mkdirat, openat, readlinkat, statat, symlinkat, unlinkat,
     };
+    reject_xattrs(rustix::fs::flistxattr(source, &mut [0u8; 0][..]))?;
+    reject_xattrs(rustix::fs::flistxattr(destination, &mut [0u8; 0][..]))?;
     // Each probe/command starts from the preceding retained tree. Replacing its
     // children preserves deletions and type changes instead of resurrecting
     // producer-removed files. Never follow a retained child symlink.
@@ -131,6 +133,7 @@ pub fn copy_tree_opened(
     let mut hash = Sha256::new();
     hash.update(b"qualification-work-v2\0");
     while let Some((source, destination, path)) = pending.pop() {
+        reject_xattrs(rustix::fs::flistxattr(&source, &mut [0u8; 0][..]))?;
         let metadata = source.metadata()?;
         hash.update(b"d");
         digest_part(&mut hash, path.as_os_str().as_bytes());
@@ -155,6 +158,13 @@ pub fn copy_tree_opened(
                     path,
                 ));
             } else if kind == rustix::fs::FileType::Symlink {
+                use std::os::fd::AsRawFd;
+                // Resolve only the pinned parent descriptor; never follow the
+                // producer's link, including links outside the work tree.
+                let metadata_path = Path::new("/proc/self/fd")
+                    .join(source.as_raw_fd().to_string())
+                    .join(&name);
+                reject_xattrs(rustix::fs::llistxattr(metadata_path, &mut [0u8; 0][..]))?;
                 if metadata.st_nlink != 1 {
                     return Err(io::Error::other(
                         "work retention rejects hard-linked symlinks",
@@ -192,6 +202,7 @@ pub fn copy_tree_opened(
                     Mode::empty(),
                 )?);
                 let metadata = input.metadata()?;
+                reject_xattrs(rustix::fs::flistxattr(&input, &mut [0u8; 0][..]))?;
                 if !metadata.is_file() {
                     return Err(io::Error::other("work file changed type"));
                 }
@@ -199,6 +210,15 @@ pub fn copy_tree_opened(
                     return Err(io::Error::other(
                         "work retention rejects hard links instead of changing inode aliases",
                     ));
+                }
+                if metadata.len() != 0 {
+                    // Work v2 cannot authenticate extent layout. Refuse holes
+                    // rather than materializing them on the next private tmpfs.
+                    let hole = rustix::fs::seek(&input, rustix::fs::SeekFrom::Hole(0))?;
+                    if hole < metadata.len() {
+                        return Err(io::Error::other("work retention rejects sparse files"));
+                    }
+                    rustix::fs::seek(&input, rustix::fs::SeekFrom::Start(0))?;
                 }
                 bytes = bytes
                     .checked_add(metadata.len())
@@ -254,6 +274,16 @@ pub fn copy_tree_opened(
     Ok(format!("{:x}", hash.finalize()))
 }
 
+fn reject_xattrs(result: rustix::io::Result<usize>) -> io::Result<()> {
+    match result {
+        Ok(0) | Err(rustix::io::Errno::NOTSUP) => Ok(()),
+        Ok(_) => Err(io::Error::other(
+            "work retention rejects extended attributes and ACLs",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn timestamps(metadata: &fs::Metadata) -> rustix::fs::Timestamps {
     rustix::fs::Timestamps {
         last_access: rustix::fs::Timespec {
@@ -288,6 +318,69 @@ fn digest_part(hash: &mut Sha256, bytes: &[u8]) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn late_review_sparse_work_files_are_rejected_instead_of_densified() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let mut file = File::create(source.join("sparse")).unwrap();
+        file.set_len(1024 * 1024).unwrap();
+        file.write_all(b"header").unwrap();
+        let result = copy_tree(&source, &root.path().join("retained"), &|| false);
+        assert!(
+            result.is_err(),
+            "sparse work transition silently changed extent semantics"
+        );
+    }
+
+    #[test]
+    fn final_review_work_xattrs_and_acls_are_never_silently_dropped() {
+        // Linux validates this native POSIX ACL value, rather than treating it
+        // as a user.* lookalike: version 2, owner/named user/group/mask/other.
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in [
+            (1u16, 7u16, u32::MAX),
+            (2, 4, 65534),
+            (4, 5, u32::MAX),
+            (16, 5, u32::MAX),
+            (32, 0, u32::MAX),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(permissions.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        for (name, attribute) in [
+            ("", "user.qualification"),
+            ("nested", "user.qualification"),
+            ("nested/file", "user.qualification"),
+            ("", "system.posix_acl_access"),
+            ("nested", "system.posix_acl_default"),
+            ("nested/file", "system.posix_acl_access"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let source = root.path().join("source");
+            fs::create_dir_all(source.join("nested")).unwrap();
+            fs::write(source.join("nested/file"), b"cache").unwrap();
+            let value = if attribute.starts_with("system.") {
+                acl.as_slice()
+            } else {
+                b"metadata"
+            };
+            rustix::fs::setxattr(
+                source.join(name),
+                attribute,
+                value,
+                rustix::fs::XattrFlags::empty(),
+            )
+            .unwrap();
+            let result = copy_tree(&source, &root.path().join("retained"), &|| false);
+            assert!(
+                result.is_err(),
+                "silently discarded {attribute} on {name:?}"
+            );
+        }
+    }
 
     #[test]
     fn new_review_work_timestamps_survive_and_bind_both_copy_directions() {

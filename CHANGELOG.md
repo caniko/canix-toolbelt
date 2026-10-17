@@ -18,6 +18,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Bound each retained-log read, Git discovery output and cleanup, and snapshot
+  structural inode admission. Reject unsupported work xattrs, ACLs and sparse
+  files instead of changing their semantics between probes and commands.
+- Require canonical archive ownership, root modes, timestamps and source-link
+  spelling while preserving explicitly content-only historical Git archives.
+- Select retained request and boundary digests from trusted memory before
+  publication. Portable passing receipts require effective argv[0], a completed
+  deadline and the synthesized work environment bound to their sandbox.
 - Use Bash for the portable program-path fixture's required version probe and
   require successful fixture execution before checking tampered evidence paths.
 - Exercise finalization cancellation with bounded socket-compatible output and

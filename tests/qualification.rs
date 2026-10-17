@@ -6,6 +6,329 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+#[test]
+fn final_review_archive_root_mode_and_timestamps_are_canonical() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::set_permissions(root.path().join("src"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("src/file"), b"source").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("file", root.path().join("src/link")).unwrap();
+    let expected = q::inventory(&InventorySpec {
+        root: root.path().into(),
+        paths: vec!["src".into()],
+    })
+    .unwrap();
+    for (bad_name, mode, mtime) in [
+        (".", 0o000, 0),
+        (".", 0o755, 123),
+        ("src", 0o755, 123),
+        ("src/file", 0o644, 123),
+        ("src/link", 0o644, 123),
+        ("", 0o755, 0),
+    ] {
+        let archive = root
+            .path()
+            .join(format!("{}.tar", bad_name.replace('/', "-")));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        for name in [".", "src", "src/file", "src/link"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_uid(0);
+            header.set_gid(0);
+            let directory = name == "." || name == "src";
+            header.set_mode(if name == bad_name {
+                mode
+            } else if directory {
+                0o755
+            } else {
+                0o644
+            });
+            header.set_mtime(if name == bad_name { mtime } else { 0 });
+            header.set_size(if name == "src/file" { 6 } else { 0 });
+            header.set_entry_type(if directory {
+                tar::EntryType::Directory
+            } else if name == "src/link" {
+                tar::EntryType::Symlink
+            } else {
+                tar::EntryType::Regular
+            });
+            if name == "src/link" {
+                header.set_link_name("file").unwrap();
+            }
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    name,
+                    if name == "src/file" {
+                        &b"source"[..]
+                    } else {
+                        &b""[..]
+                    },
+                )
+                .unwrap();
+        }
+        builder.finish().unwrap();
+        drop(builder);
+        assert_eq!(
+            q::verify_source_archive(&archive, &expected).is_ok(),
+            bad_name.is_empty(),
+            "{bad_name}, mode={mode:o}, mtime={mtime}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn final_review_oversized_logs_are_rejected_before_run_and_seal_hashing() {
+    let (root, receipt) = run_fixture("true", 30);
+    let run = root.path().join("run");
+    assert_eq!(receipt.status, q::RunStatus::Passed, "{receipt:#?}");
+    let request = q::SealRequest {
+        composition: receipt.composition,
+        gates: [("required".into(), run.clone())].into(),
+        expected_receipts: [(
+            "required".into(),
+            q::sha256_file(&run.join("receipt.json")).unwrap(),
+        )]
+        .into(),
+        artifacts: Default::default(),
+    };
+    let handoff = root.path().join("handoff");
+    q::seal(&request, &handoff).unwrap();
+    for path in [
+        run.join("stdout.log"),
+        handoff.join("gates/required/stdout.log"),
+    ] {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(512 * 1024 * 1024 + 1)
+            .unwrap();
+    }
+    for error in [
+        q::verify_run(&run, None).unwrap_err(),
+        q::verify_seal(&handoff, &request.composition, &request.expected_receipts).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("log size"), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn final_review_git_discovery_bounds_entries_and_stderr_and_reaps() {
+    let root = tempdir().unwrap();
+    let git = root.path().join("git");
+    for script in [
+        "i=0; while [ $i -lt 131073 ]; do printf 'file-%s\\0' \"$i\"; i=$((i+1)); done",
+        "head -c 67108865 /dev/zero >&2; exit 1",
+    ] {
+        fs::write(&git, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = q::git_inventory_spec(root.path(), &git);
+        assert!(result.is_err(), "unrepresentable Git output was admitted");
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("budget"), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn final_review_git_discovery_does_not_wait_for_inherited_pipe_writers() {
+    let root = tempdir().unwrap();
+    let git = root.path().join("git");
+    fs::write(&git, "#!/bin/sh\nsleep 10 &\nprintf 'file\\0'\n").unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let error = q::git_inventory_spec(root.path(), &git).unwrap_err();
+    assert!(error.to_string().contains("stayed open"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[test]
+fn final_review_actual_git_archive_remains_content_only_compatible() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/file"), b"source").unwrap();
+    for args in [vec!["init"], vec!["add", "src/file"], vec!["write-tree"]] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let tree = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root.path())
+        .arg("write-tree")
+        .output()
+        .unwrap();
+    let path = root.path().join("git.tar");
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root.path())
+            .args(["archive", "--format=tar"])
+            .arg(String::from_utf8(tree.stdout).unwrap().trim())
+            .arg("-o")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let index = [(
+        "src/file".into(),
+        q::sha256_file(&root.path().join("src/file")).unwrap(),
+    )]
+    .into();
+    assert_eq!(q::verify_legacy_archive(&path, &index).unwrap(), 1);
+    let expected = q::inventory(&InventorySpec {
+        root: root.path().into(),
+        paths: vec!["src/file".into()],
+    })
+    .unwrap();
+    assert!(q::verify_source_archive(&path, &expected).is_err());
+}
+
+#[test]
+fn late_review_archive_ownership_is_canonical_only_for_current_evidence() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("source"), b"source").unwrap();
+    let expected = q::inventory(&InventorySpec {
+        root: root.path().into(),
+        paths: vec!["source".into()],
+    })
+    .unwrap();
+    let legacy = [("source".into(), expected.files["source"].sha256.clone())].into();
+    for (index, uid, gid, user, group) in [
+        (0, 123, 0, "", ""),
+        (1, 0, 123, "", ""),
+        (2, 0, 0, "unexpected", ""),
+        (3, 0, 0, "", "unexpected"),
+    ] {
+        let archive = root.path().join(format!("owner-{index}.tar"));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_size(6);
+        header.set_uid(uid);
+        header.set_gid(gid);
+        header.set_username(user).unwrap();
+        header.set_groupname(group).unwrap();
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "source", &b"source"[..])
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        assert!(
+            q::verify_source_archive(&archive, &expected).is_err(),
+            "ownership case {index} admitted"
+        );
+        assert_eq!(q::verify_legacy_archive(&archive, &legacy).unwrap(), 1);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn late_review_portable_receipts_require_effective_arguments_deadline_and_work_paths() {
+    let (root, passed) = run_fixture("true", 30);
+    assert_eq!(passed.status, q::RunStatus::Passed, "{passed:#?}");
+    let run = root.path().join("run");
+    q::verify_run(&run, None).unwrap();
+    let original_request: serde_json::Value = q::read_json(&run.join("request.json")).unwrap();
+    let original_receipt: serde_json::Value = q::read_json(&run.join("receipt.json")).unwrap();
+    let original_boundary: serde_json::Value = q::read_json(&run.join("boundary.json")).unwrap();
+    let mut admitted = Vec::new();
+    for case in [
+        "argumentZero",
+        "elapsedMs",
+        "lateElapsedMs",
+        "QUALIFICATION_WORK_DIR",
+        "TMPDIR",
+        "HOME",
+        "missingHome",
+        "sandbox",
+    ] {
+        let mut request = original_request.clone();
+        let mut receipt = original_receipt.clone();
+        let mut boundary = original_boundary.clone();
+        match case {
+            "argumentZero" => {
+                request.as_object_mut().unwrap().remove("argumentZero");
+            }
+            "elapsedMs" => {
+                receipt["elapsedMs"] = (request["timeoutSeconds"].as_u64().unwrap() * 1000).into()
+            }
+            "lateElapsedMs" => {
+                receipt["elapsedMs"] =
+                    (request["timeoutSeconds"].as_u64().unwrap() * 1000 + 1).into()
+            }
+            "sandbox" => boundary["sandbox"] = "/unrelated/sandbox".into(),
+            name => {
+                let key = if name == "missingHome" { "HOME" } else { name };
+                for environment in [
+                    &mut request["environment"],
+                    &mut receipt["environment"],
+                    &mut boundary["environment"],
+                ] {
+                    if name == "missingHome" {
+                        environment.as_object_mut().unwrap().remove(key);
+                    } else {
+                        environment[key] = "/unrelated".into();
+                    }
+                }
+            }
+        }
+        fs::write(run.join("request.json"), q::json_bytes(&request).unwrap()).unwrap();
+        fs::write(run.join("boundary.json"), q::json_bytes(&boundary).unwrap()).unwrap();
+        receipt["requestSha256"] = q::sha256_file(&run.join("request.json")).unwrap().into();
+        receipt["boundarySha256"] = q::sha256_file(&run.join("boundary.json")).unwrap().into();
+        fs::write(run.join("receipt.json"), q::json_bytes(&receipt).unwrap()).unwrap();
+        if q::verify_run(&run, None).is_ok() {
+            admitted.push(case);
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "impossible retained requests accepted: {admitted:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn late_review_source_symlinks_do_not_silently_change_spelling() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("dir")).unwrap();
+    fs::set_permissions(root.path().join("dir"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("dir/target"), b"source").unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["dir".into(), "alias".into()],
+    };
+    for target in ["dir//target", "dir/./target", "./dir//target"] {
+        std::os::unix::fs::symlink(target, root.path().join("alias")).unwrap();
+        assert!(
+            q::inventory(&spec).is_err(),
+            "normalized source link {target}"
+        );
+        fs::remove_file(root.path().join("alias")).unwrap();
+    }
+    std::os::unix::fs::symlink("dir/target", root.path().join("alias")).unwrap();
+    assert_eq!(
+        q::inventory(&spec).unwrap().files["alias"].link.as_deref(),
+        Some("dir/target")
+    );
+}
+
 #[test]
 fn inventory_is_deterministic_and_binds_executable_bits() {
     let root = tempdir().unwrap();
@@ -52,9 +375,28 @@ fn inventories_reject_unrepresented_empty_directories() {
     // A tar must not introduce the same unbound filesystem condition either.
     let archive = out.path().join("extra-directory.tar");
     let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
-    builder
-        .append_dir_all("tree", root.path().join("tree"))
-        .unwrap();
+    for name in ["tree", "tree/empty", "tree/file"] {
+        let file = name == "tree/file";
+        let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_mode(if file { 0o644 } else { 0o755 });
+        header.set_entry_type(if file {
+            tar::EntryType::Regular
+        } else {
+            tar::EntryType::Directory
+        });
+        header.set_size(if file { 6 } else { 0 });
+        header.set_cksum();
+        builder
+            .append_data(
+                &mut header,
+                name,
+                if file { &b"source"[..] } else { &b""[..] },
+            )
+            .unwrap();
+    }
     builder.finish().unwrap();
     assert!(q::verify_source_archive(&archive, &expected).is_err());
 }
@@ -82,7 +424,28 @@ fn finalization_rejects_unrepresented_directory_modes() {
         );
         let archive = out.path().join(format!("mode-{mode:o}.tar"));
         let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
-        builder.append_dir_all("tree", &tree).unwrap();
+        for name in ["tree", "tree/file"] {
+            let file = name == "tree/file";
+            let mut header = tar::Header::new_gnu();
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_mtime(0);
+            header.set_mode(if file { 0o644 } else { mode });
+            header.set_entry_type(if file {
+                tar::EntryType::Regular
+            } else {
+                tar::EntryType::Directory
+            });
+            header.set_size(if file { 6 } else { 0 });
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    name,
+                    if file { &b"source"[..] } else { &b""[..] },
+                )
+                .unwrap();
+        }
         builder.finish().unwrap();
         let inventory_rejected = q::inventory(&spec).is_err();
         let export_rejected =
@@ -102,6 +465,9 @@ fn finalization_rejects_unrepresented_directory_modes() {
     let archive = out.path().join("setgid-directory.tar");
     let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
     let mut header = tar::Header::new_gnu();
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
     header.set_entry_type(tar::EntryType::Directory);
     header.set_size(0);
     header.set_mode(0o2755);
@@ -109,8 +475,15 @@ fn finalization_rejects_unrepresented_directory_modes() {
     builder
         .append_data(&mut header, "tree", std::io::empty())
         .unwrap();
+    let mut header = tar::Header::new_gnu();
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_mode(0o644);
+    header.set_size(6);
+    header.set_cksum();
     builder
-        .append_path_with_name(tree.join("file"), "tree/file")
+        .append_data(&mut header, "tree/file", &b"source"[..])
         .unwrap();
     builder.finish().unwrap();
     drop(builder);
@@ -433,6 +806,9 @@ fn merge_repair_archive_regular_files_require_canonical_modes() {
         let archive = root.path().join(format!("mode-{mode:o}.tar"));
         let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
         let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
         header.set_size(6);
         header.set_mode(mode);
         header.set_cksum();
@@ -3131,6 +3507,7 @@ fn standard_tar_symlinks_use_target_executable_bits() {
         let archive = root.path().join("standard.tar");
         assert!(
             std::process::Command::new("tar")
+                .args(["--owner=0", "--group=0", "--numeric-owner", "--mtime=@0"])
                 .arg("-cf")
                 .arg(&archive)
                 .arg("-C")
@@ -3158,14 +3535,28 @@ fn git_pax_metadata_does_not_shadow_a_real_file_with_its_name() {
     let mut tar = tar::Builder::new(fs::File::create(&archive).unwrap());
     let payload = b"52 comment=0123456789012345678901234567890123456789\n";
     let mut header = tar::Header::new_ustar();
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
     header.set_entry_type(tar::EntryType::XGlobalHeader);
     header.set_mode(0o644);
     header.set_size(payload.len() as u64);
     header.set_cksum();
     tar.append_data(&mut header, "pax_global_header", &payload[..])
         .unwrap();
-    tar.append_path_with_name(root.path().join("pax_global_header"), "pax_global_header")
-        .unwrap();
+    let mut header = tar::Header::new_ustar();
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_mode(0o644);
+    header.set_size(b"real tracked source".len() as u64);
+    header.set_cksum();
+    tar.append_data(
+        &mut header,
+        "pax_global_header",
+        &b"real tracked source"[..],
+    )
+    .unwrap();
     tar.finish().unwrap();
     let spec = InventorySpec {
         root: root.path().into(),
@@ -3249,6 +3640,7 @@ fn archive_verifiers_reject_devices_and_unopened_fifos() {
 #[test]
 fn standard_tar_dot_root_roundtrips_files_and_links() {
     let root = tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
     let out = tempdir().unwrap();
     fs::write(root.path().join("source"), b"source").unwrap();
     std::os::unix::fs::symlink("./source", root.path().join("link")).unwrap();
@@ -3259,6 +3651,7 @@ fn standard_tar_dot_root_roundtrips_files_and_links() {
     let archive = out.path().join("standard.tar");
     assert!(
         std::process::Command::new("tar")
+            .args(["--owner=0", "--group=0", "--numeric-owner", "--mtime=@0"])
             .arg("-cf")
             .arg(&archive)
             .arg("-C")
@@ -3272,6 +3665,7 @@ fn standard_tar_dot_root_roundtrips_files_and_links() {
     let duplicate = out.path().join("duplicate.tar");
     assert!(
         std::process::Command::new("tar")
+            .args(["--owner=0", "--group=0", "--numeric-owner", "--mtime=@0"])
             .arg("-cf")
             .arg(&duplicate)
             .arg("-C")

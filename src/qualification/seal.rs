@@ -38,9 +38,12 @@ fn gate_label(name: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn copy(source: &Path, destination: &Path) -> io::Result<String> {
+fn copy(source: &Path, destination: &Path, max_bytes: u64) -> io::Result<String> {
     let input = regular_file(source)?;
     let before = input.metadata()?;
+    if before.len() > max_bytes {
+        return Err(invalid("retained log size exceeds the producer limit"));
+    }
     copy_opened(input, before, destination)
 }
 
@@ -73,7 +76,7 @@ fn copy_opened(input: File, before: fs::Metadata, destination: &Path) -> io::Res
     output.flush()?;
     output.sync_all()?;
     let hash = format!("{:x}", hash.finalize());
-    if sha256_file(destination)? != hash {
+    if sha256_open_file_checked(regular_file(destination)?, before.len(), &mut || Ok(()))? != hash {
         return Err(invalid("artifact changed during copy"));
     }
     Ok(hash)
@@ -118,7 +121,12 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
             "stderr.log",
         ] {
             let relative = format!("gates/{name}/{file}");
-            let hash = copy(&run.join(file), &directory.join(&relative))?;
+            let limit = if file.ends_with(".log") {
+                super::boundary::MAX_LOG_BYTES
+            } else {
+                u64::MAX
+            };
+            let hash = copy(&run.join(file), &directory.join(&relative), limit)?;
             if file == "receipt.json" {
                 gates.insert(name.clone(), hash.clone());
             }
@@ -137,7 +145,7 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
                 .parent()
                 .ok_or_else(|| invalid("artifact has no parent"))?,
         )?;
-        artifacts.insert(relative, copy(source, &destination)?);
+        artifacts.insert(relative, copy(source, &destination, u64::MAX)?);
     }
     let seal = Seal {
         schema_version: 1,
@@ -148,7 +156,7 @@ pub fn seal(request: &SealRequest, directory: &Path) -> io::Result<Seal> {
     if seal.gates != request.expected_receipts {
         return Err(invalid("required receipt changed during seal"));
     }
-    verify_index(directory, &seal.artifacts)?;
+    verify_index_bounded(directory, &seal.artifacts, seal_artifact_limit)?;
     write_json(&directory.join("seal.json"), &seal)?;
     Ok(seal)
 }
@@ -172,7 +180,6 @@ pub fn verify_seal(
             "seal has a different composition or required gate set",
         ));
     }
-    verify_index(directory, &seal.artifacts)?;
     for (name, hash) in &seal.gates {
         gate_label(name)?;
         for file in [
@@ -194,7 +201,18 @@ pub fn verify_seal(
         let run = evidence_path(&root, &Path::new("gates").join(name))?;
         super::receipt::verify_run_bound(&run, Some(expected), Some(hash))?;
     }
+    verify_index_bounded(directory, &seal.artifacts, seal_artifact_limit)?;
     Ok(seal)
+}
+
+fn seal_artifact_limit(path: &str) -> u64 {
+    let mut parts = path.split('/');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("gates"), Some(_), Some("stdout.log" | "stderr.log"), None) => {
+            super::boundary::MAX_LOG_BYTES
+        }
+        _ => u64::MAX,
+    }
 }
 
 /// Export selected source as a deterministic tar, with executable bits and relative links.
@@ -337,7 +355,7 @@ pub fn verify_source_archive_sha256(archive: &Path, expected: &Inventory) -> io:
     if expected.schema_version != 1 || expected.files.is_empty() {
         return Err(invalid("invalid expected archive inventory"));
     }
-    let (files, hash) = archive_inventory(archive)?;
+    let (files, hash) = archive_inventory(archive, true)?;
     if files != expected.files {
         return Err(invalid("archive inventory differs from qualified source"));
     }
@@ -350,7 +368,7 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
     if expected.is_empty() {
         return Err(invalid("legacy archive inventory is empty"));
     }
-    let actual: ArtifactIndex = archive_inventory(archive)?
+    let actual: ArtifactIndex = archive_inventory(archive, false)?
         .0
         .into_iter()
         .map(|(name, file)| (name, file.sha256))
@@ -363,11 +381,17 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
     Ok(actual.len())
 }
 
-fn archive_inventory(archive: &Path) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
-    archive_inventory_from_file(regular_file(archive)?)
+fn archive_inventory(
+    archive: &Path,
+    canonical_semantics: bool,
+) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
+    archive_inventory_from_file(regular_file(archive)?, canonical_semantics)
 }
 
-fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
+fn archive_inventory_from_file(
+    file: File,
+    canonical_semantics: bool,
+) -> io::Result<(BTreeMap<String, SourceFile>, String)> {
     struct HashingReader<R> {
         input: R,
         hash: Sha256,
@@ -400,6 +424,22 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
     for entry in tar.entries()? {
         let mut entry = entry?;
         let kind = entry.header().entry_type();
+        if canonical_semantics
+            && (entry.header().uid()? != 0
+                || entry.header().gid()? != 0
+                || entry
+                    .header()
+                    .username_bytes()
+                    .is_some_and(|name| !name.is_empty())
+                || entry
+                    .header()
+                    .groupname_bytes()
+                    .is_some_and(|name| !name.is_empty()))
+        {
+            return Err(invalid(
+                "canonical source archives require numeric root ownership without named overrides",
+            ));
+        }
         if kind.is_pax_global_extensions() {
             // Git archive adds a commit comment. Never ignore global path/size
             // overrides, which tar readers may apply to every following file.
@@ -422,6 +462,9 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
             continue;
         }
         let path = entry.path()?.into_owned();
+        if canonical_semantics && entry.header().mtime()? != 0 {
+            return Err(invalid("canonical source archives require timestamp zero"));
+        }
         relative(&path)?;
         let name = path_text(&path)?.trim_start_matches("./").to_owned();
         reserved_bytes = reserved_bytes.saturating_add(source_entry_bytes(
@@ -441,7 +484,7 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
         let executable = entry.header().mode()? & 0o111 != 0;
         add_parent_directories(&name, &mut directories)?;
         if kind.is_dir() {
-            if name != "." && !super::canonical_directory_mode(entry.header().mode()?) {
+            if canonical_semantics && !super::canonical_directory_mode(entry.header().mode()?) {
                 return Err(invalid(
                     "source inventory v1 requires archive directory mode 0755",
                 ));
@@ -455,7 +498,11 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
                 .link_name()?
                 .ok_or_else(|| invalid("missing archive link target"))?
                 .into_owned();
-            let text = path_text(&link)?;
+            let text = if canonical_semantics {
+                source_link_text(&link)?
+            } else {
+                path_text(&link)?
+            };
             reserved_bytes = reserved_bytes.saturating_add(text.len().saturating_mul(6));
             if reserved_bytes > MAX_SOURCE_JSON_BYTES {
                 return Err(invalid("archive serialized-size budget exceeded"));
@@ -465,7 +512,9 @@ fn archive_inventory_from_file(file: File) -> io::Result<(BTreeMap<String, Sourc
         } else if kind.is_file() {
             // Rust tar includes the redundant POSIX regular-file type bits.
             // Neither encoding may carry unrepresented permission bits.
-            if !matches!(entry.header().mode()?, 0o644 | 0o755 | 0o100644 | 0o100755) {
+            if canonical_semantics
+                && !matches!(entry.header().mode()?, 0o644 | 0o755 | 0o100644 | 0o100755)
+            {
                 return Err(invalid(
                     "source inventory v1 requires archive file mode 0644 or 0755",
                 ));
@@ -553,12 +602,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn final_review_seal_index_rechecks_log_bounds_after_prior_verification() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("gates/required")).unwrap();
+        let path = root.path().join("gates/required/stdout.log");
+        fs::write(&path, b"original").unwrap();
+        let index = [(
+            "gates/required/stdout.log".into(),
+            sha256_file(&path).unwrap(),
+        )]
+        .into();
+        verify_index_bounded(root.path(), &index, seal_artifact_limit).unwrap();
+        // A different read phase must independently admit its opened descriptor.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(1 << 40)
+            .unwrap();
+        let error = verify_index_bounded(root.path(), &index, seal_artifact_limit).unwrap_err();
+        assert!(error.to_string().contains("log size"), "{error}");
+        fs::rename(&path, root.path().join("old")).unwrap();
+        fs::File::create(&path).unwrap().set_len(1 << 40).unwrap();
+        assert!(
+            verify_index_bounded(root.path(), &index, seal_artifact_limit)
+                .unwrap_err()
+                .to_string()
+                .contains("log size")
+        );
+    }
+
+    #[test]
     fn new_review_archive_inventory_rejects_excess_entries_during_parsing() {
         let root = tempfile::tempdir().unwrap();
         let archive = root.path().join("many.tar");
         let mut builder = tar::Builder::new(File::create(&archive).unwrap());
         for i in 0..=MAX_SOURCE_FILES {
             let mut header = tar::Header::new_gnu();
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_mtime(0);
             header.set_size(0);
             header.set_mode(0o644);
             header.set_cksum();
@@ -568,7 +651,7 @@ mod tests {
         }
         builder.finish().unwrap();
         drop(builder);
-        let error = archive_inventory(&archive).unwrap_err();
+        let error = archive_inventory(&archive, true).unwrap_err();
         assert!(error.to_string().contains("budget"), "{error}");
     }
 
@@ -596,6 +679,9 @@ mod tests {
         let path = root.path().join("source.tar");
         let mut builder = tar::Builder::new(File::create(&path).unwrap());
         let mut header = tar::Header::new_gnu();
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
         header.set_size(8);
         header.set_mode(0o644);
         header.set_cksum();
@@ -617,7 +703,7 @@ mod tests {
         let file = regular_file(&path).unwrap();
         fs::rename(&path, root.path().join("original.tar")).unwrap();
         fs::write(&path, b"replacement that was not verified").unwrap();
-        let (files, verified_hash) = archive_inventory_from_file(file).unwrap();
+        let (files, verified_hash) = archive_inventory_from_file(file, true).unwrap();
         assert_eq!(verified_hash, original_hash);
         assert_ne!(verified_hash, sha256_file(&path).unwrap());
         assert_eq!(

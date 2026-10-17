@@ -23,6 +23,11 @@ snapshot root is capped at 1 GiB and 131,072 inodes; exceeding either bound fail
 closed, independently of the work-tree quota. Public system tool/library trees
 remain platform-owned runtime dependencies, not a claim to capture the operating
 system. They are the only permitted host directory binds.
+Admission counts the snapshot root, private copies, shared parents, boundary and
+proc entries, and visible mount placeholders within the existing inode ceiling.
+Shared parents count once; individually mounted files need both a private copy
+and a mount placeholder. Work-tmpfs contents and attached public-tree contents
+use their own backing filesystems rather than the snapshot's inode budget.
 Inventory collection also admits at most 131,072 file entries and conservatively
 reserves a 64 MiB serialized-evidence budget before inserting each entry. The
 combined named sources share those bounds. Fingerprints stream through the same
@@ -41,7 +46,7 @@ symlink inodes, symlink targets and links outside the selected tree. Inventory v
 and its tar export do not represent inode aliases; select independent source copies instead.
 Selected and structural source directories must have mode `0755` on Unix;
 inventory v1 cannot bind any other directory mode, and archive verification rejects
-noncanonical directory headers rather than silently normalizing their semantics.
+noncanonical directory headers, including a structural `.` root, rather than silently normalizing their semantics.
 Regular archive files must use mode `0644` or `0755`; special or otherwise
 unrepresented permission bits cannot be hidden behind the executable flag.
 The redundant POSIX regular-file type bits emitted by Rust's tar encoder are allowed.
@@ -50,6 +55,13 @@ umask; the producer retains its originally inherited umask.
 Private copied files, symlinks, selected directories and synthesized parents
 use access and modification timestamp zero, matching source archives. This
 normalization completes before any public host tree is attached.
+Canonical archive verification requires zero modification timestamps for files,
+directories and links. The explicitly content-only legacy verifier permits Git's
+archive timestamps and permission modes; it retains the same path, duplicate,
+link, entry-count and serialized-size validation.
+Canonical members use numeric UID/GID zero without named ownership overrides.
+Source-link spelling is bound exactly: redundant separators or embedded `./`
+components are rejected rather than normalized during capture or export.
 Execution and portable run/seal verification require every symlink target to be
 explicitly selected in the same source inventory, so hashing a target cannot
 admit an unmounted dangling link.
@@ -88,6 +100,11 @@ identities. Each retained source selection is nonempty, uses root-relative paths
 and covers exactly its inventory entries; unrelated or missing selections fail
 portable verification too. Earlier schema-5 packets without these snapshot selections or the
 policy identity remain historical, not qualifying evidence.
+Request digests are also selected from the in-memory effective request before
+publication; both published JSON documents must match that selected identity.
+Passing portable receipts require a nonempty effective `argumentZero`, elapsed
+milliseconds strictly below the retained timeout, and `QUALIFICATION_WORK_DIR`,
+`TMPDIR` and `HOME` at their synthesized paths beside the retained sandbox.
 Bootstrap runs before that private root exists. Mutable launcher/executor bytes
 are copied into anonymous executable files, sealed against writes and resizing,
 then checked against the selected digest before launch. The host retains those
@@ -140,6 +157,9 @@ after durable sync, then atomically exposes the completed receipt. Interrupted
 publication discards the staged passing document and may retain a failed,
 cancelled or timed-out disposition within the bounded cleanup budget. Elapsed
 time includes the inventory serialization and durable bulk write.
+Run and seal verification independently admit each opened log descriptor's size
+before hashing, including repeated seal-index reads and publication revalidation.
+Growth during a read is bounded by the admitted size and detected as a change.
 
 Portable evidence rejects symlink hops, ambiguous backslashes and drive-prefix
 artifact names. Original source inventories still support contained relative
@@ -157,7 +177,12 @@ Rust callers can use `collect`, array conversion, or `.into()` on an existing
 `BTreeMap`; serialized bytes remain unchanged. Gate, request, execution-report and coverage JSON are parsed from
 the same opened bytes whose selected hashes are checked. Artifact copying reads
 only the opened descriptor's initial size and rejects changes. Git inventory
-clears inherited repository-selection variables. Coverage requirements reject
+clears inherited repository-selection variables. On Unix it bounds stdout,
+diagnostics, unique entries and serialized-size reservations before admission.
+Nonblocking readers and a 60-second deadline bound discovery; inherited pipe
+writers cannot keep cleanup waiting after Git exits. Failures kill Git's owned
+process group and reap its immediate child. Other platforms explicitly reject
+discovery when these guarantees are unavailable. Coverage requirements reject
 duplicate obligation IDs instead of silently replacing an original method set.
 All public evidence JSON reads share the descriptor-bound 64 MiB limit. Retaining
 a completed work tree replaces prior children, preserving producer deletions and
@@ -166,6 +191,12 @@ main command. Restrictive modes are restored after copying descendants. Retentio
 preserves and hashes access and modification timestamps, including nanoseconds,
 for files, directories and symlinks. Reads avoid changing those retained times.
 The work identity uses the `qualification-work-v2` domain for this expanded contract.
+Extended attributes and POSIX ACLs are not represented by that identity; retention
+and restoration reject them on roots, directories, files and no-follow links
+instead of silently dropping metadata between invocations.
+Work v2 also cannot authenticate hole extents. Retention rejects sparse files
+using the opened descriptor's first hole, rather than densifying them or
+silently consuming a different amount of the next invocation's tmpfs quota.
 The caller pins the original evidence/work directory inodes for the entire run.
 PID 1 opens without symlinks and checks those identities before any restoration
 or producer launch, including the first invocation. Clearing and copying use
