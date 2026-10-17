@@ -234,7 +234,11 @@ relative link text and executable bits. Escaping links, non-UTF-8 names, special
 files and empty inventories are rejected. Selection of a deleted tracked file
 fails rather than silently dropping that file.
 Regular source files, including symlink targets, must have exactly mode `0644`
-or `0755`; other permissions cannot be represented by inventory v1. Canonical
+or `0755`; other permissions cannot be represented by inventory v1. Linux source
+capture also rejects xattrs and POSIX ACLs on selected files, symlinks, targets
+and represented directories, including implicit parents. Metadata inspection
+errors fail admission; a filesystem or Nix builder reporting unsupported xattrs
+cannot expose that metadata through the native producer API either. Canonical
 archive verification rejects local PAX metadata, including xattrs, ACLs and
 ownership/timestamp overrides. The explicit legacy content-only route continues
 to verify historical archives without claiming that metadata parity.
@@ -250,6 +254,9 @@ It distinguishes passed, failed, cancelled, timed-out and source-changed;
 it retains the actual program, explicit tool bytes/versions, request identity,
 before/after composition and logs. Missing final receipts do not pass. A zero
 child exit cannot pass if source, inputs or tool bytes changed.
+A report received through the private native channel must remain present and
+match that channel's selected digest through finalization. Removing its retained
+pathname produces a failed receipt rather than a passing but unverifiable run.
 
 ## Verify and seal
 
@@ -276,7 +283,10 @@ change source bytes must be separately applied and checked by their owning engin
 selected bytes. `verify-archive source.tar --inventory inventory.json` verifies
 without extraction. Archives preserve executable bits and relative symlinks;
 every link target must be included. Duplicate entries, hard links, escaping/cyclic
-links and special archive members fail closed. The exporter rechecks source after
+links and special archive members fail closed. Canonical member paths preserve
+their exact spelling: one leading `./` prefix and a directory's trailing `/` are
+supported, while internal dot components, repeated separators and trailing
+separators on files/symlinks are rejected. The exporter rechecks source after
 writing. Existing archive paths are never overwritten.
 
 `seal --request seal-request.json --out /state/handoff` takes an explicit

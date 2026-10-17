@@ -18,6 +18,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Require captured native reports through finalization, reject unrepresented
+  Linux source xattrs/ACLs, and reject normalized archive member spellings.
 - Reject unrepresentable source file permissions and local PAX metadata in
   canonical archives. Require the supervisor's `/dev/null` mount in portable
   passing receipts.
