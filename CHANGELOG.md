@@ -18,6 +18,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Reject unrepresentable source file permissions and local PAX metadata in
+  canonical archives. Require the supervisor's `/dev/null` mount in portable
+  passing receipts.
+- Exercise Nix's blocked-xattr behavior during package checks while requiring
+  real xattr/ACL rejection in native CI; use a mapped UID in ACL fixtures.
 - Integrate native original-producer custody with Simit's accepted immutable
   observer, complete source-owned job enrollment, scoped credentials, bounded
   phases and separately retained preflight/retention diagnostics.

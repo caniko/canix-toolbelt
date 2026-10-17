@@ -203,6 +203,14 @@ and the current AppArmor label when admission fails. A successful setup does not
 replace the package tests or the full installable/flake matrix.
 Native test concurrency is capped at two through Simit's `extra_env`, matching
 the hosted build-core budget while retaining all tests and their finite deadlines.
+Native CI also sets `CANIX_QUALIFICATION_REQUIRE_XATTRS=1`: all six real user-xattr
+and POSIX-ACL fixtures must be created and rejected by work retention. Nix's
+builder seccomp filter deliberately returns `ENOTSUP` for xattr creation and
+enumeration. Inside that builder alone, the same test verifies both blocked
+operations and successful copying of metadata-free work. The native requirement
+is not inherited by pure Nix derivations; unsupported native fixtures fail.
+Named ACL users use the current mapped UID so fixtures also work in single-UID
+build namespaces.
 The PID-1 binary shares only the minimal execution-report wire module with the
 library, avoiding the full operator dependency graph in its repeatedly hashed
 debug executable.
@@ -223,6 +231,13 @@ there are no inferred build-directory exclusions. Source identities bind content
 relative link text and executable bits. Escaping links, non-UTF-8 names, special
 files and empty inventories are rejected. Selection of a deleted tracked file
 fails rather than silently dropping that file.
+Regular source files, including symlink targets, must have exactly mode `0644`
+or `0755`; other permissions cannot be represented by inventory v1. Canonical
+archive verification rejects local PAX metadata, including xattrs, ACLs and
+ownership/timestamp overrides. The explicit legacy content-only route continues
+to verify historical archives without claiming that metadata parity.
+Portable execution verification requires the `/dev/null` public mount used for
+producer stdin, in addition to rejecting mounts outside the runtime allowlist.
 
 Execution creates a new directory and a pending marker before spawning. Existing
 evidence is never reused. stdout/stderr stream to files. A finite deadline is
