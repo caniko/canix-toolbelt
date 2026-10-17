@@ -336,7 +336,7 @@
           domain = "canix-toolbelt.tartanoglu.com";
         };
         devShells.default = pkgs.mkShell {
-          packages = [config.treefmt.build.wrapper pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.cargo-audit pkgs.cmake pkgs.pkg-config pkgs.perl];
+          packages = [config.treefmt.build.wrapper pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.cargo-audit pkgs.cmake pkgs.pkg-config pkgs.perl] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.util-linux];
           # This shell uses stable Rust; do not inherit Canix's nightly-only flags.
           RUSTFLAGS = "";
           CARGO_ENCODED_RUSTFLAGS = "";

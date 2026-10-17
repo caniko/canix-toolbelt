@@ -1,0 +1,955 @@
+//! Source-bound qualification without checkout, toolchain or fleet defaults.
+//!
+//! Inventories and receipts are evidence, not signatures or test-coverage claims.
+//! Callers select all source roots, inputs, required gates and execution policy.
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::path::{Component, Path, PathBuf};
+
+mod boundary;
+pub use boundary::SourceFile;
+mod json;
+pub(crate) use json::{invalid, invalid_json, read_bound_json, regular_file};
+mod receipt;
+pub use receipt::*;
+mod coverage;
+pub use coverage::*;
+mod execution;
+pub use execution::ExecutionReport;
+pub mod graph;
+mod legacy;
+pub use legacy::*;
+mod seal;
+pub use seal::*;
+#[cfg(feature = "qualification-cli")]
+pub mod cli;
+
+/// Sorted portable artifact paths and SHA-256 hashes (also the Python index format).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ArtifactIndex(
+    #[serde(deserialize_with = "unique_artifact_map")] BTreeMap<String, String>,
+);
+
+fn unique_artifact_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    unique_map_named(deserializer, "artifact index")
+}
+
+pub(crate) fn unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    unique_map_named(deserializer, "qualification map")
+}
+
+fn unique_map_named<'de, D, V>(
+    deserializer: D,
+    name: &'static str,
+) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    struct Unique<V>(&'static str, std::marker::PhantomData<V>);
+    impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for Unique<V> {
+        type Value = BTreeMap<String, V>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "a {} with unique keys", self.0)
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, V>()? {
+                if values.insert(key, value).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate {} key",
+                        self.0
+                    )));
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(Unique(name, std::marker::PhantomData))
+}
+
+impl ArtifactIndex {
+    /// Construct an empty, sorted index.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl std::ops::Deref for ArtifactIndex {
+    type Target = BTreeMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ArtifactIndex {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl<const N: usize> From<[(String, String); N]> for ArtifactIndex {
+    fn from(values: [(String, String); N]) -> Self {
+        Self(values.into())
+    }
+}
+impl From<BTreeMap<String, String>> for ArtifactIndex {
+    fn from(values: BTreeMap<String, String>) -> Self {
+        Self(values)
+    }
+}
+impl FromIterator<(String, String)> for ArtifactIndex {
+    fn from_iter<T: IntoIterator<Item = (String, String)>>(values: T) -> Self {
+        Self(values.into_iter().collect())
+    }
+}
+impl IntoIterator for ArtifactIndex {
+    type Item = (String, String);
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a ArtifactIndex {
+    type Item = (&'a String, &'a String);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// Explicit source selection. No build-directory exclusions are inferred.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InventorySpec {
+    /// Root containing every selected source and symlink target.
+    pub root: PathBuf,
+    /// Root-relative files or directories, recursively selected.
+    pub paths: Vec<PathBuf>,
+}
+
+/// Versioned source inventory. Link text and executable bits bind source identity.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Inventory {
+    /// Wire format version; currently 1.
+    pub schema_version: u32,
+    /// Sorted, root-relative entries.
+    #[serde(deserialize_with = "unique_map")]
+    pub files: BTreeMap<String, SourceFile>,
+}
+
+/// Hash an opened regular file incrementally. Devices and FIFOs are rejected.
+pub fn sha256_file(path: &Path) -> io::Result<String> {
+    sha256_file_checked(path, &mut || Ok(()))
+}
+
+pub(crate) fn sha256_file_checked(
+    path: &Path,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    check()?;
+    sha256_open_file_checked(regular_file(path)?, u64::MAX, check)
+}
+
+fn sha256_open_file_checked(
+    file: File,
+    max_bytes: u64,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    use std::io::Seek;
+    let mut file = file;
+    file.rewind()?;
+    let before = file.metadata()?;
+    if before.len() > max_bytes {
+        return Err(invalid("retained log size exceeds the producer limit"));
+    }
+    let bound = before
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| invalid("file length cannot be bounded"))?;
+    let mut input = (&file).take(bound);
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        check()?;
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    let after = file.metadata()?;
+    // One extra byte detects pseudo-files that report zero length but expose
+    // content, as well as growth that otherwise hides behind the read bound.
+    if input.limit() != 1
+        || before.len() != after.len()
+        || before.modified()? != after.modified()?
+    {
+        return Err(invalid("file changed while hashing"));
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// Stable pretty JSON bytes, with two-space indentation and a final newline.
+pub fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut bytes = Vec::new();
+    let mut output = receipt::CheckedWriter {
+        inner: &mut bytes,
+        check: &mut || Ok(()),
+        count: 0,
+    };
+    serde_json::to_writer_pretty(&mut output, value).map_err(invalid_json)?;
+    output.write_all(b"\n")?;
+    Ok(bytes)
+}
+
+/// Load at most 64 MiB of typed JSON from one opened regular-file descriptor.
+pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
+    read_bound_json(path, None)
+}
+
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(&json_bytes(value)?)?;
+    file.sync_all()
+}
+
+fn write_bound_json_checked(
+    path: &Path,
+    value: &impl Serialize,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<String> {
+    // Select trusted memory before exposing a path that another process can edit.
+    let selected = fingerprint(value)?;
+    write_json(path, value)?;
+    check()?;
+    if sha256_open_file_checked(regular_file(path)?, MAX_SOURCE_JSON_BYTES as u64, check)?
+        != selected
+    {
+        return Err(invalid(
+            "published JSON differs from selected in-memory evidence",
+        ));
+    }
+    Ok(selected)
+}
+
+/// SHA-256 identity of the canonical serialization of a typed value.
+pub fn fingerprint(value: &impl Serialize) -> io::Result<String> {
+    use std::io::Write;
+    let mut hash = Sha256::new();
+    let mut output = receipt::CheckedWriter {
+        inner: &mut hash,
+        check: &mut || Ok(()),
+        count: 0,
+    };
+    serde_json::to_writer_pretty(&mut output, value).map_err(invalid_json)?;
+    output.write_all(b"\n")?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn canonical_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        && path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+}
+
+const MAX_SOURCE_FILES: usize = 131_072;
+const MAX_SOURCE_JSON_BYTES: usize = 64 * 1024 * 1024;
+
+fn source_entry_bytes(path: &str, file: &SourceFile) -> usize {
+    // ponytail: reserve worst-case escaping within 64 MiB; exact accounting can
+    // replace this conservative reservation if a valid large corpus needs it.
+    // At most six serialized bytes per UTF-8 byte, plus fixed JSON fields/hash.
+    path.len()
+        .saturating_add(file.link.as_ref().map_or(0, String::len))
+        .saturating_mul(6)
+        .saturating_add(256)
+}
+
+fn inventory_budget(
+    inventory: &Inventory,
+    entries: &mut usize,
+    bytes: &mut usize,
+) -> io::Result<()> {
+    *entries = entries.saturating_add(inventory.files.len());
+    *bytes = inventory.files.iter().fold(*bytes, |bytes, (path, file)| {
+        bytes.saturating_add(source_entry_bytes(path, file))
+    });
+    if *entries > MAX_SOURCE_FILES || *bytes > MAX_SOURCE_JSON_BYTES {
+        return Err(invalid(
+            "combined source inventories exceed entry or serialized-size budget",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn relative(path: &Path) -> io::Result<()> {
+    if path.as_os_str().is_empty()
+        || path_text(path)?.contains(['\\', ':'])
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(invalid(format!(
+            "expected a root-relative path: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn artifact_key(name: &str) -> io::Result<()> {
+    if name.contains(['\\', ':']) {
+        return Err(invalid("artifact keys must use slash-only portable paths"));
+    }
+    relative(Path::new(name))
+}
+
+// Retained evidence must survive relocation. Disallow symlink hops, including
+// in-root absolute links and directory links, rather than following host paths.
+pub(crate) fn evidence_path(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    relative(path)?;
+    let mut selected = root.to_path_buf();
+    for part in path.components() {
+        if let Component::Normal(name) = part {
+            selected.push(name);
+            if fs::symlink_metadata(&selected)?.file_type().is_symlink() {
+                return Err(invalid("symlinks are not portable evidence artifacts"));
+            }
+        }
+    }
+    contained(root, path)
+}
+
+pub(crate) fn contained(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    relative(path)?;
+    let resolved = root.join(path).canonicalize()?;
+    if !resolved.starts_with(root) {
+        return Err(invalid(format!("path escapes root: {}", path.display())));
+    }
+    Ok(resolved)
+}
+
+pub(crate) fn path_text(path: &Path) -> io::Result<String> {
+    path.components()
+        .map(|part| match part {
+            Component::Normal(name) => {
+                let text = name.to_str().ok_or_else(|| {
+                    invalid("non-UTF-8 paths cannot be represented in a portable inventory")
+                })?;
+                // Unix permits drive-relative names and backslashes that have
+                // different path semantics on Windows, including in link text.
+                if text.contains(['\\', ':']) {
+                    return Err(invalid("backslash or colon in a portable path component"));
+                }
+                Ok(text.to_owned())
+            }
+            Component::CurDir => Ok(".".into()),
+            Component::ParentDir => Ok("..".into()),
+            _ => Err(invalid("absolute paths are not portable inventory paths")),
+        })
+        .collect::<io::Result<Vec<_>>>()
+        .map(|parts| parts.join("/"))
+}
+
+fn source_link_text(path: &Path) -> io::Result<String> {
+    let text = path_text(path)?;
+    if path.as_os_str() != Path::new(&text).as_os_str() {
+        return Err(invalid("source symlink spelling is not canonical"));
+    }
+    Ok(text)
+}
+
+fn collect(
+    root: &Path,
+    path: &Path,
+    files: &mut BTreeMap<String, SourceFile>,
+    bytes: &mut usize,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    check()?;
+    let resolved = contained(root, path)?;
+    let metadata = fs::symlink_metadata(root.join(path))?;
+    if metadata.is_dir() {
+        canonical_source_directory(&root.join(path))?;
+        let mut entries = fs::read_dir(root.join(path))?.peekable();
+        if entries.peek().is_none() {
+            return Err(invalid(
+                "empty directories cannot be represented by source inventory v1",
+            ));
+        }
+        for entry in entries {
+            let child = entry?.path();
+            if child.file_name().is_some_and(|name| name == ".git") {
+                return Err(invalid(
+                    "select source paths explicitly instead of recursively including .git",
+                ));
+            }
+            collect(
+                root,
+                child
+                    .strip_prefix(root)
+                    .map_err(|e| invalid(e.to_string()))?,
+                files,
+                bytes,
+                check,
+            )?;
+        }
+        return Ok(());
+    }
+    if !resolved.is_file() {
+        return Err(invalid(format!(
+            "not a regular source file: {}",
+            path.display()
+        )));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        reject_source_extended_metadata(&root.join(path))?;
+        if metadata.file_type().is_symlink() {
+            reject_source_extended_metadata(&resolved)?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Inventory v1 and its tar export cannot preserve inode aliases, even
+        // when the other link lies outside the selected paths or source root.
+        if metadata.nlink() != 1 || fs::metadata(&resolved)?.nlink() != 1 {
+            return Err(invalid(
+                "source hard links cannot be represented by inventory v1",
+            ));
+        }
+    }
+    let link = if metadata.file_type().is_symlink() {
+        let target = fs::read_link(root.join(path))?;
+        if target.is_absolute() {
+            return Err(invalid("absolute symlinks are not portable source"));
+        }
+        Some(source_link_text(&target)?)
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&resolved)?.permissions().mode() & 0o7777;
+        if !matches!(mode, 0o644 | 0o755) {
+            return Err(invalid(
+                "source inventory v1 requires file mode 0644 or 0755",
+            ));
+        }
+        mode == 0o755
+    };
+    #[cfg(not(unix))]
+    let executable = false;
+    let key = path_text(
+        root.join(path)
+            .strip_prefix(root)
+            .map_err(|e| invalid(e.to_string()))?,
+    )?;
+    let key = key.trim_start_matches("./").to_owned();
+    let mut file = SourceFile {
+        sha256: String::new(),
+        executable,
+        link,
+    };
+    let previous = files.get(&key);
+    let next_bytes = bytes
+        .saturating_sub(previous.map_or(0, |old| source_entry_bytes(&key, old)))
+        .saturating_add(source_entry_bytes(&key, &file));
+    if (previous.is_none() && files.len() >= MAX_SOURCE_FILES) || next_bytes > MAX_SOURCE_JSON_BYTES
+    {
+        return Err(invalid(
+            "source inventory exceeds entry or serialized-size budget",
+        ));
+    }
+    file.sha256 = sha256_file_checked(&resolved, check)?;
+    files.insert(key, file);
+    *bytes = next_bytes;
+    Ok(())
+}
+
+pub(super) fn canonical_directory_mode(mode: u32) -> bool {
+    mode & 0o7777 == 0o755
+}
+
+#[cfg(target_os = "linux")]
+fn reject_source_extended_metadata(path: &Path) -> io::Result<()> {
+    match rustix::fs::llistxattr(path, &mut [0u8; 0][..]) {
+        // Filesystems without xattrs, and Nix's filtered builders, cannot expose
+        // this metadata to the producer either. Other inspection errors fail.
+        Ok(0) | Err(rustix::io::Errno::NOTSUP) => Ok(()),
+        Ok(_) => Err(invalid(
+            "source inventory v1 cannot represent extended attributes or ACLs",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Err(invalid(
+            "source link traverses a non-directory or directory symlink",
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    reject_source_extended_metadata(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if !canonical_directory_mode(metadata.permissions().mode()) {
+            return Err(invalid("source inventory v1 requires directory mode 0755"));
+        }
+    }
+    Ok(())
+}
+
+/// Capture exact selected bytes; escaping symlinks and special files fail closed.
+pub fn inventory(spec: &InventorySpec) -> io::Result<Inventory> {
+    inventory_checked(spec, &mut || Ok(()))
+}
+
+pub(crate) fn inventory_checked(
+    spec: &InventorySpec,
+    check: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<Inventory> {
+    if spec.paths.is_empty() {
+        return Err(invalid("source selection is empty"));
+    }
+    let root = spec.root.canonicalize()?;
+    let mut files = BTreeMap::new();
+    let mut bytes = 0;
+    for path in &spec.paths {
+        collect(&root, path, &mut files, &mut bytes, check)?;
+    }
+    if files.is_empty() {
+        return Err(invalid("source inventory is empty"));
+    }
+    for directory in seal::source_directories(&files)? {
+        canonical_source_directory(&root.join(directory))?;
+    }
+    let inventory = Inventory {
+        schema_version: 1,
+        files,
+    };
+    validate_inventory_selection(spec, &inventory)?;
+    Ok(inventory)
+}
+
+// Shared lexical admission: portable receipts cannot consult the producer host.
+fn validate_inventory_selection(spec: &InventorySpec, inventory: &Inventory) -> io::Result<()> {
+    if spec.paths.is_empty() {
+        return Err(invalid("source selection is empty"));
+    }
+    let selections = spec
+        .paths
+        .iter()
+        .map(|path| {
+            relative(path)?;
+            Ok(path
+                .components()
+                .filter(|part| *part != Component::CurDir)
+                .collect::<PathBuf>())
+        })
+        .collect::<io::Result<std::collections::BTreeSet<_>>>()?;
+    let files = inventory
+        .files
+        .keys()
+        .map(|file| {
+            let path = Path::new(file);
+            relative(path)?;
+            if path_text(path)? != *file
+                || path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
+            {
+                return Err(invalid("source inventory paths must be canonical"));
+            }
+            Ok(path.to_path_buf())
+        })
+        .collect::<io::Result<std::collections::BTreeSet<_>>>()?;
+    for path in &selections {
+        if !files
+            .range(path.clone()..)
+            .next()
+            .is_some_and(|file| file.starts_with(path))
+        {
+            return Err(invalid("source selection is absent from its inventory"));
+        }
+    }
+    for file in files {
+        if !file.ancestors().any(|parent| selections.contains(parent)) {
+            return Err(invalid(
+                "source inventory entry is outside the retained selection",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Select Git-tracked and unignored untracked files using NUL-delimited names.
+/// Gitlinks require an explicit independent inventory, rather than hidden recursion.
+/// Discovery requires Unix nonblocking descriptors and process-group cleanup.
+#[cfg(not(unix))]
+pub fn git_inventory_spec(_root: &Path, _git: &Path) -> io::Result<InventorySpec> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "bounded Git discovery requires Unix",
+    ))
+}
+
+/// Select Git-tracked and unignored untracked files with bounded output and cleanup.
+#[cfg(unix)]
+pub fn git_inventory_spec(root: &Path, git: &Path) -> io::Result<InventorySpec> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    struct Reader<'a, R> {
+        input: R,
+        finished: &'a AtomicBool,
+        deadline: Instant,
+    }
+    impl<R: Read> Read for Reader<'_, R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            loop {
+                if Instant::now() >= self.deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Git discovery deadline exceeded",
+                    ));
+                }
+                match self.input.read(buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if self.finished.load(Ordering::Relaxed) {
+                            return Err(invalid("Git stream stayed open after process completion"));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    result => return result,
+                }
+            }
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut child = std::process::Command::new(git)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_NAMESPACE")
+        .env_remove("GIT_PREFIX")
+        .env_remove("GIT_CEILING_DIRECTORIES")
+        .env_remove("GIT_DISCOVERY_ACROSS_FILESYSTEM")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z", "-co", "--exclude-standard"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let group = rustix::process::Pid::from_raw(child.id() as i32)
+        .ok_or_else(|| invalid("invalid Git process group"))?;
+    let result = (|| {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| invalid("missing Git stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| invalid("missing Git stderr"))?;
+        rustix::fs::fcntl_setfl(
+            &stdout,
+            rustix::fs::fcntl_getfl(&stdout)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        rustix::fs::fcntl_setfl(
+            &stderr,
+            rustix::fs::fcntl_getfl(&stderr)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        let failed = AtomicBool::new(false);
+        let finished = AtomicBool::new(false);
+        let paths = std::thread::scope(|scope| -> io::Result<_> {
+            let paths = scope.spawn(|| {
+                let result = (|| -> io::Result<_> {
+                    let input = Reader {
+                        input: stdout,
+                        finished: &finished,
+                        deadline,
+                    };
+                    let mut reader = BufReader::new(input.take(MAX_SOURCE_JSON_BYTES as u64 + 1));
+                    let mut paths = std::collections::BTreeSet::new();
+                    let mut bytes = 0usize;
+                    let mut consumed = 0usize;
+                    let mut name = Vec::new();
+                    while reader.read_until(0, &mut name)? != 0 {
+                        consumed = consumed.saturating_add(name.len());
+                        if consumed > MAX_SOURCE_JSON_BYTES {
+                            return Err(invalid("Git output byte budget exceeded"));
+                        }
+                        if name.pop() != Some(0) {
+                            return Err(invalid("unterminated Git inventory path"));
+                        }
+                        if !name.is_empty() {
+                            let text = std::str::from_utf8(&name)
+                                .map_err(|error| invalid(error.to_string()))?;
+                            let path = PathBuf::from(text);
+                            relative(&path)?;
+                            if !paths.contains(&path) {
+                                bytes = bytes.saturating_add(source_entry_bytes(
+                                    text,
+                                    &SourceFile {
+                                        sha256: String::new(),
+                                        executable: false,
+                                        link: None,
+                                    },
+                                ));
+                                if paths.len() >= MAX_SOURCE_FILES || bytes > MAX_SOURCE_JSON_BYTES
+                                {
+                                    return Err(invalid(
+                                        "Git inventory entry or serialized-size budget exceeded",
+                                    ));
+                                }
+                                if root.join(&path).is_dir() {
+                                    return Err(invalid(format!(
+                                        "gitlink requires a separate source selection: {}",
+                                        path.display()
+                                    )));
+                                }
+                                paths.insert(path);
+                            }
+                        }
+                        name.clear();
+                    }
+                    Ok(paths)
+                })();
+                if result.is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+                result
+            });
+            let diagnostics = scope.spawn(|| {
+                let result = (|| -> io::Result<_> {
+                    let mut bytes = Vec::new();
+                    Reader {
+                        input: stderr,
+                        finished: &finished,
+                        deadline,
+                    }
+                    .take(65537)
+                    .read_to_end(&mut bytes)?;
+                    if bytes.len() > 65536 {
+                        return Err(invalid("Git diagnostic budget exceeded"));
+                    }
+                    Ok(bytes)
+                })();
+                if result.is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+                result
+            });
+            let status = loop {
+                if failed.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                    let _ =
+                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                    let _ = child.kill();
+                }
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(error);
+                    }
+                }
+            };
+            finished.store(true, Ordering::Relaxed);
+            let paths = paths
+                .join()
+                .map_err(|_| invalid("Git inventory reader panicked"))?;
+            let diagnostics = diagnostics
+                .join()
+                .map_err(|_| invalid("Git diagnostic reader panicked"))?;
+            let paths = paths?;
+            let diagnostics = diagnostics?;
+            if !status?.success() {
+                return Err(invalid(String::from_utf8_lossy(&diagnostics)));
+            }
+            Ok(paths.into_iter().collect())
+        })?;
+        Ok(InventorySpec {
+            root: root.into(),
+            paths,
+        })
+    })();
+    if result.is_err() {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        let _ = child.kill();
+        child.wait()?;
+    }
+    result
+}
+
+/// Verify every selected artifact's bytes. Extra files do not establish acceptance.
+pub fn verify_index(root: &Path, index: &ArtifactIndex) -> io::Result<usize> {
+    verify_index_bounded(root, index, |_| u64::MAX)
+}
+
+fn verify_index_bounded(
+    root: &Path,
+    index: &ArtifactIndex,
+    limit: impl Fn(&str) -> u64,
+) -> io::Result<usize> {
+    if index.is_empty() {
+        return Err(invalid("artifact index is empty"));
+    }
+    let root = root.canonicalize()?;
+    for (path, expected) in index {
+        artifact_key(path)?;
+        if sha256_open_file_checked(
+            regular_file(&evidence_path(&root, Path::new(path))?)?,
+            limit(path),
+            &mut || Ok(()),
+        )? != *expected
+        {
+            return Err(invalid(format!("artifact hash mismatch: {path}")));
+        }
+    }
+    Ok(index.len())
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn late_review_json_publication_cannot_select_a_substituted_request() {
+        for replace in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("request.json");
+            let value = serde_json::json!({"command":["/bin/sh", "-c", "original"]});
+            let mut changed = false;
+            let result = write_bound_json_checked(&path, &value, &mut || {
+                if !changed {
+                    if replace {
+                        fs::rename(&path, root.path().join("original.json"))?;
+                    }
+                    fs::write(
+                        &path,
+                        json_bytes(
+                            &serde_json::json!({"command":["/bin/sh", "-c", "substituted"]}),
+                        )?,
+                    )?;
+                    changed = true;
+                }
+                Ok(())
+            });
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("selected in-memory")
+            );
+        }
+    }
+
+    #[test]
+    fn review_resolution_inventory_refuses_an_entry_before_exceeding_its_limit() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("extra"), b"extra").unwrap();
+        let file = SourceFile {
+            sha256: "a".repeat(64),
+            executable: false,
+            link: None,
+        };
+        let mut files = (0..131_072)
+            .map(|i| (format!("file-{i}"), file.clone()))
+            .collect();
+        assert!(
+            collect(
+                root.path(),
+                Path::new("extra"),
+                &mut files,
+                &mut 0,
+                &mut || Ok(())
+            )
+            .is_err()
+        );
+        files.clear();
+        let mut bytes = MAX_SOURCE_JSON_BYTES;
+        assert!(
+            collect(
+                root.path(),
+                Path::new("extra"),
+                &mut files,
+                &mut bytes,
+                &mut || Ok(())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn review_resolution_serialization_is_bounded_before_allocating_evidence() {
+        let large = "x".repeat(64 * 1024 * 1024);
+        assert!(fingerprint(&large).is_err());
+        assert!(json_bytes(&large).is_err());
+    }
+
+    #[test]
+    fn artifact_indexes_and_embedded_receipt_requirements_reject_duplicates() {
+        let bytes = r#"{"gate":"failed-receipt-hash","gate":"passing-receipt-hash"}"#;
+        assert!(
+            serde_json::from_str::<ArtifactIndex>(bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate artifact index key")
+        );
+        let composition =
+            r#"{"schemaVersion":1,"sources":{"source":"first","source":"second"},"inputs":{}}"#;
+        assert!(serde_json::from_str::<Composition>(composition).is_err());
+        let index: ArtifactIndex = [("a".into(), "digest".into())].into();
+        assert_eq!(serde_json::to_string(&index).unwrap(), r#"{"a":"digest"}"#);
+    }
+
+    #[test]
+    fn selected_json_cannot_be_replaced_by_a_different_attempt_after_open() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("receipt.json");
+        fs::write(&path, br#"{"status":"failed"}"#).unwrap();
+        let expected = sha256_file(&path).unwrap();
+        let selected = regular_file(&path).unwrap();
+        fs::rename(&path, root.path().join("selected.json")).unwrap();
+        fs::write(&path, br#"{"status":"passed"}"#).unwrap();
+        let observed: serde_json::Value =
+            json::read_bound_json_file(selected, Some(&expected)).unwrap();
+        assert_eq!(observed["status"], "failed");
+        assert!(read_bound_json::<serde_json::Value>(&path, Some(&expected)).is_err());
+    }
+}

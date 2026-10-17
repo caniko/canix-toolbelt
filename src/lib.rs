@@ -4,6 +4,9 @@
 
 pub mod execution_protocol;
 
+#[cfg(feature = "qualification")]
+pub mod qualification;
+
 #[cfg(all(unix, feature = "build-train"))]
 pub mod build_train;
 #[cfg(all(target_os = "linux", feature = "direct-network"))]

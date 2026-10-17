@@ -332,8 +332,8 @@ pub fn event_version(pr: &Value) -> String {
         .into_iter()
         .flatten()
         .filter(|(key, _)| {
-            !ignored.contains(&key.as_str())
-                && !(terminal && terminal_ignored.contains(&key.as_str()))
+            !(ignored.contains(&key.as_str())
+                || terminal && terminal_ignored.contains(&key.as_str()))
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
@@ -523,11 +523,9 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
     if !entry["pending"].is_null()
         && (!entry["pending"].is_object()
             || !entry["pending"]["body"].is_object()
-            || ["version", "goalPolicy", "preparedAt"].iter().any(|key| {
-                !entry["pending"][key]
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty())
-            })
+            || ["version", "goalPolicy", "preparedAt"]
+                .iter()
+                .any(|key| entry["pending"][key].as_str().is_none_or(str::is_empty))
             || ["observationVersion", "progressVersion"]
                 .iter()
                 .any(|key| !entry["pending"][key].is_null() && !entry["pending"][key].is_string())
@@ -1161,9 +1159,7 @@ pub fn prepare(
     if !needs_wake(ps) || text.trim().is_empty() {
         return Err("owner has no unadmitted event or continuation text is empty".into());
     }
-    if !ps["version"]
-        .as_str()
-        .is_some_and(|version| !version.is_empty())
+    if ps["version"].as_str().is_none_or(str::is_empty)
         || policy.goal_policy.is_empty()
         || at.is_empty()
     {

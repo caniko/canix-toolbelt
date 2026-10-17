@@ -224,7 +224,11 @@ class PinentryIntegration(unittest.TestCase):
         # change. Retry only that read-only observation, never prompt actions.
         deadline = time.monotonic() + 5
         while (remaining := deadline - time.monotonic()) > 0:
-            snapshot = cls.zellij("action", "list-panes", "--json", timeout=remaining)
+            try:
+                snapshot = cls.zellij("action", "list-panes", "--json", timeout=remaining)
+            except subprocess.CalledProcessError as error:
+                error.add_note(f"Zellij pane discovery stderr: {error.stderr}")
+                raise
             if snapshot.strip():
                 return json.loads(snapshot)
             time.sleep(min(0.05, remaining))
@@ -713,10 +717,12 @@ class PaneDiscoveryTests(unittest.TestCase):
             PinentryIntegration.panes()
 
     def test_failed_discovery_command_remains_a_failure(self):
-        error = subprocess.CalledProcessError(1, [ZELLIJ, "action", "list-panes"])
+        error = subprocess.CalledProcessError(1, [ZELLIJ, "action", "list-panes"], stderr="fixture discovery failure")
         with patch.object(PinentryIntegration, "zellij", side_effect=error), \
-             self.assertRaises(subprocess.CalledProcessError):
+             self.assertRaises(subprocess.CalledProcessError) as raised:
             PinentryIntegration.panes()
+        self.assertIs(raised.exception, error)
+        self.assertIn("fixture discovery failure", "\n".join(getattr(error, "__notes__", [])))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,63 @@
+From: Lorenzo Stoakes (ARM) <ljs@kernel.org>
+Subject: [PATCH] x86/mm/pat: Acquire init_mm write lock on collapse to avoid UAF
+
+Backport of upstream a1c7570cedd03372812a5b693732880867babbca.
+Only hunk context is adjusted for Linux 6.18.52's cpa_flush() locals.
+https://github.com/torvalds/linux/commit/a1c7570cedd03372812a5b693732880867babbca
+
+Signed-off-by: Lorenzo Stoakes (ARM) <ljs@kernel.org>
+Signed-off-by: Mike Rapoport (Microsoft) <rppt@kernel.org>
+Signed-off-by: Dave Hansen <dave.hansen@linux.intel.com>
+Signed-off-by: Ingo Molnar <mingo@kernel.org>
+
+diff --git a/arch/x86/mm/pat/set_memory.c b/arch/x86/mm/pat/set_memory.c
+--- a/arch/x86/mm/pat/set_memory.c
++++ b/arch/x86/mm/pat/set_memory.c
+@@ -22,6 +22,7 @@
+ #include <linux/cc_platform.h>
+ #include <linux/set_memory.h>
+ #include <linux/memregion.h>
++#include <linux/cleanup.h>
+ 
+ #include <asm/e820/api.h>
+ #include <asm/processor.h>
+@@ -402,7 +403,7 @@
+ 
+ static int collapse_large_pages(unsigned long addr, struct list_head *pgtables);
+ 
+-static void cpa_collapse_large_pages(struct cpa_data *cpa)
++static void __cpa_collapse_large_pages(struct cpa_data *cpa)
+ {
+ 	unsigned long start, addr, end;
+ 	struct ptdesc *ptdesc, *tmp;
+@@ -439,6 +440,18 @@
+ 	spin_unlock(&cpa_lock);
+ }
+ 
++static void cpa_collapse_large_pages(struct cpa_data *cpa)
++{
++	/*
++	 * Take the mmap write lock on init_mm to:
++	 * - Avoid a use-after-free if raced by ptdump (which takes its own
++	 *   write lock on init_mm).
++	 * - Serialise concurrent CPA walkers.
++	 */
++	scoped_guard(mmap_write_lock, &init_mm)
++		__cpa_collapse_large_pages(cpa);
++}
++
+ static void cpa_flush(struct cpa_data *cpa, int cache)
+ {
+ 	unsigned long start, end;
+diff --git a/include/linux/mmap_lock.h b/include/linux/mmap_lock.h
+--- a/include/linux/mmap_lock.h
++++ b/include/linux/mmap_lock.h
+@@ -630,6 +630,8 @@
+ DEFINE_GUARD(mmap_read_lock, struct mm_struct *,
+ 	     mmap_read_lock(_T), mmap_read_unlock(_T))
+ DEFINE_GUARD_COND(mmap_read_lock, _try, mmap_read_trylock(_T))
++DEFINE_GUARD(mmap_write_lock, struct mm_struct *,
++	     mmap_write_lock(_T), mmap_write_unlock(_T))
+ 
+ static inline void mmap_read_unlock_non_owner(struct mm_struct *mm)
+ {

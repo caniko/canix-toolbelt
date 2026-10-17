@@ -12,6 +12,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Execute source-bound qualification and verify portable evidence
+    #[cfg(feature = "qualification")]
+    #[command(subcommand)]
+    Qualification(canix_toolbelt::qualification::cli::QualificationCommand),
     /// Run or inspect the builder-local shared construction service
     #[cfg(all(unix, feature = "build-train"))]
     #[command(subcommand)]
@@ -61,6 +65,26 @@ enum RuntimeCommand {
 
 fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
+        #[cfg(feature = "qualification")]
+        Command::Qualification(command) => {
+            let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if matches!(
+                &command,
+                canix_toolbelt::qualification::cli::QualificationCommand::Run { .. }
+            ) {
+                for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+                    signal_hook::flag::register(signal, std::sync::Arc::clone(&cancelled))?;
+                }
+            }
+            let result = canix_toolbelt::qualification::cli::dispatch(command, &cancelled)?;
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &result.value)?;
+            println!();
+            return Ok(std::process::ExitCode::from(if result.passed {
+                0
+            } else {
+                1
+            }));
+        }
         #[cfg(all(unix, feature = "build-train"))]
         Command::BuildTrain(command) => {
             return canix_toolbelt::build_train::cli::run(command).map_err(Into::into);

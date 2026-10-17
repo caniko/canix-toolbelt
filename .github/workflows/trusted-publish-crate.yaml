@@ -77,13 +77,44 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: |
           set -eu
           bash scripts/prepare-hosted-source.sh
           test -c /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
+          # Ubuntu 24.04 mediates capabilities in newly created user namespaces.
+          # Permit the Nix-store launcher and builder on this disposable runner;
+          # retain AppArmor and its global unprivileged-userns restriction.
+          # https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] &&
+             [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+            nix_daemon="$(readlink -f "$(command -v nix-daemon)")"
+            case "$nix_daemon" in /nix/store/*/bin/*) ;; *) exit 1 ;; esac
+            # Nix's user namespace can hide host-root ownership. Bootstrap then correctly
+            # seals unshare into a memfd, which has no pathname attachment. Let that sealed
+            # launcher inherit userns admission from its trusted Nix builder instead.
+            sudo tee /etc/apparmor.d/canix-toolbelt-qualification-nix >/dev/null <<APPARMOR
+          profile canix-toolbelt-qualification-nix "$nix_daemon" flags=(unconfined) {
+            userns,
+          }
+          APPARMOR
+            sudo apparmor_parser --replace /etc/apparmor.d/canix-toolbelt-qualification-nix
+            sudo systemctl restart nix-daemon.service
+            nix_daemon_pid="$(systemctl show --property MainPID --value nix-daemon.service)"
+            sudo grep '^canix-toolbelt-qualification-nix ' "/proc/$nix_daemon_pid/attr/current"
+            sudo tee /etc/apparmor.d/canix-toolbelt-qualification-unshare >/dev/null <<'APPARMOR'
+          profile canix-toolbelt-qualification-unshare /nix/store/*/bin/unshare flags=(unconfined) {
+            userns,
+          }
+          APPARMOR
+            sudo apparmor_parser --replace /etc/apparmor.d/canix-toolbelt-qualification-unshare
+            sudo grep '^canix-toolbelt-qualification-unshare ' /sys/kernel/security/apparmor/profiles
+          fi
           {
             printf '%s\n' 'NIX_CONFIG<<SIMIT_HOSTED_NIX_CONFIG'
             printf '%s\n' 'experimental-features = nix-command flakes' 'max-jobs = 1' 'cores = 2' 'log-lines = 200'
@@ -108,7 +139,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: nix develop -c cargo publish --dry-run --locked --manifest-path "$RUNNER_TEMP/verified-canix-toolbelt/Cargo.toml"
       - name: Required gate crate-release
         timeout-minutes: 30
@@ -117,7 +150,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2
       - name: Required gate operator-regressions
         timeout-minutes: 30
@@ -126,7 +161,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh
       - name: Required gate generated-parity
         timeout-minutes: 30
@@ -135,7 +172,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
       - name: Required gate supported-systems
         timeout-minutes: 30
@@ -144,7 +183,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
       - name: Required gate roborev-worker
         timeout-minutes: 30
@@ -153,7 +194,9 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
+          RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
   publish-canix-toolbelt:
     needs: [verify-canix-toolbelt]

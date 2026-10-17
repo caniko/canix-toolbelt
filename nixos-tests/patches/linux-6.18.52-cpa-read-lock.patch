@@ -1,0 +1,51 @@
+From: Lorenzo Stoakes (ARM) <ljs@kernel.org>
+Subject: [PATCH] x86/mm/pat: Acquire init_mm read lock on attribute changes to avoid UAF
+
+Backport of upstream d5d8b8662e6e5a565b47a0388640e88402f23274.
+Linux 6.18.52 uses alloc_pages() and conditional cpa_lock handling in
+split_large_page(); retain those and drop/reacquire init_mm across allocation.
+https://github.com/torvalds/linux/commit/d5d8b8662e6e5a565b47a0388640e88402f23274
+
+Signed-off-by: Lorenzo Stoakes (ARM) <ljs@kernel.org>
+Signed-off-by: Mike Rapoport (Microsoft) <rppt@kernel.org>
+Signed-off-by: Dave Hansen <dave.hansen@linux.intel.com>
+Signed-off-by: Ingo Molnar <mingo@kernel.org>
+
+diff --git a/arch/x86/mm/pat/set_memory.c b/arch/x86/mm/pat/set_memory.c
+--- a/arch/x86/mm/pat/set_memory.c
++++ b/arch/x86/mm/pat/set_memory.c
+@@ -49,7 +49,8 @@
+ 	unsigned int	flags;
+ 	unsigned int	force_split		: 1,
+ 			force_static_prot	: 1,
+-			force_flush_all		: 1;
++			force_flush_all		: 1,
++			init_mm_read_locked	: 1;
+ 	struct page	**pages;
+ };
+ 
+@@ -1237,7 +1238,11 @@
+ 	if (!debug_pagealloc_enabled())
+ 		spin_unlock(&cpa_lock);
++	if (cpa->init_mm_read_locked)
++		mmap_read_unlock(&init_mm);
+ 	base = alloc_pages(GFP_KERNEL, 0);
++	if (cpa->init_mm_read_locked)
++		mmap_read_lock(&init_mm);
+ 	if (!debug_pagealloc_enabled())
+ 		spin_lock(&cpa_lock);
+ 	if (!base)
+ 		return -ENOMEM;
+@@ -2096,7 +2101,11 @@
+ 	cpa.curpage = 0;
+ 	cpa.force_split = force_split;
+ 
+-	ret = __change_page_attr_set_clr(&cpa, 1);
++	/* Avoid race with concurrent CPA collapse. */
++	cpa.init_mm_read_locked = true;
++	scoped_guard(mmap_read_lock, &init_mm)
++		ret = __change_page_attr_set_clr(&cpa, 1);
++	cpa.init_mm_read_locked = false;
+ 
+ 	/*
+ 	 * Check whether we really changed something:

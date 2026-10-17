@@ -5,8 +5,41 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Sealed original-method coverage verification with explicit producer and
+  exact-consumer levels, independently selected obligations and provider-bound
+  hashes. Hosted coverage does not establish live deployment acceptance.
+- Provider-free execution wire types and pure validators generated for Rust and
+  TypeScript from one versioned schema. Bind discovery to exact implementation,
+  configuration and credential-reference identities; preserve u64 counters as
+  strings and reject unavailable guarantees before execution. Ship shared
+  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
+
 ### Fixed
 
+- Require captured native reports through finalization, reject unrepresented
+  Linux source xattrs/ACLs, and reject normalized archive member spellings.
+- Reject unrepresentable source file permissions and local PAX metadata in
+  canonical archives. Require the supervisor's `/dev/null` mount in portable
+  passing receipts.
+- Exercise Nix's blocked-xattr behavior during package checks while requiring
+  real xattr/ACL rejection in native CI; use a mapped UID in ACL fixtures.
+- Integrate native original-producer custody with Simit's accepted immutable
+  observer, complete source-owned job enrollment, scoped credentials, bounded
+  phases and separately retained preflight/retention diagnostics.
+- Bound each retained-log read, Git discovery output and cleanup, and snapshot
+  structural inode admission. Reject unsupported work xattrs, ACLs and sparse
+  files instead of changing their semantics between probes and commands.
+- Require canonical archive ownership, root modes, timestamps and source-link
+  spelling while preserving explicitly content-only historical Git archives.
+- Select retained request and boundary digests from trusted memory before
+  publication. Portable passing receipts require effective argv[0], a completed
+  deadline and the synthesized work environment bound to their sandbox.
+- Use Bash for the portable program-path fixture's required version probe and
+  require successful fixture execution before checking tampered evidence paths.
+- Exercise finalization cancellation with bounded socket-compatible output and
+  require successful native completion before the regression requests cancellation.
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
 - Reject explicit TTL-propagation attributes in eligible direct-route snapshots
   before effects; preserve omission of ineligible paths. This defensive boundary
@@ -20,6 +53,66 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Require prepared immutable service images with readiness bind targets for
   inline admission. `RootDirectoryStartOnly=true` remains an authored host-control
   opt-in, not an automatic fallback for unprepared images.
+
+## [0.6.0] - 2026-10-13
+
+### Added
+
+- Reusable source-bound Rust qualification operations and an independent
+  `qualification` CLI: inventories, bounded execution receipts, legacy evidence
+  verification, Cargo graph comparison, deterministic source export and
+  composition-bound handoff sealing.
+- Separate `qualification-cli` parsing/dispatch feature for library consumers
+  that supply their own presentation without enabling the review frontend.
+
+### Fixed
+
+- Execute qualification in a minimal filesystem and private network namespace,
+  applying producer loader variables only after containment. Schema-5 receipts
+  reject earlier host-exposing execution evidence. Bound output, artifact copies
+  and receipt publication; bind exact selected JSON bytes and tool aliases,
+  reject duplicate coverage requirements and nonportable evidence paths, and
+  clear inherited Git repository selection. See [the v5 migration notes](docs/qualification-v5.md).
+- Snapshot selected source, input, tool and runtime files into a digest-checked
+  private execution view, so transient host writes cannot escape composition
+  binding. Reject unselected symlink targets, unrepresented directory modes and
+  malformed source-file digests, and kill/reap stalled launchers after graceful
+  cleanup expires. Portable verification requires the exact snapshot selections.
+- Reject hard-linked work artifacts rather than losing alias semantics between
+  probes, honor startup restoration cancellation, bound Cargo-metadata CLI reads,
+  and distinguish local-path package changes in graph deltas.
+- Preserve a qualification command's requested argv[0] after canonical executable
+  hashing and namespace/privilege containment, including Nix multicall applets.
+  `RunRequest` Rust initializers now set `argument_zero: None` for the default;
+  retained requests bind the effective name in the optional `argumentZero` field.
+- Backport upstream CPA/text-poke locking fixes for Linux 6.18.52 in the cloud
+  installation test package set, covering both installer and installed guests
+  to prevent module-loading kernel crashes during BIOS/UEFI qualification.
+- Contain qualification commands and version probes in Linux PID namespaces with
+  a native init supervisor. Reject escaped/background descendants, unsupported
+  execution platforms and version-1 receipt acceptance; bind both containment
+  binaries and the complete cleared/allowlisted/explicit execution environment.
+- Reject FIFO/device inputs through the opened file descriptor, skip nonexecutable
+  PATH entries, retain both version-output streams, require indexed and contained
+  sealed gate evidence, reject incomplete Cargo resolve graphs, and export long
+  symlink targets with deterministic GNU extended headers.
+- Detect descendants through kernel child accounting even if a privileged producer
+  replaces `/proc`; cross-check retained requests against receipt requirements and
+  encode inventory paths component-wise for cross-platform archive verification.
+- Protect execution source/input paths with read-only private mounts and capability
+  removal, retaining only a fresh writable work tree. Schema-3 receipts reject older
+  mutable execution evidence. Bound capture/hashing by the shared deadline and
+  cancellation, derive archived link executability from its target, and exclude
+  Git PAX metadata pseudo-entries from real member duplicate tracking.
+- Close inherited producer descriptors and bind original exit/signal status in a
+  private native execution report. Schema-4 receipts require that evidence and
+  contain mandatory artifacts during direct verification. Honor cancellation
+  during final hashing, include initial capture in wall-clock timelines, reject
+  special archive inputs and normalize standard tar `./` member prefixes.
+- Contain seal/historical receipt metadata, retain real directories traversed by
+  source symlinks, bind verified archive hashes to one descriptor and preserve
+  default termination signals for non-run commands. Keep the PID-1 report wire
+  contract independent of the operator library and budget hosted fixture concurrency.
 
 ## [0.5.0] - 2026-10-11
 

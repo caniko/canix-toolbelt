@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -12,6 +12,10 @@ readme = "RUST.md"
 keywords = ["nixos", "runtime", "pkl", "configuration"]
 categories = ["config", "command-line-utilities"]
 include = [
+  "/.github/original-producers.json",
+  "/.github/workflows/ci.yaml",
+  "/.github/workflows/nix-builds.yaml",
+  "/.github/workflows/retain-producer-evidence.yaml",
   "/src/**",
   "/tests/**",
   "!/tests/**/__pycache__/**",
@@ -27,6 +31,9 @@ include = [
   "/docs/direct-network.md",
   "/ORCHESTRATION.md",
   "/CHANGELOG.md",
+  "/docs/qualification.md",
+  "/docs/qualification-coverage.md",
+  "/docs/qualification-v5.md",
   "/LICENSE",
   "/Cargo.toml",
   "/Cargo.lock",
@@ -37,16 +44,23 @@ all-features = true
 
 [features]
 default = []
-cli = ["dep:clap", "dep:signal-hook", "review"]
+cli = ["dep:clap", "dep:signal-hook", "review", "qualification-cli"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/net", "rustix/process", "dep:nix"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
+qualification = ["dep:sha2", "dep:tar", "dep:signal-hook", "dep:libc", "rustix/process", "rustix/mount", "rustix/stdio"]
+qualification-cli = ["qualification", "dep:clap"]
 
 [[bin]]
 name = "canix-toolbelt"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "canix-toolbelt-qualification-executor"
+path = "src/bin/qualification-executor.rs"
+required-features = ["qualification"]
 
 [[bin]]
 name = "canix-toolbelt-direct-network"
@@ -66,12 +80,14 @@ serde_json = "1"
 rustix = { version = "1", features = ["fs"] }
 nix = { version = "0.31", features = ["user"], optional = true }
 signal-hook = { version = "0.4", optional = true }
+libc = { version = "0.2", optional = true }
 ureq = { version = "3", features = ["json"], optional = true }
 sha2 = { version = "0.10", optional = true }
 fs2 = { version = "0.4", optional = true }
 url = { version = "2", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 zeroize = { version = "1", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 tempfile = { version = "3", optional = true }
 
 [dev-dependencies]

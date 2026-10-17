@@ -428,9 +428,9 @@ pub fn github(
         || !github_revision(&p["headRefOid"])
         || !github_revision(&p["baseRefOid"])
         || (!p["baseRef"].is_null() && !github_revision(&p["baseRef"]["target"]["oid"]))
-        || !p["updatedAt"]
+        || p["updatedAt"]
             .as_str()
-            .is_some_and(|at| chrono::DateTime::parse_from_rfc3339(at).is_ok())
+            .is_none_or(|at| chrono::DateTime::parse_from_rfc3339(at).is_err())
     {
         return Err(invalid("missing GitHub candidate identity"));
     }
@@ -670,7 +670,7 @@ const FORGE_STATUS_STATES: &[&str] = &[
 
 fn forge_user(value: &Value, name: &str) -> io::Result<()> {
     nullable(value, name, |value, name| {
-        if !value[name]["id"].as_u64().is_some_and(|id| id > 0) {
+        if value[name]["id"].as_u64().is_none_or(|id| id == 0) {
             return Err(invalid("malformed forge user identity"));
         }
         nonempty(&value[name], "login")
