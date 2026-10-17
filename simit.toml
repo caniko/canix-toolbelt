@@ -5,6 +5,8 @@ runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
 nix_builds = [
+  # Queue the kernel/systemd regression gate before the expensive pinentry family.
+  ".#checks.x86_64-linux.direct-network-transitions",
   ".#checks.x86_64-linux.execution-protocol",
   ".#canix-toolbelt-pinentry",
   ".#rage-pinentry",
@@ -14,7 +16,6 @@ nix_builds = [
   ".#canix-toolbelt-direct-network",
   ".#checks.x86_64-linux.direct-network-eval",
   ".#checks.x86_64-linux.executor-admission-eval",
-  ".#checks.x86_64-linux.direct-network-transitions",
   ".#checks.x86_64-linux.build-train-eval",
   ".#checks.x86_64-linux.build-train-policy",
   ".#canix-toolbelt-roborev-worker",
@@ -52,18 +53,7 @@ extra_env = { RUSTDOCFLAGS = "-D warnings", RUST_TEST_THREADS = "2" }
 extra_setup = [
   '''
 set -eu
-test "${RUNNER_ENVIRONMENT:-}" = github-hosted
-# Branch/PR qualification binds original attempt-1 production. A signed-tag
-# release can retry its original run after a transient upload/registry failure.
-if [ "${GITHUB_EVENT_NAME:-}" != push ] || [ "${GITHUB_REF_TYPE:-}" != tag ]; then
-  test "${GITHUB_RUN_ATTEMPT:-}" = 1
-fi
-if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-  revision="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
-  git fetch origin "$revision"
-  git checkout --detach "$revision"
-  test "$(git rev-parse HEAD)" = "$revision"
-fi
+bash scripts/prepare-hosted-source.sh
 test -c /dev/kvm
 sudo chmod a+rw /dev/kvm
 test -r /dev/kvm && test -w /dev/kvm
@@ -118,7 +108,8 @@ fi
 
 [ci.nix_build]
 separate_events = true
-max_parallel = 2
+# Separate hosted runners provide concurrency without increasing per-runner load.
+max_parallel = 4
 max_jobs = 1
 cores = 2
 timeout_minutes = 40

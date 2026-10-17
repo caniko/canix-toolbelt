@@ -343,6 +343,8 @@
           shellHook = config.pre-commit.installationScript;
         };
         devShells.docs = config.devShells.default;
+        # Shared verification providers must not install hooks into the checkout.
+        devShells.verification = config.devShells.default.overrideAttrs (_: {shellHook = "";});
         devShells.roborev-worker = pkgs.mkShell {
           inputsFrom = [config.devShells.default];
           packages = [pkgs.git pkgs.bubblewrap pkgs.python3];

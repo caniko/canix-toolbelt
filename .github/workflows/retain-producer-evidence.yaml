@@ -16,9 +16,9 @@ concurrency:
 jobs:
   retain:
     runs-on: ubuntu-24.04
-    # The producer matrix admits two builds at a time. Its queue can outlive a
-    # two-hour observer even when the original jobs succeed; retain those jobs
-    # within GitHub's bounded six-hour hosted-job budget.
+    # Original matrices have exceeded four hours including hosted queue time.
+    # Keep capture bounded below GitHub's six-hour hosted-job limit so failure
+    # evidence can still upload before the job is terminated.
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}

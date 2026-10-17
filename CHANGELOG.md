@@ -23,16 +23,18 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Exercise finalization cancellation with bounded socket-compatible output and
   require successful native completion before the regression requests cancellation.
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
-- Require native owner/host observation fencing through dispatch; unsupported
-  adapters fail before reads or effects, and lost authority invalidates an idle
-  context witness. Reject unbound imported pending evidence exchanges and keep
-  source-disappearance races out of retained contradictory batches.
-- Retain empty provider-log archives from cancelled original producers with
-  their terminal status and byte hashes; require actual log files for success
-  and reject duplicate archive members for every conclusion.
-- Bind hosted required CI gates to the selected source revision before running
-  them, and retain generated README badges alongside the workflow preparation
-  patch for complete declared-generator imports.
+- Reject explicit TTL-propagation attributes in eligible direct-route snapshots
+  before effects; preserve omission of ineligible paths. This defensive boundary
+  is tested with controlled snapshots, not unsupported native IP-route fixtures.
+- Reject unsupported route/nexthop destination rewrites and authored `pervasive`
+  flags before direct replay can drop forwarding policy. Preserve kernel status
+  flags, authored `onlink`, and omission of VPN/container-only and mixed paths.
+- Reject expiration on eligible direct routes before replay can make them
+  permanent or extend their lifetime during reconciliation. Preserve omission
+  of VPN/container-only and mixed routes.
+- Require prepared immutable service images with readiness bind targets for
+  inline admission. `RootDirectoryStartOnly=true` remains an authored host-control
+  opt-in, not an automatic fallback for unprepared images.
 
 ## [0.6.0] - 2026-10-13
 
@@ -94,7 +96,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   default termination signals for non-run commands. Keep the PID-1 report wire
   contract independent of the operator library and budget hosted fixture concurrency.
 
-## [0.5.0] - 2026-10-08
+## [0.5.0] - 2026-10-11
 
 ### Changed
 
@@ -108,11 +110,95 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Keep trusted publisher verification on the admitted signed source rather than
+  the workflow's default-branch revision. Permit signed-tag and trusted-publisher
+  recovery while retaining original-attempt-only branch/PR qualification.
+- Run the direct resolver under a dedicated unprivileged account with no
+  capabilities; bind readiness and reload receipts to that account's complete
+  credential evidence as well as MainPID, cgroup and all four owned listeners.
+- Explicitly install root-owned readable, non-resolver-writable servers files,
+  including replacement of restrictive stale temporary files before DNS reload.
+- Compose rooted admission drop-ins through the native systemd package tree and
+  retain completed oneshot payload invocation identities in kernel VM evidence.
+- Mount the immutable ext4 readiness fixture read-only without journal replay,
+  and retain bounded native image/dissection diagnostics on startup refusal.
+- Keep disposable foreign DNS peers alive through both service-start refusal
+  checks, with bounded lifetime and active-peer assertions before cleanup.
+- Retry malformed pinentry pane observations within the original deadline,
+  retaining decode diagnostics and refusing to treat unreadable state as cleanup.
+- Reject ECMP groups above the bounded iproute2 replay capacity and unsupported
+  cross-family gateways before any forwarding, firewall or DNS changes.
+- Keep rooted-service readiness in the payload's pre-start lifecycle, with
+  read-only client-closure and live socket-directory binds. Preserve existing
+  chrooted hooks, credentials, resource policy and automatic retries through
+  admission denial and recovery.
+- Preserve system and Home Manager readiness after the final pre-start command
+  reset, and supply rooted Home Manager units with the same narrow read-only
+  client-closure and live socket-directory binds as system services.
+- Reject unsupported direct-route path metrics before replay instead of dropping
+  MTU, MSS or congestion-control policy, including on ECMP routes.
+- Stream resolver socket evidence with bounded rows and constant retained state,
+  allowing busy host socket tables while preserving duplicate-listener rejection.
+- Reject unsupported route and nexthop realms before replay, preserving producer
+  traffic-control classification instead of silently dropping it.
+- Apply the ECMP replay capacity only after complete direct eligibility, so large
+  VPN/container-only and mixed groups remain omitted without denying readiness.
+- Reject unsupported TOS selectors and non-default IPv6 route preferences before
+  replay can widen traffic matching or change direct-uplink selection. Preserve
+  ordinary canonical medium-preference admission.
+- Reject source-specific selectors, compatibility-expanded nexthop IDs and
+  non-default ECMP scopes before copying can discard source constraints, resilient
+  group policy or authored scope. Keep preferred-source addresses and ordinary
+  single-path connected scopes supported.
+- Retain canonical single-path scope in the selected route and replay it explicitly,
+  including global scope omitted by iproute2's JSON printer. Expose typed
+  `RouteScope` in `Route` so scope-only changes also invalidate its snapshot.
 - Match the Claude release manifest to nixpkgs' raw or Zstandard download
   recipe, keeping both the declared checksum and installation format compatible.
+- Require native owner/host observation fencing through dispatch; unsupported
+  adapters fail before reads or effects, and lost authority invalidates an idle
+  context witness. Reject unbound imported pending evidence exchanges and keep
+  source-disappearance races out of retained contradictory batches.
+- Retain empty provider-log archives from cancelled original producers with
+  their terminal status and byte hashes; require actual log files for success
+  and reject duplicate archive members for every conclusion.
+- Bind hosted required CI gates to the selected source revision before running
+  them, and retain generated README badges alongside the workflow preparation
+  patch for complete declared-generator imports.
+- Keep direct-network routing ownership explicit in both reserved tables and
+  address families, preserve foreign routes and complete eligible ECMP paths,
+  and reject container-only implicit uplinks and noncanonical cgroup depths.
+- Reject unsupported encapsulation on eligible routes and ECMP nexthops before
+  routing, firewall or DNS updates instead of silently changing forwarding.
+- Retain IPv6 same-prefix, same-metric routes across multiple uplinks without
+  replacing foreign routes or blocking the readiness barrier.
+- Explicitly delete retained owned IPv6 unreachable fallbacks before exclusive
+  reinstallation, and emit the resolver unit's empty capability reset so its
+  native namespace and descriptor ownership can be authenticated.
+- Preserve conservative autoSafe/deny overlap rejection for store wrappers;
+  backend wildcards can consume slashes and command arguments before another
+  executable suffix, even when the declared executable names differ.
+- Discover ordinary VLAN uplinks through iproute2's named parent field; reject
+  foreign-namespace index collisions and retain VLAN route and DNS coverage.
+- Make the unsafe-object preparation fixtures tolerate existing Git object
+  fanout directories while preserving rejection and persistent tombstone checks.
+- Authenticate all independent DNS listeners against the native resolver unit,
+  process, network namespace and enrolled cgroup generation. Reject foreign,
+  connected, wildcard and IPv4-mapped competing sockets. Scope NetworkManager
+  link-local DNS and retry failed generation-bound reload dispatches without
+  restarting enrolled workloads.
+- Require authenticated readiness for anchored and unanchored guarded launches;
+  retain routing-only coverage in the disposable namespace probe. Retry transient
+  pinentry fixture observations within the existing deadline while retaining
+  permanent failure diagnostics and separate concurrent prompt assertions.
 
 ### Added
 
+- Provider-free execution wire types and pure validators generated for Rust and
+  TypeScript from one versioned schema. Bind discovery to exact implementation,
+  configuration and credential-reference identities; preserve u64 counters as
+  strings and reject unavailable guarantees before execution. Ship shared
+  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
 - Host-neutral native campaign journal, admission and bounded recovery primitives
   behind the `orchestration` feature, including native input reconciliation,
   complete forge-history collection, evidence replication, bounded context

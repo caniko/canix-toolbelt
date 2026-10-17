@@ -9,8 +9,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::net::IpAddr;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
@@ -22,9 +22,16 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 /// Reserved packet mark; never matches a whole UID or a desktop application slice.
 pub const MARK: u32 = 0xca010000;
 const TABLES: [u32; 2] = [51821, 51822];
+// This daemon's explicit route namespace, including its unreachable fallback.
+// Untagged routes from older versions are never silently adopted.
+const ROUTE_PROTOCOL: u32 = 242;
 const LOCAL_PRIORITY: u32 = 49;
 const DIRECT_PRIORITY: u32 = 50;
 const NFT_TABLE: &str = "toolbelt_direct_network";
+// Separate redirected UDP DNS tuples from the desktop stub's retained flows.
+const DNS_ZONE: u16 = 0xca01;
+
+mod dns;
 
 /// Root-owned policy. Executables and destinations are explicit, never supplied by clients.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -90,6 +97,9 @@ impl Policy {
         }
         for path in self.cgroup_paths.iter().chain(self.dns_cgroup.iter()) {
             if !token(path)
+                || path
+                    .split('/')
+                    .any(|segment| segment.is_empty() || segment == "." || segment == "..")
                 || Path::new(path)
                     .components()
                     .any(|c| !matches!(c, Component::Normal(_)))
@@ -125,7 +135,7 @@ impl Policy {
 pub struct Route {
     /// CIDR or `default`.
     pub destination: String,
-    /// Interface, selected independently of Proton tunnel and dummy devices.
+    /// Interface for a single-path route; empty when `nexthops` is nonempty.
     pub device: String,
     /// Gateway, including scoped IPv6 link-local gateways via `device`.
     pub gateway: Option<String>,
@@ -133,31 +143,128 @@ pub struct Route {
     pub source: Option<String>,
     /// Route metric.
     pub metric: u64,
+    /// Canonical scope, including global scope omitted by iproute2's printer.
+    pub scope: RouteScope,
     /// Connected routes are also kept reachable from desktop applications.
     pub local: bool,
     /// Gateways explicitly declared on-link by the producer.
     pub onlink: bool,
+    /// Complete multipath route. Mixed eligible/ineligible routes are omitted
+    /// rather than rewriting the producer's forwarding policy.
+    pub nexthops: Vec<NextHop>,
 }
 
-fn direct_devices(policy: &Policy, links: &Value) -> BTreeSet<String> {
-    links
+/// Canonical route scopes supported by the direct-table projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteScope {
+    /// Universe scope; the canonical default in a route-table snapshot.
+    Global,
+    /// Link-local scope, including ordinary IPv4 connected routes.
+    Link,
+    /// Host-local scope.
+    Host,
+}
+
+impl RouteScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Link => "link",
+            Self::Host => "host",
+        }
+    }
+}
+
+/// One validated, weighted direct-route nexthop.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NextHop {
+    /// Eligible interface.
+    pub device: String,
+    /// Gateway, scoped by the interface for IPv6 link-local addresses.
+    pub gateway: Option<String>,
+    /// Kernel multipath weight, in the range 1 through 256.
+    pub weight: u64,
+    /// Producer explicitly declares the gateway on-link.
+    pub onlink: bool,
+}
+
+fn direct_devices(policy: &Policy, links: &Value) -> Result<BTreeSet<String>> {
+    let links = links
         .as_array()
-        .into_iter()
-        .flatten()
+        .filter(|links| links.len() <= 4096)
+        .ok_or_else(|| invalid("invalid or oversized link snapshot"))?;
+    let mut devices = links
+        .iter()
         .filter_map(|link| {
             let name = link["ifname"].as_str()?;
             let kind = link["linkinfo"]["info_kind"].as_str();
-            let physical = link["link_type"] == "ether"
-                && matches!(kind, None | Some("vlan" | "bridge" | "bond"));
+            let physical = link["link_type"] == "ether" && kind.is_none();
             (token(name) && (physical || policy.direct_interfaces.iter().any(|d| d == name)))
                 .then(|| name.to_owned())
         })
-        .collect()
+        .collect::<BTreeSet<_>>();
+    // Bridge/bond membership and VLAN lower-link evidence must lead to an
+    // eligible uplink. Bounded traversal omits container-only graphs and cycles.
+    for _ in 0..64 {
+        let previous = devices.len();
+        for link in links {
+            let Some(name) = link["ifname"].as_str().filter(|name| token(name)) else {
+                continue;
+            };
+            let backed = match link["linkinfo"]["info_kind"].as_str() {
+                Some("bridge" | "bond") => links.iter().any(|member| {
+                    member["ifname"]
+                        .as_str()
+                        .is_some_and(|name| devices.contains(name))
+                        && (member["master"].as_str() == Some(name)
+                            || (link["ifindex"].as_u64().is_some()
+                                && member["master"].as_u64() == link["ifindex"].as_u64()))
+                }),
+                // iproute2 names a same-namespace VLAN parent in `link`.
+                // `link_index` identifies a foreign-namespace parent and must
+                // not be matched against a coincident local interface index.
+                Some("vlan") => link["link"]
+                    .as_str()
+                    .is_some_and(|lower| devices.contains(lower)),
+                _ => false,
+            };
+            if backed {
+                devices.insert(name.to_owned());
+            }
+        }
+        if previous == devices.len() {
+            break;
+        }
+    }
+    Ok(devices)
+}
+
+fn supported_route_flags(flags: &Value) -> bool {
+    flags.as_array().is_some_and(|flags| {
+        flags.iter().all(|flag| {
+            matches!(
+                flag.as_str(),
+                Some(
+                    "onlink"
+                        | "dead"
+                        | "linkdown"
+                        | "unresolved"
+                        | "offload"
+                        | "trap"
+                        | "notify"
+                        | "rt_offload"
+                        | "rt_trap"
+                        | "rt_offload_failed"
+                )
+            )
+        })
+    })
 }
 
 /// Select direct routes, rejecting VPN/dummy/container interfaces and malformed data.
 pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<Vec<Route>> {
-    let devices = direct_devices(policy, links);
+    let devices = direct_devices(policy, links)?;
     let mut selected = Vec::new();
     for route in routes
         .as_array()
@@ -166,9 +273,150 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
         if route["type"].as_str().is_some_and(|kind| kind != "unicast") {
             continue;
         }
-        let Some(device) = route["dev"].as_str().filter(|d| devices.contains(*d)) else {
-            continue;
+        let nexthops = if let Some(hops) = route.get("nexthops") {
+            let hops = hops
+                .as_array()
+                .filter(|hops| !hops.is_empty())
+                .ok_or_else(|| invalid("invalid multipath nexthops"))?;
+            if hops.iter().any(|hop| {
+                !hop["dev"]
+                    .as_str()
+                    .is_some_and(|name| devices.contains(name))
+            }) {
+                continue;
+            }
+            // Only eligible routes will be replayed. ip -batch allows 511
+            // arguments; a maximal supported hop takes eight arguments and
+            // 28 netlink bytes (IPv6 gateway). Sixty leaves room for route
+            // attributes under that limit and the 4096-byte netlink request.
+            // Never truncate a larger direct group or partially replay it.
+            if hops.len() > 60 {
+                return Err(invalid("invalid multipath nexthops (replay limit: 60)"));
+            }
+            if route.get("dev").is_some() || route.get("gateway").is_some() {
+                return Err(invalid("ambiguous multipath route"));
+            }
+            hops.iter()
+                .map(|hop| {
+                    if hop.get("to").is_some() {
+                        return Err(invalid("unsupported multipath destination rewrite"));
+                    }
+                    if hop.get("flow").is_some() {
+                        return Err(invalid("unsupported multipath realms"));
+                    }
+                    if hop.get("via").is_some() {
+                        return Err(invalid("unsupported cross-family multipath gateway"));
+                    }
+                    if hop.get("encap").is_some() {
+                        return Err(invalid("unsupported multipath encapsulation"));
+                    }
+                    let gateway = hop["gateway"].as_str();
+                    let weight = hop
+                        .get("weight")
+                        .map_or(Some(1), Value::as_u64)
+                        .filter(|weight| (1..=256).contains(weight))
+                        .ok_or_else(|| invalid("invalid multipath weight"))?;
+                    if gateway.is_some_and(|ip| ip.parse::<IpAddr>().is_err()) {
+                        return Err(invalid("invalid multipath gateway"));
+                    }
+                    if hop
+                        .get("flags")
+                        .is_some_and(|flags| !supported_route_flags(flags))
+                    {
+                        return Err(invalid("unsupported multipath flags"));
+                    }
+                    // iproute2 print_rt_flags includes kernel-derived status.
+                    // Replay only authored onlink; the kernel determines live
+                    // reachability/offload from the actual destination devices.
+                    Ok(NextHop {
+                        device: hop["dev"]
+                            .as_str()
+                            .ok_or_else(|| invalid("missing multipath interface"))?
+                            .to_owned(),
+                        gateway: gateway.map(str::to_owned),
+                        weight,
+                        onlink: hop["flags"]
+                            .as_array()
+                            .is_some_and(|flags| flags.iter().any(|f| f == "onlink")),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
         };
+        let device = if nexthops.is_empty() {
+            let Some(device) = route["dev"].as_str().filter(|d| devices.contains(*d)) else {
+                continue;
+            };
+            device
+        } else {
+            ""
+        };
+        if route.get("to").is_some() {
+            return Err(invalid("unsupported direct route destination rewrite"));
+        }
+        // Authored pervasive cannot be discarded like kernel-derived status.
+        // Apply the same supported flag vocabulary at both projection levels.
+        if route
+            .get("flags")
+            .is_some_and(|flags| !supported_route_flags(flags))
+        {
+            return Err(invalid("unsupported direct route flags"));
+        }
+        if route.get("encap").is_some() {
+            return Err(invalid("unsupported direct route encapsulation"));
+        }
+        if route.get("via").is_some() {
+            return Err(invalid("unsupported cross-family direct route gateway"));
+        }
+        if route.get("metrics").is_some() {
+            return Err(invalid("unsupported direct route metrics"));
+        }
+        // Replaying a sampled remaining lifetime would either drop expiration
+        // or extend it on every reconciliation. Reject before any route effects.
+        if route.get("expires").is_some() {
+            return Err(invalid("unsupported direct route lifetime"));
+        }
+        // iproute2 spells RTA_TTL_PROPAGATE this way in JSON, even when false.
+        if route.get("ttl-propogate").is_some() {
+            return Err(invalid("unsupported direct route TTL propagation"));
+        }
+        if route.get("flow").is_some() {
+            return Err(invalid("unsupported direct route realms"));
+        }
+        if route.get("tos").is_some() {
+            return Err(invalid("unsupported direct route TOS selector"));
+        }
+        if route.get("from").is_some() || route.get("src").is_some() {
+            return Err(invalid("unsupported direct route source selector"));
+        }
+        // Compatibility output can expand a referenced resilient group into
+        // ordinary-looking hops. Their members/weights do not encode its
+        // bucket-based policy, so never rewrite the group as inline ECMP.
+        if route.get("nhid").is_some() {
+            return Err(invalid("unsupported direct route referenced nexthop"));
+        }
+        // iproute2 omits canonical universe scope in ordinary JSON output.
+        // Replaying a device-only IPv4 route without an explicit scope would
+        // instead infer link scope. Retain scope in both the snapshot and batch.
+        let scope = match route.get("scope") {
+            None => RouteScope::Global,
+            Some(value) => match value.as_str() {
+                Some("global") => RouteScope::Global,
+                Some("link") => RouteScope::Link,
+                Some("host") => RouteScope::Host,
+                _ => return Err(invalid("unsupported direct route scope")),
+            },
+        };
+        if !nexthops.is_empty() && scope != RouteScope::Global {
+            return Err(invalid("unsupported direct route multipath scope"));
+        }
+        // iproute2 emits the canonical medium default on ordinary IPv6
+        // routes. Replaying that default preserves preference; accepting a
+        // high/low or malformed value would silently change uplink selection.
+        if route.get("pref").is_some_and(|pref| pref != "medium") {
+            return Err(invalid("unsupported direct route preference"));
+        }
         let destination = route["dst"].as_str().unwrap_or("default");
         let gateway = route["gateway"].as_str();
         let source = route["prefsrc"].as_str();
@@ -186,15 +434,21 @@ pub fn select_routes(policy: &Policy, links: &Value, routes: &Value) -> Result<V
             gateway: gateway.map(str::to_owned),
             source: source.map(str::to_owned),
             metric: route["metric"].as_u64().unwrap_or(0),
-            local: destination != "default" && gateway.is_none(),
+            scope,
+            local: destination != "default"
+                && gateway.is_none()
+                && nexthops.iter().all(|hop| hop.gateway.is_none()),
             onlink: route["flags"]
                 .as_array()
                 .is_some_and(|flags| flags.iter().any(|f| f == "onlink")),
+            nexthops,
         });
     }
     // Populate connected routes before gateway routes. Sorting is stable for
     // equal preferences, retaining the producer's route ordering.
-    selected.sort_by_key(|route| route.gateway.is_some());
+    selected.sort_by_key(|route| {
+        route.gateway.is_some() || route.nexthops.iter().any(|hop| hop.gateway.is_some())
+    });
     Ok(selected)
 }
 
@@ -264,11 +518,50 @@ fn nft_rules(
     if exists {
         text.push_str(&format!("delete table inet {NFT_TABLE}\n"));
     }
-    text.push_str(&format!("table inet {NFT_TABLE} {{\n chain output {{\n type route hook output priority mangle; policy accept;\n"));
+    let dns_path = policy
+        .dns_cgroup
+        .as_ref()
+        .filter(|path| paths.contains(path));
+    text.push_str(&format!("table inet {NFT_TABLE} {{\n chain dns_zone {{\n type filter hook output priority raw; policy accept;\n"));
+    // UDP conntrack belongs to a tuple, not a socket/cgroup. Classify DNS from
+    // the current socket before lookup so a new desktop socket cannot inherit
+    // a closed enrolled socket's DNAT mapping, or suppress later interception.
+    if let Some(path) = dns_path {
+        let level = path.split('/').count();
+        // A reply to a client bound to port 53 is not an upstream query. The
+        // DNS QR bit distinguishes listener responses even when both ports
+        // overlap an upstream socket; check it before the upstream exemption.
+        for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
+            text.push_str(&format!(
+                "meta mark {{ 0, {MARK} }} {address} udp sport 5354 @th,80,8 & 0x80 == 0x80 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE} return\n"
+            ));
+        }
+        text.push_str(&format!(
+            "udp dport 53 socket cgroupv2 level {level} \"{path}\" return\n"
+        ));
+    } else if policy.dns_cgroup.is_none() {
+        // Packet-rule compatibility only: native readiness still rejects a
+        // missing resolver identity. This reply socket must carry SO_MARK.
+        for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
+            text.push_str(&format!(
+                "meta mark {MARK} {address} udp sport 5354 ct zone set {DNS_ZONE}\n"
+            ));
+        }
+    }
+    text.push_str(&format!(
+        "meta mark {MARK} udp dport 53 ct zone set {DNS_ZONE}\n"
+    ));
+    for path in paths {
+        let level = path.split('/').count();
+        text.push_str(&format!(
+            "meta mark 0 udp dport 53 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE}\n"
+        ));
+    }
+    text.push_str(" }\n chain output {\n type route hook output priority mangle; policy accept;\n");
     // Passive TCP handshakes may be emitted from request sockets without the
     // listener's cgroup metadata. Restore the enrolled incoming flow's mark.
     text.push_str(&format!(
-        "meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
+        "meta l4proto tcp meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
     ));
     for path in paths {
         let level = path.split('/').count();
@@ -285,11 +578,7 @@ fn nft_rules(
         ));
     }
     text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain dns {{\n type nat hook output priority dstnat; policy accept;\n"));
-    if let Some(path) = policy
-        .dns_cgroup
-        .as_ref()
-        .filter(|path| paths.contains(path))
-    {
+    if let Some(path) = dns_path {
         text.push_str(&format!(
             "socket cgroupv2 level {} \"{path}\" return\n",
             path.split('/').count()
@@ -307,29 +596,51 @@ fn nft_rules(
     text
 }
 
-fn route_batch(routes: &[Route], table: u32) -> String {
-    let mut text = format!("route flush table {table}\n");
+fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
+    let mut text = format!("route flush table {table} proto {ROUTE_PROTOCOL}\n");
+    // IPv6 stores same-prefix/metric routes on different interfaces as siblings
+    // (including every interface's fe80::/64). Exclusive add rejects the second
+    // sibling; append adds it without replacing existing routes. Reservations
+    // remain checked before the owned-only flush and after this batch.
+    let operation = if family == "-6" { "append" } else { "add" };
     for route in routes {
         text.push_str(&format!(
-            "route replace table {table} {}",
+            "route {operation} table {table} {} proto {ROUTE_PROTOCOL}",
             route.destination
         ));
         if let Some(gateway) = &route.gateway {
             text.push_str(&format!(" via {gateway}"));
         }
-        text.push_str(&format!(" dev {}", route.device));
         if let Some(source) = &route.source {
             text.push_str(&format!(" src {source}"));
         }
-        text.push_str(&format!(" metric {}", route.metric));
-        if route.onlink {
-            text.push_str(" onlink");
+        text.push_str(&format!(
+            " scope {} metric {}",
+            route.scope.as_str(),
+            route.metric
+        ));
+        if route.nexthops.is_empty() {
+            text.push_str(&format!(" dev {}", route.device));
+            if route.onlink {
+                text.push_str(" onlink");
+            }
+        } else {
+            for hop in &route.nexthops {
+                text.push_str(" nexthop");
+                if let Some(gateway) = &hop.gateway {
+                    text.push_str(&format!(" via {gateway}"));
+                }
+                text.push_str(&format!(" dev {} weight {}", hop.device, hop.weight));
+                if hop.onlink {
+                    text.push_str(" onlink");
+                }
+            }
         }
         text.push('\n');
     }
     // Never fall through to the VPN when the direct uplink has no route.
     text.push_str(&format!(
-        "route replace unreachable default table {table} metric 4294967295\n"
+        "route add unreachable default table {table} proto {ROUTE_PROTOCOL} metric 4294967295\n"
     ));
     text
 }
@@ -424,11 +735,77 @@ fn check_reservations(policy: &Policy) -> Result<()> {
                 ));
             }
         }
+        let routes = json(
+            &policy.ip,
+            &[family, "-N", "-j", "route", "show", "table", "all"],
+        )?;
+        for route in routes
+            .as_array()
+            .ok_or_else(|| invalid("ip route did not return an array"))?
+        {
+            let table = numeric_id(&route["table"]);
+            if TABLES.iter().any(|t| table == Some(u64::from(*t)))
+                && numeric_id(&route["protocol"]) != Some(u64::from(ROUTE_PROTOCOL))
+            {
+                return Err(invalid(format!(
+                    "reserved direct-network table contains an unowned route: {route}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn numeric_id(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str()?.parse().ok())
+}
+
+fn remove_retained_fallback(policy: &Policy, family: &str, table: u32) -> Result<()> {
+    if family != "-6" {
+        return Ok(());
+    }
+    // iproute2 refuses to flush IPv6 unreachable defaults at the maximum
+    // metric, even with an explicit type selector. Delete only an observed
+    // owned fallback from the inactive table before its next exclusive add.
+    let routes = json(
+        &policy.ip,
+        &[family, "-N", "-j", "route", "show", "table", "all"],
+    )?;
+    if routes
+        .as_array()
+        .ok_or_else(|| invalid("ip route did not return an array"))?
+        .iter()
+        .any(|route| {
+            numeric_id(&route["table"]) == Some(u64::from(table))
+                && numeric_id(&route["protocol"]) == Some(u64::from(ROUTE_PROTOCOL))
+                && numeric_id(&route["type"]) == Some(7)
+                && route["dst"] == "default"
+                && route["metric"] == u32::MAX
+        })
+    {
+        output(
+            &policy.ip,
+            &args(&[
+                family,
+                "route",
+                "del",
+                "unreachable",
+                "default",
+                "table",
+                &table.to_string(),
+                "proto",
+                &ROUTE_PROTOCOL.to_string(),
+                "metric",
+                &u32::MAX.to_string(),
+            ]),
+            None,
+        )?;
     }
     Ok(())
 }
 
 fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> {
+    check_reservations(policy)?;
     let initial = family_rules(policy, family)?;
     let active = initial
         .as_array()
@@ -451,11 +828,15 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
     {
         delete_rule(policy, family, rule)?;
     }
-    output(
-        &policy.ip,
-        &args(&[family, "-batch", "-"]),
-        Some(&route_batch(routes, table)),
-    )?;
+    check_reservations(policy)?;
+    remove_retained_fallback(policy, family, table)?;
+    let batch = route_batch(routes, table, family);
+    output(&policy.ip, &args(&[family, "-batch", "-"]), Some(&batch)).map_err(|error| {
+        invalid(format!(
+            "{error}\ndirect-network {family} route batch:\n{batch}"
+        ))
+    })?;
+    check_reservations(policy)?;
     let current = family_rules(policy, family)?;
     // New rules are installed while the previous complete table remains live.
     output(
@@ -506,6 +887,23 @@ fn switch_routes(policy: &Policy, family: &str, routes: &[Route]) -> Result<()> 
     Ok(())
 }
 
+fn scoped_nm_dns(address: &str, device: &str) -> Option<String> {
+    let (address, scope) = address
+        .split_once('%')
+        .map_or((address, None), |(ip, scope)| (ip, Some(scope)));
+    let ip = address.parse::<IpAddr>().ok()?;
+    if ip.is_loopback() {
+        return None;
+    }
+    if matches!(ip, IpAddr::V6(ip) if (ip.segments()[0] & 0xffc0) == 0xfe80) {
+        if scope.is_some_and(|scope| scope != device) {
+            return None;
+        }
+        return Some(format!("{ip}%{device}"));
+    }
+    scope.is_none().then(|| ip.to_string())
+}
+
 fn dns_servers(policy: &Policy, devices: &BTreeSet<String>, links: &Value) -> Result<String> {
     let mut servers: BTreeSet<String> = policy.dns_servers.iter().cloned().collect();
     if policy.network_manager_dns {
@@ -536,8 +934,8 @@ fn dns_servers(policy: &Policy, devices: &BTreeSet<String>, links: &Value) -> Re
                 None,
             )?;
             for line in response.lines() {
-                if line.parse::<IpAddr>().is_ok() && !line.starts_with("127.") && line != "::1" {
-                    servers.insert(line.to_owned());
+                if let Some(server) = scoped_nm_dns(line, device) {
+                    servers.insert(server);
                 }
             }
         }
@@ -558,11 +956,86 @@ struct State {
     cgroups: BTreeMap<String, u64>,
     devices: BTreeSet<String>,
     nft_present: bool,
+    // HUP dispatch is process/socket-generation-bound, not a claim that
+    // dnsmasq has completed applying the file. DNS answers are runtime gates.
+    dns_dispatch: Option<(String, dns::Observation)>,
+    dns_error: Option<String>,
+}
+
+fn sync_dns_servers(policy: &Policy, state: &mut State, servers: &str) -> Result<()> {
+    sync_dns_servers_with(policy, state, servers, dns::observe)
+}
+
+fn sync_dns_servers_with(
+    policy: &Policy,
+    state: &mut State,
+    servers: &str,
+    observe: impl Fn(&Policy, &BTreeMap<String, u64>) -> Result<dns::Observation>,
+) -> Result<()> {
+    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(servers)
+        || fs::metadata(&policy.servers_file).is_ok_and(|m| m.mode() & 0o777 != 0o644)
+    {
+        state.dns_dispatch = None;
+        let temp = format!("{}.new", policy.servers_file);
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .mode(0o644)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(&temp)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+        {
+            return Err(invalid("invalid DNS servers replacement ownership"));
+        }
+        file.set_len(0)?;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
+        file.write_all(servers.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(temp, &policy.servers_file)?;
+    }
+    let resolver = match observe(policy, &state.cgroups) {
+        Ok(resolver) => resolver,
+        Err(error) => {
+            // Missing/starting DNS must not deadlock its root routes barrier.
+            // Ordinary readiness still requires an authenticated observation.
+            state.dns_dispatch = None;
+            let message = error.to_string();
+            if state.dns_error.as_ref() != Some(&message) {
+                eprintln!("direct-network DNS not ready: {message}");
+                state.dns_error = Some(message);
+            }
+            return Ok(());
+        }
+    };
+    state.dns_error = None;
+    if state.dns_dispatch.as_ref() != Some(&(servers.to_owned(), resolver.clone())) {
+        state.dns_dispatch = None;
+        output(
+            &policy.systemctl,
+            &args(&[
+                "kill",
+                "--kill-whom=main",
+                "--signal=HUP",
+                "direct-network-dns.service",
+            ]),
+            None,
+        )?;
+        if observe(policy, &state.cgroups)? != resolver {
+            return Err(invalid("resolver changed during reload dispatch"));
+        }
+        state.dns_dispatch = Some((servers.to_owned(), resolver));
+    }
+    Ok(())
 }
 
 fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
     let links = json(&policy.ip, &["-j", "-d", "link", "show"])?;
-    let devices = direct_devices(policy, &links);
+    let devices = direct_devices(policy, &links)?;
     let v4 = select_routes(
         policy,
         &links,
@@ -613,24 +1086,21 @@ fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
         state.nft_present = true;
     }
     let servers = dns_servers(policy, &devices, &links)?;
-    if fs::read_to_string(&policy.servers_file).ok().as_deref() != Some(&servers) {
-        let temp = format!("{}.new", policy.servers_file);
-        fs::write(&temp, servers)?;
-        fs::rename(temp, &policy.servers_file)?;
-        // An absent DNS unit is normal during initial startup. No service
-        // restart is needed when uplink DNS changes.
-        let _ = Command::new(&policy.systemctl)
-            .args([
-                "kill",
-                "--kill-whom=main",
-                "--signal=HUP",
-                "direct-network-dns.service",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    sync_dns_servers(policy, state, &servers)
+}
+
+fn read_authorized_request(
+    stream: &mut UnixStream,
+    uid: u32,
+    allowed: &[u32],
+) -> Result<Option<Vec<u8>>> {
+    if uid != 0 && !allowed.contains(&uid) {
+        return Ok(None);
     }
-    Ok(())
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    let mut request = [0u8; 16];
+    let count = stream.read(&mut request).unwrap_or(0);
+    Ok(Some(request[..count].to_vec()))
 }
 
 /// Run the root daemon. Kernel protection survives daemon failure or normal exit.
@@ -673,25 +1143,31 @@ pub fn daemon(policy_path: &Path) -> Result<()> {
                 Err(error) => return Err(error.into()),
             };
             stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-            stream.set_read_timeout(Some(Duration::from_secs(1)))?;
             let credentials = rustix::net::sockopt::socket_peercred(&stream)?;
-            let authorized = credentials.uid.is_root()
-                || policy.allowed_users.contains(&credentials.uid.as_raw());
-            let mut request = [0u8; 16];
-            let count = stream.read(&mut request).unwrap_or(0);
-            let routes_only = &request[..count] == b"routes\n" && credentials.uid.is_root();
-            let supported = routes_only || &request[..count] == b"ready\n";
+            let Some(request) = read_authorized_request(
+                &mut stream,
+                credentials.uid.as_raw(),
+                &policy.allowed_users,
+            )?
+            else {
+                continue;
+            };
+            let routes_only = request == b"routes\n" && credentials.uid.is_root();
+            let supported = routes_only || request == b"ready\n";
             // A slice may have appeared after the periodic snapshot. Enroll it
             // synchronously before acknowledging its anchor's startup barrier.
-            let current = authorized
-                && supported
+            let current = supported
                 && reconcile(&policy, &mut state).is_ok()
                 && (routes_only
-                    || TcpStream::connect_timeout(
-                        &SocketAddr::from(([127, 0, 0, 54], 5354)),
-                        Duration::from_secs(1),
-                    )
-                    .is_ok());
+                    || state
+                        .dns_dispatch
+                        .as_ref()
+                        .is_some_and(|(servers, resolver)| {
+                            fs::read_to_string(&policy.servers_file).ok().as_deref()
+                                == Some(servers.as_str())
+                                && dns::observe(&policy, &state.cgroups)
+                                    .is_ok_and(|current| &current == resolver)
+                        }));
             let message = if current { "ready\n" } else { "not-ready\n" };
             let _ = stream.write_all(message.as_bytes());
         }
@@ -732,5 +1208,245 @@ fn request_ready(socket: &Path, routes_only: bool, timeout: Duration) -> Result<
         Ok(())
     } else {
         Err(invalid("direct-network guard is not ready"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(super) fn policy() -> Policy {
+        serde_json::from_value(serde_json::json!({
+            "socket": "/run/direct-network/ready.sock", "serversFile": "/run/direct-network/servers",
+            "ip": "/usr/bin/ip", "nft": "/usr/bin/nft", "nmcli": "/usr/bin/nmcli", "systemctl": "/usr/bin/systemctl",
+            "cgroupPaths": ["system.slice/system-direct.slice"], "allowedUsers": [1000],
+            "directInterfaces": [], "dnsServers": [], "dnsZones": {}, "networkManagerDns": true
+        })).unwrap()
+    }
+
+    fn executable(path: &Path, script: &str) {
+        fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn ttl_snapshots_reject_reconciliation_before_commands_or_dns_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let ip = root.path().join("ip");
+        let attempted = root.path().join("unexpected-command");
+        let mut p = policy();
+        p.ip = ip.to_str().unwrap().into();
+        p.nft = p.ip.clone();
+        p.nmcli = p.ip.clone();
+        p.systemctl = p.ip.clone();
+        p.servers_file = root.path().join("servers").to_str().unwrap().into();
+        fs::write(&p.servers_file, "retained DNS\n").unwrap();
+        // Linux retains this attribute only for MPLS today. Supply the iproute2
+        // wire shape explicitly rather than claiming a native IPv4/IPv6 fixture.
+        for family in ["-4", "-6"] {
+            for propagation in [true, false] {
+                executable(
+                    &ip,
+                    &format!(
+                        "case \"$*\" in\n '-j -d link show') printf '%s' '[{{\"ifname\":\"enp1s0\",\"link_type\":\"ether\"}}]';;\n '{family} -j route show table main') printf '%s' '[{{\"dst\":\"default\",\"dev\":\"enp1s0\",\"ttl-propogate\":{propagation}}}]';;\n *'route show table main') printf '[]';;\n *) printf attempted >'{}'; exit 91;;\nesac",
+                        attempted.display()
+                    ),
+                );
+                let mut state = State {
+                    snapshot: Some("retained routes".into()),
+                    ..State::default()
+                };
+                let error = reconcile(&p, &mut state).unwrap_err();
+                assert!(error.to_string().contains("TTL propagation"), "{error}");
+                assert!(!attempted.exists());
+                assert_eq!(state.snapshot.as_deref(), Some("retained routes"));
+                assert_eq!(
+                    fs::read_to_string(&p.servers_file).unwrap(),
+                    "retained DNS\n"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failed_dns_reload_retries_unchanged_files_and_resynchronizes_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let systemctl = root.path().join("systemctl");
+        let count = root.path().join("reload-count");
+        executable(
+            &systemctl,
+            &format!(
+                "case \"$1\" in\n kill) count=0; test ! -f '{0}' || read -r count <'{0}'; count=$((count + 1)); printf '%s\\n' \"$count\" >'{0}'; test \"$count\" -gt 1;;\n *) exit 3;;\nesac",
+                count.display()
+            ),
+        );
+        let mut p = policy();
+        p.systemctl = systemctl.to_str().unwrap().into();
+        p.servers_file = root.path().join("servers").to_str().unwrap().into();
+        let mut state = State::default();
+        let servers = "server=192.0.2.53\n";
+        let temporary_servers = format!("{}.new", p.servers_file);
+        fs::write(&temporary_servers, "restrictive stale replacement").unwrap();
+        fs::set_permissions(&temporary_servers, fs::Permissions::from_mode(0o600)).unwrap();
+        let observe = |_: &Policy, _: &BTreeMap<String, u64>| Ok(dns::test_observation(42));
+        assert!(
+            sync_dns_servers_with(&p, &mut state, servers, observe).is_err(),
+            "failed reload was acknowledged"
+        );
+        assert!(state.dns_dispatch.is_none());
+        assert_eq!(fs::read_to_string(&p.servers_file).unwrap(), servers);
+        assert_eq!(fs::metadata(&p.servers_file).unwrap().mode() & 0o777, 0o644);
+        sync_dns_servers_with(&p, &mut state, servers, observe).unwrap();
+        assert!(state.dns_dispatch.is_some());
+        assert_eq!(fs::read_to_string(&count).unwrap(), "2\n");
+        // A DNS restart must invalidate a receipt while the daemon survives.
+        sync_dns_servers_with(&p, &mut state, servers, |_, _| {
+            Ok(dns::test_observation(43))
+        })
+        .unwrap();
+        assert!(state.dns_dispatch.is_some());
+        assert_eq!(fs::read_to_string(&count).unwrap(), "3\n");
+        let mut bootstrap = State::default();
+        sync_dns_servers_with(&p, &mut bootstrap, servers, |_, _| {
+            Err(invalid("absent resolver"))
+        })
+        .unwrap();
+        assert!(
+            bootstrap.dns_dispatch.is_none(),
+            "absent resolver acknowledged DNS readiness"
+        );
+        fs::remove_file(&p.servers_file).unwrap();
+        fs::create_dir(format!("{}.new", p.servers_file)).unwrap();
+        assert!(sync_dns_servers_with(&p, &mut state, servers, observe).is_err());
+        assert!(
+            state.dns_dispatch.is_none(),
+            "failed file installation retained reload admission"
+        );
+    }
+
+    #[test]
+    fn reserved_table_contents_are_checked_without_rules_before_any_flush() {
+        let root = tempfile::tempdir().unwrap();
+        let ip = root.path().join("ip");
+        let mut p = policy();
+        p.ip = ip.to_str().unwrap().into();
+        for family in ["-4", "-6"] {
+            for table in TABLES {
+                executable(
+                    &ip,
+                    &format!(
+                        "case \"$*\" in\n *'rule show') printf '[]';;\n '{family} -N -j route show table all') printf '%s' '[{{\"dst\":\"192.0.2.0/24\",\"dev\":\"enp1s0\",\"table\":{table},\"protocol\":\"static\"}}]';;\n *'route show table all') printf '[]';;\n *) exit 91;;\nesac"
+                    ),
+                );
+                assert!(
+                    check_reservations(&p).is_err(),
+                    "foreign {family} table {table} was accepted without a policy rule"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn link_local_dns_servers_keep_distinct_interface_scopes_and_reject_mismatches() {
+        let root = tempfile::tempdir().unwrap();
+        let nmcli = root.path().join("nmcli");
+        executable(
+            &nmcli,
+            "case \"$*\" in\n '--wait 2 --escape no --get-values IP4.DNS,IP6.DNS device show wlan0') printf '%s\\n' 'fe80::1' 'fe80::2%wlan0' 'fe80::3%other0' 'fe80::4%' '2001:db8::53' '::1';;\n '--wait 2 --escape no --get-values IP4.DNS,IP6.DNS device show enp1s0') printf '%s\\n' 'fe80::1';;\n *) exit 3;;\nesac",
+        );
+        let mut p = policy();
+        p.nmcli = nmcli.to_str().unwrap().into();
+        let servers = dns_servers(
+            &p,
+            &BTreeSet::from(["wlan0".into(), "enp1s0".into()]),
+            &serde_json::json!([]),
+        )
+        .unwrap();
+        assert!(servers.contains("server=fe80::1%wlan0\n"));
+        assert!(servers.contains("server=fe80::1%enp1s0\n"));
+        assert!(servers.contains("server=fe80::2%wlan0\n"));
+        assert!(servers.contains("server=2001:db8::53\n"));
+        assert!(
+            !servers.contains("fe80::3")
+                && !servers.contains("fe80::4")
+                && !servers.contains("server=::1")
+        );
+        assert_eq!(servers.lines().count(), 4);
+    }
+
+    #[test]
+    fn batches_preserve_canonical_scope_including_omitted_global_device_routes() {
+        let links = serde_json::json!([{"ifname":"enp1s0","link_type":"ether"}]);
+        for (family, route, scope) in [
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","metric":44}),
+                "global",
+            ),
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","scope":"global","metric":44}),
+                "global",
+            ),
+            (
+                "-4",
+                serde_json::json!({"dst":"192.0.2.0/24","dev":"enp1s0","scope":"link","metric":44}),
+                "link",
+            ),
+            (
+                "-6",
+                serde_json::json!({"dst":"2001:db8::/64","dev":"enp1s0","pref":"medium","metric":44}),
+                "global",
+            ),
+        ] {
+            let routes = select_routes(&policy(), &links, &serde_json::json!([route])).unwrap();
+            assert!(
+                route_batch(&routes, TABLES[0], family)
+                    .contains(&format!(" scope {scope} metric 44 dev enp1s0\n"))
+            );
+        }
+    }
+
+    #[test]
+    fn multipath_batch_preserves_order_weights_and_onlink_flags() {
+        let routes = select_routes(
+            &policy(),
+            &serde_json::json!([
+                {"ifname":"enp1s0","link_type":"ether"}, {"ifname":"enp2s0","link_type":"ether"}
+            ]),
+            &serde_json::json!([
+                {"dst":"default","metric":42,"nexthops":[
+                    {"dev":"enp1s0","gateway":"192.0.2.1","weight":2,"flags":["onlink"]},
+                    {"dev":"enp2s0","gateway":"198.51.100.1","weight":3}
+                ]}
+            ]),
+        )
+        .unwrap();
+        assert!(route_batch(&routes, TABLES[0], "-4").contains("default proto 242 scope global metric 42 nexthop via 192.0.2.1 dev enp1s0 weight 2 onlink nexthop via 198.51.100.1 dev enp2s0 weight 3\n"));
+    }
+
+    #[test]
+    fn silent_unauthorized_peers_are_rejected_without_reading_or_delaying_reconciliation() {
+        let (mut server, _silent_peer) = UnixStream::pair().unwrap();
+        let started = Instant::now();
+        assert!(
+            read_authorized_request(&mut server, u32::MAX, &[1000])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "unauthorized peer consumed a blocking read timeout"
+        );
+        for uid in [0, 1000] {
+            let (mut server, mut peer) = UnixStream::pair().unwrap();
+            peer.write_all(b"ready\n").unwrap();
+            assert_eq!(
+                read_authorized_request(&mut server, uid, &[1000])
+                    .unwrap()
+                    .unwrap(),
+                b"ready\n"
+            );
+        }
     }
 }
