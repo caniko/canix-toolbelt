@@ -18,6 +18,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Integrate native original-producer custody with Simit's accepted immutable
+  observer, complete source-owned job enrollment, scoped credentials, bounded
+  phases and separately retained preflight/retention diagnostics.
 - Bound each retained-log read, Git discovery output and cleanup, and snapshot
   structural inode admission. Reject unsupported work xattrs, ACLs and sparse
   files instead of changing their semantics between probes and commands.

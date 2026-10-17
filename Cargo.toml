@@ -12,6 +12,10 @@ readme = "RUST.md"
 keywords = ["nixos", "runtime", "pkl", "configuration"]
 categories = ["config", "command-line-utilities"]
 include = [
+  "/.github/original-producers.json",
+  "/.github/workflows/ci.yaml",
+  "/.github/workflows/nix-builds.yaml",
+  "/.github/workflows/retain-producer-evidence.yaml",
   "/src/**",
   "/tests/**",
   "!/tests/**/__pycache__/**",

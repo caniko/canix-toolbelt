@@ -6,6 +6,67 @@ source export and handoff sealing. Enable `cli,qualification` for the independen
 `canix-toolbelt qualification` frontend. Frontends call the library directly and
 own their output envelopes and exit handling.
 
+## Hosted original-producer custody
+
+The source-owned `.github/original-producers.json` enrollment names every job in
+the six-job CI workflow and the full 34-installable matrix. CI's full-flake gate
+still realizes all 71 x86 Linux checks. Custody uses Simit's reusable native
+`ci observe-original` and `ci verify-original-retention` contracts, independently
+binding branch push and PR originals; repository-owned historical Python tests
+and helper bytes remain historical evidence.
+
+The workflow first checks out the protected event revision with both PR merge
+parents, then selects the exact event head without discarding those objects.
+It provisions an independent full-revision-pinned Simit CLI without evaluating
+the observed source's Nix code. Credentials are scoped to the two native observer
+steps. Those steps clear loader and shell startup variables before launching the
+shell and engine; the engine path is not supplied through a preceding step's
+`GITHUB_ENV` writes.
+Native capture checks repository/run/head/event/workflow/attempt one,
+the exact branch or unambiguous PR target, complete required job inventories and
+successful native step outcomes. Transient read-only GETs retry within one
+aggregate deadline; watch exit status cannot replace terminal producer state.
+Failed, cancelled, skipped, incomplete or identity-changed results never establish
+acceptance. Interrupted responses, original archives and explicit failed receipts
+remain available to the ordinary `always()` artifact upload.
+
+The 360-minute hosted job bounds every phase: checkout 2 minutes, source selection
+1, Nix setup 5, native engine provisioning 20, capture/finalization 318, upload 3,
+independent retention verification 6 and diagnostics upload 1. Capture's
+18,900-second budget leaves its step three minutes for the source probe, bounded
+native finalization and process teardown. These limits total 356 minutes, leaving
+four minutes of job-level reserve. Deadline exhaustion remains failure; original
+producers are never rerun to repair a custody packet.
+
+After capture, native retention verification compares the independent event and
+enrollment, local member inventory, actual provider ZIP digest and member hashes,
+original observer identity, fresh successful producer outcomes and at least
+thirty days of artifact retention. Revalidation GET evidence is retained in a
+separate diagnostic artifact, along with always-incomplete sibling preflight
+receipts (`producer-evidence.preflight-*` and
+`producer-evidence.retention.preflight-*`) even when no packet directory exists.
+Diagnostics are never included in or promoted to the acceptance packet.
+New receipts use `simit.original-custody.v1`;
+historical `producer-custody-v1` receipts are not rewritten or upgraded.
+
+Native custody receipts remain `qualified:false`. Source signatures, immutable
+workflow/source binding, complete full34/full71 semantic evidence, exact-head
+review, merge policy and release publication require their separate
+repository-owned acceptance binders.
+
+The immutable engine is Simit #66's accepted actual merge
+`22c235944807b57badea57515365b3fc4c9f5b9e` (Rust 1.88). Its independent
+337-member acceptance manifest has SHA-256
+`ec560ea9df9ab7bd3e6bab78675de475b1f0968448c24feed86a876431ddc71f`.
+The preserved consumer draft was integrated against that accepted API; consumer
+acceptance requires new original push and PR custody for the final Toolbelt head.
+The repository policy regression checks enrollment, credential scope, deadlines,
+diagnostic separation and the exact engine selection:
+
+```sh
+direnv exec . cargo test --locked --test original_producer_enrollment
+```
+
 ## Run a gate
 
 Write a `RunRequest` JSON document with explicit roots and inputs:
