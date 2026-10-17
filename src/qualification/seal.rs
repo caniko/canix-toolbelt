@@ -472,6 +472,23 @@ fn archive_inventory_from_file(
         }
         relative(&path)?;
         let name = path_text(&path)?.trim_start_matches("./").to_owned();
+        if canonical_semantics {
+            let raw = entry.path_bytes();
+            let canonical = if name == "." && kind.is_dir() {
+                matches!(raw.as_ref(), b"." | b"./")
+            } else {
+                let spelling = raw.strip_prefix(b"./").unwrap_or(&raw);
+                let spelling = if kind.is_dir() {
+                    spelling.strip_suffix(b"/").unwrap_or(spelling)
+                } else {
+                    spelling
+                };
+                spelling == name.as_bytes()
+            };
+            if !canonical {
+                return Err(invalid("source archive member spelling is not canonical"));
+            }
+        }
         reserved_bytes = reserved_bytes.saturating_add(source_entry_bytes(
             &name,
             &SourceFile {

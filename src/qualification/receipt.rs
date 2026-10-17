@@ -1493,7 +1493,7 @@ pub fn execute(
                 receipt.status = RunStatus::SourceChanged;
             }
         }
-        if execution_path.exists() {
+        if native_report_sha256.is_some() || execution_path.exists() {
             let hash = sha256_file_checked(&execution_path, &mut finalize)?;
             if native_report_sha256.as_ref() != Some(&hash) {
                 return Err(invalid(

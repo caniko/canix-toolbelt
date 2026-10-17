@@ -422,6 +422,13 @@ fn collect(
             path.display()
         )));
     }
+    #[cfg(target_os = "linux")]
+    {
+        reject_source_extended_metadata(&root.join(path))?;
+        if metadata.file_type().is_symlink() {
+            reject_source_extended_metadata(&resolved)?;
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -486,6 +493,19 @@ pub(super) fn canonical_directory_mode(mode: u32) -> bool {
     mode & 0o7777 == 0o755
 }
 
+#[cfg(target_os = "linux")]
+fn reject_source_extended_metadata(path: &Path) -> io::Result<()> {
+    match rustix::fs::llistxattr(path, &mut [0u8; 0][..]) {
+        // Filesystems without xattrs, and Nix's filtered builders, cannot expose
+        // this metadata to the producer either. Other inspection errors fail.
+        Ok(0) | Err(rustix::io::Errno::NOTSUP) => Ok(()),
+        Ok(_) => Err(invalid(
+            "source inventory v1 cannot represent extended attributes or ACLs",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() {
@@ -493,6 +513,8 @@ pub(super) fn canonical_source_directory(path: &Path) -> io::Result<()> {
             "source link traverses a non-directory or directory symlink",
         ));
     }
+    #[cfg(target_os = "linux")]
+    reject_source_extended_metadata(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -6,6 +6,194 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use tempfile::tempdir;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn followup_review_source_metadata_is_never_silently_dropped() {
+    for (name, attribute, selection) in [
+        ("tree/file", "user.qualification", "tree/file"),
+        ("tree", "user.qualification", "tree"),
+        ("tree", "user.qualification", "tree/file"),
+        ("tree/file", "user.qualification", "alias"),
+        ("", "user.qualification", "."),
+        ("tree/file", "system.posix_acl_access", "tree/file"),
+        ("tree", "system.posix_acl_access", "tree/file"),
+        ("tree", "system.posix_acl_default", "tree"),
+    ] {
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        fs::create_dir(root.path().join("tree")).unwrap();
+        for path in ["", "tree"] {
+            fs::set_permissions(root.path().join(path), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(root.path().join("tree/file"), b"source").unwrap();
+        std::os::unix::fs::symlink("tree/file", root.path().join("alias")).unwrap();
+        let spec = InventorySpec {
+            root: root.path().into(),
+            paths: vec![selection.into()],
+        };
+        q::inventory(&spec).unwrap();
+        let path = root.path().join(name);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in [
+            (1u16, (mode >> 6) as u16, u32::MAX),
+            (2, 4, rustix::process::geteuid().as_raw()),
+            (4, ((mode >> 3) & 7) as u16, u32::MAX),
+            (16, ((mode >> 3) & 7) as u16, u32::MAX),
+            (32, (mode & 7) as u16, u32::MAX),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(permissions.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        let value = if attribute.starts_with("system.") {
+            acl.as_slice()
+        } else {
+            b"metadata"
+        };
+        match rustix::fs::setxattr(&path, attribute, value, rustix::fs::XattrFlags::empty()) {
+            Ok(()) => {
+                assert_eq!(
+                    fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    mode
+                );
+                for error in [
+                    q::inventory(&spec).unwrap_err(),
+                    q::export_source(&spec, &out.path().join("source.tar")).unwrap_err(),
+                ] {
+                    assert!(
+                        error.to_string().contains("extended attributes"),
+                        "{attribute} on {name:?}: {error}"
+                    );
+                }
+            }
+            Err(rustix::io::Errno::NOTSUP)
+                if std::env::var_os("NIX_BUILD_TOP").is_some()
+                    && std::env::var_os("CANIX_QUALIFICATION_REQUIRE_XATTRS").is_none() =>
+            {
+                q::inventory(&spec).expect("Nix's metadata-free source remains representable");
+            }
+            Err(error) => panic!("cannot create required {attribute} on {name:?}: {error}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn followup_review_archive_member_spellings_must_be_canonical() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("tree")).unwrap();
+    fs::set_permissions(root.path().join("tree"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.path().join("tree/file"), b"source").unwrap();
+    std::os::unix::fs::symlink("file", root.path().join("tree/link")).unwrap();
+    let expected = q::inventory(&InventorySpec {
+        root: root.path().into(),
+        paths: vec!["tree".into()],
+    })
+    .unwrap();
+    let mut accepted = Vec::new();
+    for (index, bad, spelling) in [
+        (0, "tree/file", "tree/file/"),
+        (1, "tree/file", "tree//file"),
+        (2, "tree/file", "tree/./file"),
+        (3, "tree/link", "tree/link/"),
+        (4, "tree/link", "tree//link"),
+        (5, "tree/link", "tree/./link"),
+        (6, "tree", "tree//"),
+        (7, "tree", "tree/./"),
+        (8, ".", "././"),
+        (9, "", ""),
+    ] {
+        let archive = root.path().join(format!("spelling-{index}.tar"));
+        let mut builder = tar::Builder::new(fs::File::create(&archive).unwrap());
+        for name in [".", "tree", "tree/file", "tree/link"] {
+            let directory = matches!(name, "." | "tree");
+            let file = name == "tree/file";
+            let mut header = tar::Header::new_gnu();
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_mtime(0);
+            header.set_mode(if directory { 0o755 } else { 0o644 });
+            header.set_size(if file { 6 } else { 0 });
+            header.set_entry_type(if directory {
+                tar::EntryType::Directory
+            } else if file {
+                tar::EntryType::Regular
+            } else {
+                tar::EntryType::Symlink
+            });
+            if name == "tree/link" {
+                header.set_link_name("file").unwrap();
+            }
+            let ordinary = if directory {
+                format!("./{name}/")
+            } else {
+                format!("./{name}")
+            };
+            let raw = if name == bad {
+                spelling
+            } else if name == "." {
+                "./"
+            } else {
+                &ordinary
+            };
+            // Bypass Builder's path normalization to test the actual header spelling.
+            header.as_mut_bytes()[..100].fill(0);
+            header.as_mut_bytes()[..raw.len()].copy_from_slice(raw.as_bytes());
+            header.set_cksum();
+            builder
+                .append(&header, if file { &b"source"[..] } else { &b""[..] })
+                .unwrap();
+        }
+        builder.finish().unwrap();
+        drop(builder);
+        let valid = q::verify_source_archive(&archive, &expected).is_ok();
+        if bad.is_empty() {
+            assert!(
+                valid,
+                "canonical leading ./ and directory / must remain valid"
+            );
+        } else if valid {
+            accepted.push(spelling);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "noncanonical archive paths accepted: {accepted:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn followup_review_missing_captured_report_cannot_publish_a_passing_run() {
+    let (root, _) = run_fixture("true", 5);
+    let mut request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
+    request.command[2] = "head -c 67108864 /dev/zero".into();
+    request.timeout_seconds = 30;
+    let run = root.path().join("missing-report");
+    let receipt = std::thread::scope(|scope| {
+        let task = scope.spawn(|| q::execute(&request, &run, &Default::default()).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(progress) = q::read_json::<serde_json::Value>(&run.join("finalizing.json")) {
+                assert_eq!(progress["status"], "passed", "{progress:#?}");
+                fs::remove_file(run.join("execution.json")).unwrap();
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "run did not reach finalization"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        task.join().unwrap()
+    });
+    assert_eq!(receipt.execution_exit, Some(0));
+    assert_eq!(receipt.status, q::RunStatus::Failed, "{receipt:#?}");
+    assert!(receipt.execution_report_sha256.is_none());
+    assert!(q::verify_run(&run, None).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn current_review_source_file_modes_must_be_representable() {
