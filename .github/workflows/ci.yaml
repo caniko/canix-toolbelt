@@ -21,6 +21,7 @@ jobs:
       NIX_CONFIG: "experimental-features = nix-command flakes"
       XDG_CACHE_HOME: "/tmp/.cache"
       CARGO_HOME: "/tmp/.cargo"
+      CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
       RUSTDOCFLAGS: "-D warnings"
       RUST_TEST_THREADS: "2"
     steps:

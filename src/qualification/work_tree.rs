@@ -341,7 +341,7 @@ mod tests {
         let mut acl = 2u32.to_le_bytes().to_vec();
         for (tag, permissions, id) in [
             (1u16, 7u16, u32::MAX),
-            (2, 4, 65534),
+            (2, 4, rustix::process::geteuid().as_raw()),
             (4, 5, u32::MAX),
             (16, 5, u32::MAX),
             (32, 0, u32::MAX),
@@ -367,18 +367,41 @@ mod tests {
             } else {
                 b"metadata"
             };
-            rustix::fs::setxattr(
+            let stored = match rustix::fs::setxattr(
                 source.join(name),
                 attribute,
                 value,
                 rustix::fs::XattrFlags::empty(),
-            )
-            .unwrap();
+            ) {
+                Ok(()) => true,
+                // Nix's seccomp filter forbids both creation and enumeration of
+                // EAs/ACLs. Test the metadata-free copy there; native CI must
+                // create every real fixture and exercise its rejection instead.
+                Err(rustix::io::Errno::NOTSUP)
+                    if std::env::var_os("NIX_BUILD_TOP").is_some()
+                        && std::env::var_os("CANIX_QUALIFICATION_REQUIRE_XATTRS").is_none() =>
+                {
+                    assert_eq!(
+                        rustix::fs::flistxattr(
+                            open_directory(&source).unwrap(),
+                            &mut [0u8; 0][..]
+                        ),
+                        Err(rustix::io::Errno::NOTSUP)
+                    );
+                    false
+                }
+                Err(error) => panic!("cannot create required {attribute} on {name:?}: {error}"),
+            };
             let result = copy_tree(&source, &root.path().join("retained"), &|| false);
-            assert!(
-                result.is_err(),
-                "silently discarded {attribute} on {name:?}"
-            );
+            if stored {
+                let error = result.expect_err("silently discarded work metadata");
+                assert!(
+                    error.to_string().contains("extended attributes and ACLs"),
+                    "{attribute} on {name:?}: {error}"
+                );
+            } else {
+                result.expect("metadata-free work must survive Nix's xattr filter");
+            }
         }
     }
 

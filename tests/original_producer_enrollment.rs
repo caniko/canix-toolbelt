@@ -49,6 +49,7 @@ fn original_enrollment_covers_every_generated_ci_and_matrix_job() {
         assert_eq!(actual, expected, "incomplete enrollment in {path}");
     }
     assert!(CI.contains("run: nix flake check\n"));
+    assert!(CI.contains("      CANIX_QUALIFICATION_REQUIRE_XATTRS: \"1\"\n"));
 }
 
 #[test]

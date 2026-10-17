@@ -77,6 +77,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: |
@@ -138,6 +139,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: nix develop -c cargo publish --dry-run --locked --manifest-path "$RUNNER_TEMP/verified-canix-toolbelt/Cargo.toml"
@@ -148,6 +150,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2
@@ -158,6 +161,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh
@@ -168,6 +172,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
@@ -178,6 +183,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
@@ -188,6 +194,7 @@ jobs:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
+          CANIX_QUALIFICATION_REQUIRE_XATTRS: "1"
           RUSTDOCFLAGS: "-D warnings"
           RUST_TEST_THREADS: "2"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
