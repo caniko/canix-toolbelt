@@ -374,19 +374,18 @@ mod tests {
                 rustix::fs::XattrFlags::empty(),
             ) {
                 Ok(()) => true,
-                // Nix's seccomp filter forbids both creation and enumeration of
-                // EAs/ACLs. Test the metadata-free copy there; native CI must
-                // create every real fixture and exercise its rejection instead.
+                // Nix forbids EA/ACL creation; versions differ on whether empty
+                // enumeration remains available. Test the metadata-free copy
+                // there; native CI must create and reject every real fixture.
                 Err(rustix::io::Errno::NOTSUP)
                     if std::env::var_os("NIX_BUILD_TOP").is_some()
                         && std::env::var_os("CANIX_QUALIFICATION_REQUIRE_XATTRS").is_none() =>
                 {
-                    assert_eq!(
-                        rustix::fs::flistxattr(
-                            open_directory(&source).unwrap(),
-                            &mut [0u8; 0][..]
-                        ),
-                        Err(rustix::io::Errno::NOTSUP)
+                    let listed =
+                        rustix::fs::flistxattr(open_directory(&source).unwrap(), &mut [0u8; 0][..]);
+                    assert!(
+                        matches!(listed, Ok(0) | Err(rustix::io::Errno::NOTSUP)),
+                        "unexpected metadata enumeration for {attribute} on {name:?}: {listed:?}"
                     );
                     false
                 }

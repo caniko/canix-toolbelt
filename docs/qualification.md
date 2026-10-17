@@ -205,10 +205,12 @@ Native test concurrency is capped at two through Simit's `extra_env`, matching
 the hosted build-core budget while retaining all tests and their finite deadlines.
 Native CI also sets `CANIX_QUALIFICATION_REQUIRE_XATTRS=1`: all six real user-xattr
 and POSIX-ACL fixtures must be created and rejected by work retention. Nix's
-builder seccomp filter deliberately returns `ENOTSUP` for xattr creation and
-enumeration. Inside that builder alone, the same test verifies both blocked
-operations and successful copying of metadata-free work. The native requirement
-is not inherited by pure Nix derivations; unsupported native fixtures fail.
+builder seccomp filter deliberately returns `ENOTSUP` for xattr creation.
+Depending on the Nix version, enumeration returns either an empty list or
+`ENOTSUP`. Inside that builder alone, the same test verifies blocked creation,
+empty/unsupported enumeration and successful copying of metadata-free work.
+The native requirement is not inherited by pure Nix derivations; unsupported
+native fixtures fail.
 Named ACL users use the current mapped UID so fixtures also work in single-UID
 build namespaces.
 The PID-1 binary shares only the minimal execution-report wire module with the
