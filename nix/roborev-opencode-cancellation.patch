@@ -89,16 +89,16 @@
  	"unicode"
  )
  
-@@ -100,6 +105,8 @@
- 	output io.Writer,
- ) (string, error) {
- 	args := a.buildArgs()
+@@ -109,6 +114,8 @@
+ 	if planningReadOnly(ctx) {
+ 		args = append(args, "--agent", "plan")
+ 	}
 +	sessionID := a.SessionID
 +	confirmed := false
  
  	runResult, runErr := runStreamingCLI(ctx, streamingCLISpec{
  		Name:    "opencode",
-@@ -113,11 +120,30 @@
+@@ -122,11 +129,30 @@
  		// noise. Skip stderr streaming; the full stderr is
  		// still captured by runStreamingCLI and surfaced via
  		// formatDetailedCLIWaitError on non-zero exit.
@@ -132,7 +132,7 @@
  		return "", runErr
  	}
  
-@@ -157,11 +183,23 @@
+@@ -166,11 +192,23 @@
  func parseOpenCodeJSON(
  	r io.Reader, sw *syncWriter,
  ) (string, error) {
