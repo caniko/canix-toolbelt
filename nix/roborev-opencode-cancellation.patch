@@ -1,0 +1,241 @@
+--- a/internal/agent/cli_runner.go
++++ b/internal/agent/cli_runner.go
+@@ -6,7 +6,9 @@
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"os"
+ 	"os/exec"
++	"runtime"
+ 	"sync"
+ 	"time"
+ )
+@@ -76,7 +78,10 @@
+ 	StreamStderr  bool
+ 	CaptureStdout bool
+ 	DrainStdout   bool
+-	Parse         func(io.Reader, *syncWriter) (string, error)
++	// InterruptGracePeriod lets a session-owning CLI finish backend cleanup.
++	// Other adapters retain immediate process cancellation.
++	InterruptGracePeriod time.Duration
++	Parse                func(io.Reader, *syncWriter) (string, error)
+ }
+ 
+ type streamingCLIResult struct {
+@@ -96,8 +101,15 @@
+ 		cmd.Env = append([]string(nil), spec.Env...)
+ 	}
+ 	cmd.Stdin = spec.Stdin
++	graceful := spec.InterruptGracePeriod > 0 && runtime.GOOS != "windows"
++	if graceful {
++		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
++	}
+ 	tracker := configureSubprocess(ctx, cmd)
+ 	cmd.WaitDelay = streamingCLIWaitDelay
++	if graceful {
++		cmd.WaitDelay = spec.InterruptGracePeriod
++	}
+ 
+ 	sw := newSyncWriter(spec.Output)
+ 
+@@ -111,8 +123,10 @@
+ 	defer stdout.Close()
+ 	cmd.Stdout = stdout
+ 
+-	stopClosingPipe := closeOnContextDone(ctx, stdout, tracker)
+-	defer stopClosingPipe()
++	if !graceful {
++		stopClosingPipe := closeOnContextDone(ctx, stdout, tracker)
++		defer stopClosingPipe()
++	}
+ 
+ 	if err := cmd.Start(); err != nil {
+ 		return result, fmt.Errorf("start %s: %w", spec.Name, err)
+@@ -146,6 +160,9 @@
+ 	result.WaitErr = waitErr
+ 	result.Stderr = stderrBuf.String()
+ 	result.Stdout = stdoutBuf.String()
++	if graceful && tracker.canceledByContext.Load() {
++		return result, ctx.Err()
++	}
+ 
+ 	if ctxErr := contextProcessError(ctx, tracker, result.WaitErr, result.ParseErr); ctxErr != nil {
+ 		return result, ctxErr
+--- a/internal/agent/opencode.go
++++ b/internal/agent/opencode.go
+@@ -4,9 +4,14 @@
+ 	"context"
+ 	"encoding/json/jsontext"
+ 	"encoding/json/v2"
++	"errors"
++	"fmt"
+ 	"io"
++	"log"
++	"os/exec"
+ 	"regexp"
+ 	"strings"
++	"time"
+ 	"unicode"
+ )
+ 
+@@ -113,11 +118,34 @@
+ 		// noise. Skip stderr streaming; the full stderr is
+ 		// still captured by runStreamingCLI and surfaced via
+ 		// formatDetailedCLIWaitError on non-zero exit.
+-		StreamStderr: false,
+-		DrainStdout:  true,
+-		Parse:        parseOpenCodeJSON,
++		StreamStderr:         false,
++		CaptureStdout:        true,
++		DrainStdout:          true,
++		InterruptGracePeriod: 10 * time.Second,
++		Parse:                parseOpenCodeJSON,
+ 	})
+ 	if runErr != nil {
++		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
++			sessionID := a.SessionID
++			confirmed := false
++			for line := range strings.SplitSeq(runResult.Stdout, "\n") {
++				if sessionID == "" {
++					sessionID = ExtractSessionID(line)
++				}
++				var event opencodeEvent
++				if json.Unmarshal([]byte(line), &event) == nil && event.Type == "session_cancelled" &&
++					sessionID != "" && ExtractSessionID(line) == sessionID {
++					confirmed = true
++				}
++			}
++			var exitErr *exec.ExitError
++			cleanExit := runResult.WaitErr == nil || (errors.As(runResult.WaitErr, &exitErr) && exitErr.ExitCode() == 130)
++			if !confirmed || !cleanExit || runResult.ParseErr != nil {
++				runErr = fmt.Errorf("opencode cancellation cleanup unconfirmed (session %q, exit %v): %w", sessionID, runResult.WaitErr, runErr)
++				// Worker cancellation handling otherwise hides the adapter error.
++				log.Print(runErr)
++			}
++		}
+ 		return "", runErr
+ 	}
+ 
+--- /dev/null
++++ b/internal/agent/opencode_cancel_test.go
+@@ -0,0 +1,120 @@
++package agent
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"os/signal"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++)
++
++func TestOpenCodeInterruptHelper(t *testing.T) {
++	if os.Getenv("ROBOREV_INTERRUPT_HELPER") != "1" {
++		return
++	}
++	interrupt := make(chan os.Signal, 1)
++	signal.Notify(interrupt, os.Interrupt)
++	fmt.Println(`{"type":"step_start","sessionID":"ses_review"}`)
++	<-interrupt
++	// Cleanup is deliberately slower than the streaming runner's pipe deadline.
++	time.Sleep(500 * time.Millisecond)
++	if err := os.WriteFile(os.Getenv("ROBOREV_INTERRUPT_MARKER"), []byte("ses_review idle"), 0o600); err != nil {
++		os.Exit(1)
++	}
++	fmt.Println(`{"type":"session_cancelled","sessionID":"ses_review"}`)
++	os.Exit(130)
++}
++
++type interruptReadyWriter struct {
++	once   sync.Once
++	cancel context.CancelFunc
++}
++
++func (w *interruptReadyWriter) Write(p []byte) (int, error) {
++	w.once.Do(w.cancel)
++	return len(p), nil
++}
++
++func TestOpenCodeReviewWaitsForInterruptCleanup(t *testing.T) {
++	skipIfWindows(t)
++	for _, deadline := range []bool{false, true} {
++		t.Run(fmt.Sprintf("deadline=%t", deadline), func(t *testing.T) {
++			binary, err := os.Executable()
++			require.NoError(t, err)
++			marker := filepath.Join(t.TempDir(), "cleaned")
++			t.Setenv("ROBOREV_INTERRUPT_HELPER", "1")
++			t.Setenv("ROBOREV_INTERRUPT_MARKER", marker)
++			command := writeTempCommand(t, fmt.Sprintf("#!/bin/sh\ncase \"$1\" in *etxtbsy*) exit 0;; esac\nexec %q -test.run=^TestOpenCodeInterruptHelper$\n", binary))
++			ctx, cancel := context.WithCancel(context.Background())
++			trigger := cancel
++			want := context.Canceled
++			if deadline {
++				cancel()
++				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
++				trigger = func() {}
++				want = context.DeadlineExceeded
++			}
++			defer cancel()
++			_, err = NewOpenCodeAgent(command).Review(ctx, t.TempDir(), "HEAD", "review", &interruptReadyWriter{cancel: trigger})
++			require.ErrorIs(t, err, want)
++			require.NotContains(t, err.Error(), "cleanup unconfirmed")
++			cleaned, readErr := os.ReadFile(marker)
++			require.NoError(t, readErr, "Review returned before session cleanup")
++			require.Equal(t, "ses_review idle", string(cleaned))
++		})
++	}
++}
++
++func TestOpenCodeInterruptCleanupTimeoutIsUnconfirmed(t *testing.T) {
++	skipIfWindows(t)
++	binary, err := os.Executable()
++	require.NoError(t, err)
++	marker := filepath.Join(t.TempDir(), "cleaned")
++	t.Setenv("ROBOREV_INTERRUPT_HELPER", "1")
++	t.Setenv("ROBOREV_INTERRUPT_MARKER", marker)
++	command := writeTempCommand(t, fmt.Sprintf("#!/bin/sh\ncase \"$1\" in *etxtbsy*) exit 0;; esac\nexec %q -test.run=^TestOpenCodeInterruptHelper$\n", binary))
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	started := time.Now()
++	result, err := runStreamingCLI(ctx, streamingCLISpec{
++		Name:                 "opencode",
++		Command:              command,
++		Output:               &interruptReadyWriter{cancel: cancel},
++		CaptureStdout:        true,
++		InterruptGracePeriod: 50 * time.Millisecond,
++		Parse:                parseOpenCodeJSON,
++	})
++	require.ErrorIs(t, err, context.Canceled)
++	require.Less(t, time.Since(started), 2*time.Second)
++	require.Contains(t, result.Stdout, "ses_review")
++	require.NoFileExists(t, marker)
++}
++
++func TestOpenCodeReviewRequiresCancellationConfirmation(t *testing.T) {
++	skipIfWindows(t)
++	for _, tc := range []struct{ name, event, finish string }{
++		{"missing", "", "exit 130"},
++		{"wrong session", `{"type":"session_cancelled","sessionID":"ses_other"}`, "exit 130"},
++		{"failed exit", `{"type":"session_cancelled","sessionID":"ses_review"}`, "exit 1"},
++		{"timeout", `{"type":"session_cancelled","sessionID":"ses_review"}`, "while :; do :; done"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			command := writeTempCommand(t, fmt.Sprintf(`#!/bin/sh
++case "$1" in *etxtbsy*) exit 0;; esac
++trap 'printf '\''%%s\n'\'' '\''%s'\''; %s' INT
++printf '%%s\n' '{"type":"step_start","sessionID":"ses_review"}'
++while :; do :; done
++`, tc.event, tc.finish))
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			_, err := NewOpenCodeAgent(command).Review(ctx, t.TempDir(), "HEAD", "review", &interruptReadyWriter{cancel: cancel})
++			require.ErrorIs(t, err, context.Canceled)
++			require.ErrorContains(t, err, "cancellation cleanup unconfirmed")
++		})
++	}
++}

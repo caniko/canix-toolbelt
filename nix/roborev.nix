@@ -83,6 +83,8 @@
   package = harborGo.lib.mkGoPackage {
     inherit pkgs toolchain version src;
     pname = "roborev";
+    # Retire when upstream includes graceful OpenCode session cancellation.
+    patches = [./roborev-opencode-cancellation.patch];
     vendorHash = "sha256-deCvjJHN3uNK+KYfgoJKxiZFShW5bVnLMksTx2SdrS4=";
     subPackages = ["cmd/roborev"];
     # Agent/config tests create isolated Git fixtures inside the sandbox.
@@ -126,7 +128,10 @@
       "$out/bin/roborev" version
       runHook postInstallCheck
     '';
-    passthru = {inherit frontend deps toolchain bunToolchain;};
+    passthru = {
+      inherit frontend deps toolchain bunToolchain;
+      opencodeCancellationVersion = 1;
+    };
     meta = {
       description = "Continuous code review orchestrator with embedded web assets";
       homepage = "https://github.com/kenn-io/roborev";
