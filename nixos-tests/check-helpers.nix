@@ -15,16 +15,18 @@
     ];
     runtimeScript = ''touch "$out/runtime-ok"'';
   };
-  rejected = builtins.tryEval ((mkEvalCheck {
-    name = "eval-check-helper-rejection";
-    assertions = [
-      {
-        name = "broken-contract";
-        assertion = false;
-        message = "must reject";
-      }
-    ];
-  }).drvPath);
+  rejected =
+    builtins.tryEval
+    (mkEvalCheck {
+      name = "eval-check-helper-rejection";
+      assertions = [
+        {
+          name = "broken-contract";
+          assertion = false;
+          message = "must reject";
+        }
+      ];
+    }).drvPath;
   scriptFor = rule: let
     fixture = inputs.flake-parts.lib.mkFlake {inherit inputs;} {
       systems = [pkgs.stdenv.hostPlatform.system];
