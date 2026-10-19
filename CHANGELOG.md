@@ -7,6 +7,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Keep the source-owned custody policy assertion aligned with the qualified
+  complete-job-log observer revision.
 - Verify complete original job logs when GitHub omits or restores redundant
   numeric step-file copies in run-log ZIPs, preserving exact job identity,
   aggregate coverage, shared content and historical failed custody packets.
