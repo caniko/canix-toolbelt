@@ -1,9 +1,10 @@
 //! Typed runtime-manifest loading with consumer-owned paths.
 //!
-//! Pkl evaluation is embedded through Fleetix. Loading does not execute listed
+//! Pkl evaluation is embedded through Pklx. Loading does not execute listed
 //! binaries, connect to endpoints, or open referenced secret files.
 
-use serde::{Deserialize, Serialize};
+use miette::IntoDiagnostic;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -68,7 +69,7 @@ impl RuntimeManifest {
     /// Returns an error inside a Tokio runtime; async callers should use
     /// [`Self::load_from_async`] to avoid creating a nested runtime.
     pub fn load_from(path: &Path) -> Result<Self, LoadError> {
-        fleetix::pkl::load_sync(path).map_err(|source| LoadError {
+        load_pkl_sync(path).map_err(|source| LoadError {
             path: path.to_owned(),
             source,
         })
@@ -76,11 +77,24 @@ impl RuntimeManifest {
 
     /// Evaluate a manifest using the caller's async runtime.
     pub async fn load_from_async(path: &Path) -> Result<Self, LoadError> {
-        fleetix::pkl::load(path).await.map_err(|source| LoadError {
-            path: path.to_owned(),
-            source,
-        })
+        pklx::eval_to_typed(path, Default::default())
+            .await
+            .map_err(|source| LoadError {
+                path: path.to_owned(),
+                source,
+            })
     }
+}
+
+pub(crate) fn load_pkl_sync<T: DeserializeOwned>(path: &Path) -> miette::Result<T> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(miette::miette!(
+            "load_sync cannot run inside a Tokio runtime; use load(path).await"
+        ));
+    }
+    tokio::runtime::Runtime::new()
+        .into_diagnostic()?
+        .block_on(pklx::eval_to_typed(path, Default::default()))
 }
 
 /// An evaluator or deserialization failure with its source manifest path.

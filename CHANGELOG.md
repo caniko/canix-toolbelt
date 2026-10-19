@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Use published Pklx 0.2 for embedded manifest and review-policy evaluation,
+  removing the vulnerable ZIP 8 dependency while preserving typed loading and
+  rejection of synchronous loading inside a Tokio runtime.
 - Preserve Git-tracked directory symlinks in source inventories and deterministic
   exports. Version 2 binds link text and executable mode while retaining version 1
   evidence verification and rejecting omitted or recursive archive link targets.
