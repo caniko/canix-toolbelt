@@ -58,9 +58,15 @@
       pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg r.paths;
     in ''
       echo ">> ${r.name}"
-      if rg -n ${lib.escapeShellArg r.pattern} ${pathArgs} ${globArgs}; then
+      if rg -n ${globArgs} -- ${lib.escapeShellArg r.pattern} ${pathArgs}; then
         echo ${lib.escapeShellArg r.message} >&2
         exit 1
+      else
+        status=$?
+        if [ "$status" -ne 1 ]; then
+          echo ${lib.escapeShellArg "${r.name}: source scanner failed"} >&2
+          exit "$status"
+        fi
       fi
     '';
   in {

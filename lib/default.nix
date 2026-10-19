@@ -23,6 +23,7 @@ in
     homeActivation = import ./homeActivation.nix {inherit lib;};
     hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
+    mkEvalCheck = import ./mkEvalCheck.nix;
     mpvGpu = import ./mpvGpu.nix;
     networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};

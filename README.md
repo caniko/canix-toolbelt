@@ -29,6 +29,17 @@ Two output families:
 
 ## Usage
 
+### Evaluation and source checks
+
+`lib.mkEvalCheck { inherit pkgs; }` constructs a check from named
+`assertions` (`name`, `assertion`, `message`), with optional `runtimeScript`,
+`nativeBuildInputs`, and `resultMessage`. Failed assertions reject evaluation;
+successful checks retain `assertions.json` and `result` in their output.
+
+`flakeModules.structure-check` runs consumer-owned source rules. A match fails
+with the rule's message; invalid patterns and scanner errors also fail the check.
+Use each rule's `paths` and `globs` to scope scans and declare exceptions.
+
 ### Hosted evidence custody
 
 `retain-producer-evidence.yaml` observes the existing exact-head, attempt-1
