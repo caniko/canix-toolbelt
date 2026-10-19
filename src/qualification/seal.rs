@@ -230,10 +230,10 @@ fn normalized_link(name: &str, link: &Path) -> io::Result<String> {
 /// Verify tar source bytes and filesystem semantics without extracting untrusted paths.
 /// Duplicate paths, hard links, devices, escaping links, and cyclic links are rejected.
 pub fn verify_source_archive(archive: &Path, expected: &Inventory) -> io::Result<()> {
-    if expected.schema_version != 1 || expected.files.is_empty() {
+    if !matches!(expected.schema_version, 1 | 2) || expected.files.is_empty() {
         return Err(invalid("invalid expected archive inventory"));
     }
-    if archive_inventory(archive)? != expected.files {
+    if archive_inventory(archive, expected.schema_version)? != expected.files {
         return Err(invalid("archive inventory differs from qualified source"));
     }
     Ok(())
@@ -245,7 +245,7 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
     if expected.is_empty() {
         return Err(invalid("legacy archive inventory is empty"));
     }
-    let actual: ArtifactIndex = archive_inventory(archive)?
+    let actual: ArtifactIndex = archive_inventory(archive, 1)?
         .into_iter()
         .map(|(name, file)| (name, file.sha256))
         .collect();
@@ -257,7 +257,7 @@ pub fn verify_legacy_archive(archive: &Path, expected: &ArtifactIndex) -> io::Re
     Ok(actual.len())
 }
 
-fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>> {
+fn archive_inventory(archive: &Path, version: u32) -> io::Result<BTreeMap<String, SourceFile>> {
     let mut tar = tar::Archive::new(File::open(archive)?);
     let mut files = BTreeMap::new();
     let mut links = BTreeMap::new();
@@ -303,7 +303,11 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
                 .ok_or_else(|| invalid("missing archive link target"))?
                 .into_owned();
             links.insert(name.clone(), normalized_link(&name, &link)?);
-            Some(path_text(&link)?)
+            let link = path_text(&link)?;
+            if version == 2 {
+                hash.update(link.as_bytes());
+            }
+            Some(link)
         } else if kind.is_file() {
             let mut buffer = [0; 65536];
             loop {
@@ -326,6 +330,13 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             },
         );
     }
+    for path in &seen_paths {
+        for ancestor in path.ancestors().skip(1) {
+            if links.contains_key(&path_text(ancestor)?) {
+                return Err(invalid("archive entry is beneath a symlink"));
+            }
+        }
+    }
     for (name, target) in &links {
         let mut target = target;
         let mut seen = std::collections::BTreeSet::new();
@@ -335,15 +346,23 @@ fn archive_inventory(archive: &Path) -> io::Result<BTreeMap<String, SourceFile>>
             }
             target = next;
         }
-        let sha256 = files
-            .get(target)
-            .ok_or_else(|| invalid("archive symlink target is absent"))?
-            .sha256
-            .clone();
-        files
-            .get_mut(name)
-            .ok_or_else(|| invalid("archive symlink entry is absent"))?
-            .sha256 = sha256;
+        if let Some(file) = files.get(target) {
+            if version == 1 {
+                let sha256 = file.sha256.clone();
+                files
+                    .get_mut(name)
+                    .ok_or_else(|| invalid("archive symlink entry is absent"))?
+                    .sha256 = sha256;
+            }
+        } else if version != 2 || !files.keys().any(|path| Path::new(path).starts_with(target)) {
+            return Err(invalid("archive symlink target is absent"));
+        } else if links.keys().any(|path| Path::new(path).starts_with(target)) {
+            // ponytail: directory-link targets must have symlink-free subtrees.
+            // Supporting recursive aliases requires graph-aware cycle resolution.
+            return Err(invalid(
+                "archive directory symlink target contains symlinks",
+            ));
+        }
     }
     Ok(files)
 }

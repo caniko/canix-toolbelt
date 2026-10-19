@@ -476,7 +476,7 @@ pub fn verify_run(directory: &Path, expected: Option<&Composition>) -> io::Resul
         ));
     }
     for (name, inventory) in &receipt.inventories {
-        if inventory.schema_version != 1
+        if !matches!(inventory.schema_version, 1 | 2)
             || inventory.files.is_empty()
             || receipt.composition.sources.get(name) != Some(&fingerprint(inventory)?)
         {

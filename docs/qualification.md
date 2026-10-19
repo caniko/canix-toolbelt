@@ -121,6 +121,15 @@ every link target must be included. Duplicate entries, hard links, escaping/cycl
 links and special archive members fail closed. The exporter rechecks source after
 writing. Existing archive paths are never overwritten.
 
+New source inventories use version 2: a symlink hashes its exact relative link
+text and records its own executable bits, whether it points to a file or a
+directory. The target's files must be selected separately for an export; links
+are never implicitly traversed. Directory-link targets currently require a
+nonempty, symlink-free selected subtree. Entries beneath an archive symlink are
+rejected. Version 1 inventories and receipts remain verifiable with their
+original target-content hash semantics; the legacy content-only verifier still
+uses version 1.
+
 `seal --request seal-request.json --out /state/handoff` takes an explicit
 `composition`, nonempty `gates` map of labels to execution directories, independently
 selected `expectedReceipts` label-to-receipt-hash map and optional

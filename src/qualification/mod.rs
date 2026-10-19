@@ -39,7 +39,8 @@ pub struct InventorySpec {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceFile {
-    /// SHA-256 of file contents, including an internal symlink's target contents.
+    /// SHA-256 of file bytes, or the exact link text in inventory version 2.
+    /// Version 1 inventories hash a file symlink's target contents instead.
     pub sha256: String,
     /// Whether any Unix executable bit is set.
     pub executable: bool,
@@ -51,7 +52,7 @@ pub struct SourceFile {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Inventory {
-    /// Wire format version; currently 1.
+    /// Wire format version; currently 2. Version 1 remains verifiable.
     pub schema_version: u32,
     /// Sorted, root-relative entries.
     pub files: BTreeMap<String, SourceFile>,
@@ -157,7 +158,7 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
         }
         return Ok(());
     }
-    if !resolved.is_file() {
+    if !resolved.is_file() && !(metadata.file_type().is_symlink() && resolved.is_dir()) {
         return Err(invalid(format!(
             "not a regular source file: {}",
             path.display()
@@ -175,7 +176,7 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
     #[cfg(unix)]
     let executable = {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(&resolved)?.permissions().mode() & 0o111 != 0
+        metadata.permissions().mode() & 0o111 != 0
     };
     #[cfg(not(unix))]
     let executable = false;
@@ -187,7 +188,10 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
     files.insert(
         key.trim_start_matches("./").to_owned(),
         SourceFile {
-            sha256: sha256_file(&resolved)?,
+            sha256: match &link {
+                Some(link) => format!("{:x}", Sha256::digest(link.as_bytes())),
+                None => sha256_file(&resolved)?,
+            },
             executable,
             link,
         },
@@ -209,7 +213,7 @@ pub fn inventory(spec: &InventorySpec) -> io::Result<Inventory> {
         return Err(invalid("source inventory is empty"));
     }
     Ok(Inventory {
-        schema_version: 1,
+        schema_version: 2,
         files,
     })
 }
@@ -234,7 +238,7 @@ pub fn git_inventory_spec(root: &Path, git: &Path) -> io::Result<InventorySpec> 
         .filter(|name| !name.is_empty())
     {
         let path = PathBuf::from(std::str::from_utf8(name).map_err(|e| invalid(e.to_string()))?);
-        if root.join(&path).is_dir() {
+        if fs::symlink_metadata(root.join(&path))?.is_dir() {
             return Err(invalid(format!(
                 "gitlink requires a separate source selection: {}",
                 path.display()

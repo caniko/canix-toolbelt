@@ -206,6 +206,173 @@ fn source_archive_preserves_bytes_and_semantics_and_detects_corruption() {
 
 #[cfg(unix)]
 #[test]
+fn directory_symlinks_survive_git_selection_export_and_verification() {
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join(".agents/skills/example")).unwrap();
+    fs::create_dir_all(root.path().join(".claude/skills")).unwrap();
+    fs::write(
+        root.path().join(".agents/skills/example/SKILL.md"),
+        b"skill\n",
+    )
+    .unwrap();
+    symlink(
+        "../../.agents/skills/example",
+        root.path().join(".claude/skills/example"),
+    )
+    .unwrap();
+    for args in [vec!["init", "--quiet"], vec!["add", ".agents", ".claude"]] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(root.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let spec = q::git_inventory_spec(root.path(), std::path::Path::new("git")).unwrap();
+    let expected = q::inventory(&spec).unwrap();
+    assert_eq!(expected.schema_version, 2);
+    assert_eq!(expected.files.len(), 2);
+    assert_eq!(
+        expected.files[".claude/skills/example"].link.as_deref(),
+        Some("../../.agents/skills/example")
+    );
+    let first = root.path().join("first.tar");
+    let second = root.path().join("second.tar");
+    assert_eq!(q::export_source(&spec, &first).unwrap(), expected);
+    q::export_source(&spec, &second).unwrap();
+    assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+    q::verify_source_archive(&first, &expected).unwrap();
+    let git_archive = root.path().join("git.tar");
+    let tree = Command::new("git")
+        .arg("write-tree")
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert!(tree.status.success());
+    assert!(
+        Command::new("git")
+            .args(["archive", "--output"])
+            .arg(&git_archive)
+            .arg(String::from_utf8(tree.stdout).unwrap().trim())
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    q::verify_source_archive(&git_archive, &expected).unwrap();
+    fs::write(
+        root.path().join(".agents/skills/example/SKILL.md"),
+        b"changed\n",
+    )
+    .unwrap();
+    let changed = q::inventory(&spec).unwrap();
+    assert_ne!(changed, expected);
+    assert!(q::verify_source_archive(&first, &changed).is_err());
+    let mut unsupported = expected;
+    unsupported.schema_version = 3;
+    assert!(q::verify_source_archive(&first, &unsupported).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_symlink_exports_reject_omitted_targets_and_recursive_link_subtrees() {
+    use std::os::unix::fs::symlink;
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("target")).unwrap();
+    fs::write(root.path().join("target/source"), b"source").unwrap();
+    symlink("target", root.path().join("link")).unwrap();
+    let spec = InventorySpec {
+        root: root.path().into(),
+        paths: vec!["link".into()],
+    };
+    assert!(
+        q::export_source(&spec, &root.path().join("omitted.tar"))
+            .unwrap_err()
+            .to_string()
+            .contains("target is absent")
+    );
+    let aliased = InventorySpec {
+        paths: vec!["link".into(), "target".into(), "link/source".into()],
+        ..spec.clone()
+    };
+    assert!(
+        q::export_source(&aliased, &root.path().join("aliased.tar"))
+            .unwrap_err()
+            .to_string()
+            .contains("beneath a symlink")
+    );
+    symlink(".", root.path().join("target/recursive")).unwrap();
+    let recursive = InventorySpec {
+        paths: vec!["link".into(), "target".into()],
+        ..spec
+    };
+    assert!(
+        q::export_source(&recursive, &root.path().join("recursive.tar"))
+            .unwrap_err()
+            .to_string()
+            .contains("contains symlinks")
+    );
+}
+
+#[test]
+fn version_one_archives_keep_target_content_hash_semantics() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("version-one.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&path).unwrap());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(6);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "source", &b"hello\n"[..])
+        .unwrap();
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Symlink);
+    header.set_size(0);
+    header.set_mode(0o644);
+    header.set_link_name("source").unwrap();
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "link", std::io::empty())
+        .unwrap();
+    builder.finish().unwrap();
+    let source = q::SourceFile {
+        sha256: "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03".into(),
+        executable: false,
+        link: None,
+    };
+    let expected = q::Inventory {
+        schema_version: 1,
+        files: [
+            ("source".into(), source.clone()),
+            (
+                "link".into(),
+                q::SourceFile {
+                    link: Some("source".into()),
+                    ..source
+                },
+            ),
+        ]
+        .into(),
+    };
+    q::verify_source_archive(&path, &expected).unwrap();
+    let legacy = expected
+        .files
+        .iter()
+        .map(|(name, file)| (name.clone(), file.sha256.clone()))
+        .collect();
+    assert_eq!(q::verify_legacy_archive(&path, &legacy).unwrap(), 2);
+    let mut reinterpreted = expected;
+    reinterpreted.schema_version = 2;
+    assert!(q::verify_source_archive(&path, &reinterpreted).is_err());
+}
+
+#[cfg(unix)]
+#[test]
 fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     let (root, receipt) = run_fixture("true", 5);
     let request = q::SealRequest {
