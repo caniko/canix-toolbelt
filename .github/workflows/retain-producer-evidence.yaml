@@ -16,25 +16,61 @@ concurrency:
 jobs:
   retain:
     runs-on: ubuntu-24.04
-    # Original matrices have exceeded four hours including hosted queue time.
-    # Keep capture bounded below GitHub's six-hour hosted-job limit so failure
-    # evidence can still upload before the job is terminated.
+    # Setup 28 + capture/finalization 318 + upload 3 + verify 6 + diagnostics 1
+    # leaves four minutes inside GitHub's six-hour hosted-job limit.
     timeout-minutes: 360
     env:
-      GH_TOKEN: ${{ github.token }}
-      SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        max-jobs = 1
+        cores = 2
+        access-tokens =
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        timeout-minutes: 2
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Retain the protected PR merge object and both parents for native
+          # admission; observe policy from the exact source head below.
+          ref: ${{ github.sha }}
+          fetch-depth: 2
           persist-credentials: false
+      - name: Select the exact enrolled source head
+        timeout-minutes: 1
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: git checkout --detach "$SOURCE_HEAD"
+      - name: Install Nix for the pinned native observer
+        timeout-minutes: 5
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+      - name: Provision the exact native Simit observer
+        timeout-minutes: 20
+        env:
+          # Actual merge accepted in Simit #66, including native custody.
+          SIMIT_OBSERVER_REVISION: 22c235944807b57badea57515365b3fc4c9f5b9e
+        run: |
+          set -eu
+          nix build --no-write-lock-file --option access-tokens "" --max-jobs 1 --cores 2 \
+            "github:caniko/simit/$SIMIT_OBSERVER_REVISION#default" \
+            --out-link "$RUNNER_TEMP/simit-custody-engine"
       - name: Observe the existing attempt-1 producers and preserve raw evidence
-        # Stop observation before the job deadline so partial evidence can upload.
-        timeout-minutes: 345
-        run: python3 scripts/retain-producer-evidence.py "$RUNNER_TEMP/producer-evidence"
+        timeout-minutes: 318
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LD_PRELOAD: ""
+          LD_AUDIT: ""
+          LD_LIBRARY_PATH: ""
+          DYLD_INSERT_LIBRARIES: ""
+          DYLD_LIBRARY_PATH: ""
+          DYLD_FRAMEWORK_PATH: ""
+          DYLD_FALLBACK_LIBRARY_PATH: ""
+          DYLD_FALLBACK_FRAMEWORK_PATH: ""
+          BASH_ENV: ""
+          ENV: ""
+        run: '"$RUNNER_TEMP/simit-custody-engine/bin/simit" ci observe-original --spec .github/original-producers.json --results "$RUNNER_TEMP/producer-evidence"'
       - name: Upload producer custody packet
         if: always()
         id: upload
+        timeout-minutes: 3
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: producer-custody-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
@@ -42,29 +78,35 @@ jobs:
           if-no-files-found: error
           path: ${{ runner.temp }}/producer-evidence/
       - name: Verify provider retention and original producer conclusions
+        timeout-minutes: 6
         env:
+          GH_TOKEN: ${{ github.token }}
+          LD_PRELOAD: ""
+          LD_AUDIT: ""
+          LD_LIBRARY_PATH: ""
+          DYLD_INSERT_LIBRARIES: ""
+          DYLD_LIBRARY_PATH: ""
+          DYLD_FRAMEWORK_PATH: ""
+          DYLD_FALLBACK_LIBRARY_PATH: ""
+          DYLD_FALLBACK_FRAMEWORK_PATH: ""
+          BASH_ENV: ""
+          ENV: ""
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
         run: |
-          python3 - <<'PY'
-          import datetime, json, os, subprocess
-          from pathlib import Path
-          repo = os.environ['GITHUB_REPOSITORY']
-          artifact = json.loads(subprocess.check_output([
-              'gh', 'api', f"repos/{repo}/actions/artifacts/{os.environ['ARTIFACT_ID']}"]))
-          seconds = (datetime.datetime.fromisoformat(artifact['expires_at'].replace('Z', '+00:00'))
-                     - datetime.datetime.fromisoformat(artifact['created_at'].replace('Z', '+00:00'))).total_seconds()
-          digest = os.environ['ARTIFACT_DIGEST'].removeprefix('sha256:')
-          print(json.dumps({'artifact': artifact, 'retention_seconds': seconds}, indent=2))
-          assert seconds >= 2592000 and not artifact['expired']
-          assert artifact['digest'] == 'sha256:' + digest
-          assert artifact['workflow_run']['head_sha'] == os.environ['SOURCE_HEAD']
-          receipt = json.loads((Path(os.environ['RUNNER_TEMP']) / 'producer-evidence/receipt.json').read_text())
-          assert receipt['head'] == os.environ['SOURCE_HEAD'] and receipt['capture_complete']
-          assert receipt['event'] == os.environ['GITHUB_EVENT_NAME']
-          assert len(receipt['producers']) == 2
-          assert all(row['status'] == 'completed' and row['conclusion'] == 'success'
-                      and row['run_attempt'] == 1 and row['event'] == receipt['event']
-                      and row['provider_logs_complete'] and row['provider_log_member_count'] > 0
-                      for row in receipt['producers'])
-          PY
+          "$RUNNER_TEMP/simit-custody-engine/bin/simit" ci verify-original-retention \
+            --spec .github/original-producers.json \
+            --results "$RUNNER_TEMP/producer-evidence" \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST"
+      - name: Preserve source preflight and retention revalidation diagnostics
+        if: always()
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: producer-retention-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          retention-days: 32
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/producer-evidence.retention/
+            ${{ runner.temp }}/producer-evidence.preflight-*/
+            ${{ runner.temp }}/producer-evidence.retention.preflight-*/
