@@ -221,18 +221,14 @@ in {
       else content;
   };
 
-  # Inspect the fully merged freeform config only after its definitions are
-  # resolved. Conditional ExecStartPre definitions that read their own sibling
-  # RootDirectory/RootImage fields recurse while merging serviceConfig.
+  # Inspect final services after submodule-level transforms (for example writer
+  # custody guards). Two serviceConfig.apply declarations cannot be merged.
+  # The systemd module renders this service map only after this outer apply.
   options.systemd.services = lib.mkOption {
-    type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
-      options.serviceConfig = lib.mkOption {
-        apply = service:
-          if cfg.enable && builtins.hasAttr name cfg.systemServices
-          then service // {ExecStartPre = insertAdmission "+${ready}" (service.ExecStartPre or []);}
-          else service;
-      };
-    }));
+    apply = lib.mapAttrs (name: service:
+      if cfg.enable && builtins.hasAttr name cfg.systemServices
+      then service // {serviceConfig = service.serviceConfig // {ExecStartPre = insertAdmission "+${ready}" (service.serviceConfig.ExecStartPre or []);};}
+      else service);
   };
 
   config = lib.mkIf cfg.enable ({
