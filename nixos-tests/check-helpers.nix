@@ -44,6 +44,19 @@
     };
   in
     fixture.checks.${pkgs.stdenv.hostPlatform.system}.boundary-ownership.buildCommand;
+  directScript =
+    (inputs.self.lib.mkStructureCheck {inherit pkgs;} {
+      name = "boundary-ownership";
+      src = ./fixtures/structure-check;
+      rules = [
+        {
+          name = "fixture-rule";
+          message = "fixture source violation";
+          globs = ["*.nix"];
+          pattern = "absent";
+        }
+      ];
+    }).buildCommand;
   cases = [
     {
       name = "clean";
@@ -66,6 +79,14 @@
       status = 1;
     }
     {
+      name = "empty-paths";
+      rule = {
+        pattern = "forbidden";
+        paths = [];
+      };
+      status = 1;
+    }
+    {
       name = "excluded";
       rule = {
         pattern = "forbidden";
@@ -76,6 +97,7 @@
   ];
 in
   assert !rejected.success;
+  assert directScript == scriptFor {pattern = "absent";};
     pkgs.runCommand "check-helpers" {nativeBuildInputs = [pkgs.bash pkgs.ripgrep pkgs.jq];} ''
       set -euo pipefail
       jq -e '.[0] == {name: "named-contract", message: "preserved diagnostic"}' ${receipt}/assertions.json

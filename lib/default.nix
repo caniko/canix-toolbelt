@@ -24,6 +24,7 @@ in
     hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
     mkEvalCheck = import ./mkEvalCheck.nix;
+    mkStructureCheck = import ./mkStructureCheck.nix {inherit lib;};
     mpvGpu = import ./mpvGpu.nix;
     networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};

@@ -39,6 +39,9 @@ successful checks retain `assertions.json` and `result` in their output.
 `flakeModules.structure-check` runs consumer-owned source rules. A match fails
 with the rule's message; invalid patterns and scanner errors also fail the check.
 Use each rule's `paths` and `globs` to scope scans and declare exceptions.
+For multiple independently named source checks, call
+`lib.mkStructureCheck { inherit pkgs; } { name = "..."; src = ./.; rules = [...]; }`.
+The flake module delegates to this same constructor.
 
 ### Hosted evidence custody
 
