@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Verify complete original job logs when GitHub omits or restores redundant
+  numeric step-file copies in run-log ZIPs, preserving exact job identity,
+  aggregate coverage, shared content and historical failed custody packets.
 - Retain original hosted producers through transient GitHub API failures with
   Simit's qualified native observer, complete job enrollment and independent
   uploaded-artifact verification; preserve historical failed custody packets.
