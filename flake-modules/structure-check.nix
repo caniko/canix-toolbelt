@@ -57,6 +57,7 @@
             paths = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = ["."];
+              description = "Directories within src to scan. File paths are rejected; select files with globs under their parent directory.";
             };
             globs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
