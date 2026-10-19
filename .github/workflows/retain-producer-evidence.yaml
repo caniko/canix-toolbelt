@@ -45,8 +45,8 @@ jobs:
       - name: Provision the exact native Simit observer
         timeout-minutes: 20
         env:
-          # Actual merge accepted in Simit #66, including native custody.
-          SIMIT_OBSERVER_REVISION: 22c235944807b57badea57515365b3fc4c9f5b9e
+          # Source-qualified complete job-log custody repair from Simit #82.
+          SIMIT_OBSERVER_REVISION: 6f4f60c96cb79ac81863c05d7c7c6025f34a7dd4
         run: |
           set -eu
           nix build --no-write-lock-file --option access-tokens "" --max-jobs 1 --cores 2 \

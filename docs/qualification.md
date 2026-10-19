@@ -3,12 +3,20 @@
 ## Hosted original-producer custody
 
 `.github/original-producers.json` enrolls all six CI jobs and all 34 Nix matrix
-jobs. The retention workflow uses Simit's accepted immutable engine from
-[#66](https://github.com/caniko/simit/pull/66), actual merge
-`22c235944807b57badea57515365b3fc4c9f5b9e`, for `ci observe-original` and
+jobs. The retention workflow uses Simit's source-qualified immutable successor
+from [#82](https://github.com/caniko/simit/pull/82), exact revision
+`6f4f60c96cb79ac81863c05d7c7c6025f34a7dd4`, for `ci observe-original` and
 `ci verify-original-retention`. Its bounded transient GET retries include HTTP
 502; a watcher exit is never a terminal-state guarantee. Historical Python
 helpers, tests and failed packets remain unchanged.
+
+Complete logs are independently bound to each validated original job ID and
+must exactly cover the run ZIP's aggregate logs, including multiplicity. Only
+redundant nested positive-decimal numeric step-file copies may appear or
+disappear; complete job logs, all shared bytes and every other ZIP member remain
+exact. Historical packets without this stronger coverage are not backfilled or
+reclassified. This published maintenance revision is not a Simit trunk merge or
+registry release.
 
 The checkout retains the protected PR merge and both parents before selecting
 the enrolled source head. Observer credentials are scoped to capture and
