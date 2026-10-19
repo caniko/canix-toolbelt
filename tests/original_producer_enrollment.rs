@@ -91,7 +91,7 @@ fn native_custody_scopes_credentials_and_keeps_preflight_failures_separate() {
         .lines()
         .find_map(|line| line.trim().strip_prefix("SIMIT_OBSERVER_REVISION: "))
         .unwrap();
-    assert_eq!(revision, "22c235944807b57badea57515365b3fc4c9f5b9e");
+    assert_eq!(revision, "6f4f60c96cb79ac81863c05d7c7c6025f34a7dd4");
     assert!(provision.contains("github:caniko/simit/$SIMIT_OBSERVER_REVISION#default"));
     assert!(provision.contains("--no-write-lock-file --option access-tokens \"\""));
     assert_eq!(WORKFLOW.matches("GH_TOKEN:").count(), 2);
