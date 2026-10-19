@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Preserve Git-tracked directory symlinks in source inventories and deterministic
+  exports. Version 2 binds link text and executable mode while retaining version 1
+  evidence verification and rejecting omitted or recursive archive link targets.
 - Resolve rustls 0.23.46 to address the TLS advisories disclosed on 2026-10-14.
 - Reject explicit TTL-propagation attributes in eligible direct-route snapshots
   before effects; preserve omission of ineligible paths. This defensive boundary
@@ -27,8 +30,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   `qualification` CLI: inventories, bounded execution receipts, legacy evidence
   verification, Cargo graph comparison, deterministic source export and
   composition-bound handoff sealing.
-
-
 ## [0.5.0] - 2026-10-11
 
 ### Changed
