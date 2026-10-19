@@ -7,6 +7,9 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Retain original hosted producers through transient GitHub API failures with
+  Simit's qualified native observer, complete job enrollment and independent
+  uploaded-artifact verification; preserve historical failed custody packets.
 - Use published Pklx 0.2 for embedded manifest and review-policy evaluation,
   removing the vulnerable ZIP 8 dependency while preserving typed loading and
   rejection of synchronous loading inside a Tokio runtime.
