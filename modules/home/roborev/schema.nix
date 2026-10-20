@@ -1,4 +1,4 @@
-# Roborev v0.71.0 / 2087d5abc7a65f2d6de555ae49fc55795aefb78f.
+# Roborev v0.72.0 / 1d6571d0993d7d56ba0d7da312d27191b881c913.
 # Field names are checked against the pinned Go structs, including Kit's Embedder.
 {
   lib,
@@ -17,7 +17,8 @@
     types.submodule {
       freeformType = toml.type;
       options = lib.mapAttrs (key: optional "${name}.${key}") records.${name};
-    };
+    }
+    // {roborevRecord = name;};
   strings = fields types.str;
   integers = fields types.int;
   booleans = fields types.bool;
@@ -62,7 +63,7 @@
     Config =
       shared
       // strings "auth_key server_addr review_guidelines fix_guidelines default_agent default_model default_backup_agent default_backup_model agent_quota_cooldown fix_commit_author codex_cmd claude_code_cmd gemini_cmd cursor_cmd pi_cmd opencode_cmd grok_cmd anthropic_api_key"
-      // integers "max_workers review_context_count reuse_review_session_lookback job_timeout_minutes hook_timeout_seconds default_max_prompt_size tab_width column_config_version"
+      // integers "max_workers review_context_count reuse_review_session_lookback job_timeout_minutes hook_timeout_seconds default_max_prompt_size tab_width column_config_version prompt_retention_days job_log_retention_days"
       // booleans "isolate_reviews disable_codex_sandbox auto_close_passing_reviews hide_closed_by_default hide_addressed_by_default show_classify_jobs mouse_enabled column_borders allow_unsafe_agents reuse_review_session"
       // lists "fix_commit_co_authored_by exclude_patterns hidden_columns column_order task_column_order"
       // {
@@ -80,6 +81,10 @@
         agent_hook = record "AgentHookConfig";
         droid_hook = record "DroidHookConfig";
         advanced = record "AdvancedConfig";
+        remote = record "RemoteConfig";
+        remote_client = record "RemoteClientConfig";
+        daemon_tls = record "DaemonTLSConfig";
+        goal_review = record "GoalReviewPolicyConfig";
       };
     RepoConfig =
       shared
@@ -91,6 +96,7 @@
         post_commit_review = types.enum ["" "commit" "branch"];
         ci = record "RepoCIConfig";
         auto_design_review = record "AutoDesignReviewRepoConfig";
+        goal_review = record "GoalReviewConfig";
       };
     ProjectConfig =
       strings "review_model display_name synthesis_model"
@@ -196,6 +202,24 @@
       max_chars = types.int;
     };
     AdvancedConfig = booleans "tasks_enabled";
+    RemoteConfig =
+      booleans "enabled trusted_proxy"
+      // strings "listen external_url cert_file tls_key_file read_header_timeout read_timeout request_timeout"
+      // integers "max_header_bytes max_concurrent"
+      // {keys = types.listOf (record "RemoteSigningKey");};
+    RemoteSigningKey =
+      strings "id secret_file secret_env"
+      // lists "grants"
+      // booleans "all_repos"
+      // {repo_ids = types.listOf types.int;};
+    RemoteClientConfig = strings "external_url key_id secret_file secret_env ca_file";
+    DaemonTLSConfig = strings "ca_file cert_file key_file client_cert_file client_key_file";
+    GoalReviewPolicyConfig = {kata_gate = record "GoalReviewGateConfig";};
+    GoalReviewGateConfig.default = types.enum ["block" "warn" "off"];
+    GoalReviewConfig =
+      booleans "enabled"
+      // strings "spec_file plan_file"
+      // {watch = types.listOf (types.enum ["goal" "kata_graph"]);};
     ACPAgentConfig =
       strings "command read_only_mode auto_approve_mode mode model"
       // lists "args" // integers "timeout" // booleans "disable_mode_negotiation";
@@ -210,7 +234,22 @@
 in {
   globalType = record "Config";
   repositoryType = record "RepoConfig";
-  globalOnly = builtins.filter (key: !(builtins.hasAttr key records.RepoConfig)) (builtins.attrNames records.Config);
+  # Paths valid only globally, descending into records that differ by scope.
+  globalOnlyPaths = let
+    walk = prefix: global: repository:
+      lib.concatLists (lib.mapAttrsToList (
+          key: type: let
+            other = repository.${key};
+          in
+            if !(repository ? ${key})
+            then [(prefix ++ [key])]
+            else if type ? roborevRecord && other ? roborevRecord && type.roborevRecord != other.roborevRecord
+            then walk (prefix ++ [key]) records.${type.roborevRecord} records.${other.roborevRecord}
+            else []
+        )
+        global);
+  in
+    walk [] records.Config records.RepoConfig;
   inventory = lib.mapAttrs (_: builtins.attrNames) records;
   inherit clean;
 }

@@ -187,4 +187,22 @@ in {
   });
   C38_runtime_self_link = reject {programs.roborev.runtimeConfigFile = "/home/roborev-fixture/.roborev/config.toml";};
   C39_empty_embedding_reference = accepted (configure {programs.roborev.settings.search.embeddings.api_key = {};});
+  C40_nested_repository_scope = reject {programs.roborev.repositories.example.settings.ci.enabled = true;};
+  C41_nested_policy_scope = reject {programs.roborev.repositories.example.settings.goal_review.kata_gate.default = "warn";};
+  C42_repository_goal_review = accepted (configure {programs.roborev.repositories.example.settings.goal_review.watch = ["goal"];});
+  C43_encoded_postgres_parameter = reject {programs.roborev.settings.sync.postgres_url = "postgresql://host/db?pass%77ord=fixture";};
+  C44_keyword_postgres = reject {programs.roborev.settings.sync.postgres_url = "host=db password=fixture";};
+  C45_postgres_query_reference = accepted (configure {
+    programs.roborev.settings.sync.postgres_url = "postgres://user@host/db?sslmode=require&password=${"\${PG_PASSWORD}"}";
+  });
+  C46_http_mcp_server = reject {
+    programs.roborev.integrations.claude = {
+      server = "unix:///run/user/1000/roborev.sock";
+      mcp = {
+        enable = true;
+        transport = "http";
+        url = "http://127.0.0.1:7373/mcp";
+      };
+    };
+  };
 }

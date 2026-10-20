@@ -15,7 +15,17 @@
   appKey = get ["ci" "github_app_private_key"];
   postgres = get ["sync" "postgres_url"];
   withoutReferences = value: lib.concatStrings (builtins.filter builtins.isString (builtins.split "[$][{][^}]+[}]" value));
-  postgresLogin = builtins.match "postgres(ql)?://([^/@:]+)(:([^/@]*))?@.*" (withoutReferences postgres);
+  postgresBare = withoutReferences postgres;
+  postgresLogin = builtins.match "postgres(ql)?://([^/@:]+)(:([^/@]*))?@.*" postgresBare;
+  # Only URI form: keyword/value strings and encoded parameter names can hide passwords.
+  postgresUri = builtins.match "postgres(ql)?://[^?#]*([?]([^#]*))?(#.*)?" postgresBare;
+  postgresQueryValid = builtins.all (parameter: let
+    pair = builtins.match "([^=]*)(=(.*))?" parameter;
+    key = builtins.head pair;
+  in
+    builtins.match "[A-Za-z_]+" key != null && (lib.toLower key != "password" || toString (builtins.elemAt pair 2) == "")) (
+    builtins.filter (parameter: parameter != "") (lib.splitString "&" (toString (builtins.elemAt postgresUri 2)))
+  );
   postgresPassword =
     if postgresLogin == null
     then null
@@ -54,7 +64,7 @@ in [
     message = "search.embeddings.api_key must be unset or name exactly one env/runtime file source; literal credentials require runtimeConfigFile.";
   }
   {
-    assertion = (postgresPassword == null || postgresPassword == "") && builtins.match ".*[?&]password=[^&]+.*" (withoutReferences postgres) == null && builtins.all validReference postgresReferences;
+    assertion = postgres == "" || (postgresUri != null && (postgresPassword == null || postgresPassword == "") && postgresQueryValid && builtins.all validReference postgresReferences);
     message = "sync.postgres_url passwords require upstream environment/file references outside the store or runtimeConfigFile.";
   }
   {

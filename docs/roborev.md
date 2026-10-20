@@ -29,8 +29,8 @@ resource values, fleet placement and qualified dependency pins.
 
 ## Home Manager configuration coverage
 
-The schema follows Roborev v0.71.0, revision
-`2087d5abc7a65f2d6de555ae49fc55795aefb78f`, including its locked Kit embedding
+The schema follows Roborev v0.72.0, revision
+`1d6571d0993d7d56ba0d7da312d27191b881c913`, including its locked Kit embedding
 and secret-reference structs. `settings` declares every global field and nested
 table; `repositories.<name>.settings` declares the repository fields. This
 includes workflow/model/reasoning routing, fallback agents, custom review types,
@@ -91,7 +91,10 @@ Generated TOML accepts upstream credential references:
 - `search.embeddings.api_key = { env = "ENV_NAME"; }` or
   `{ file = "/absolute/runtime/key"; }`;
 - a `sync.postgres_url` password supplied through `\${ENV_NAME}` or
-  `\${file:/absolute/runtime/password}`.
+  `\${file:/absolute/runtime/password}`, in the URI userinfo or a plain
+  `password` query parameter. Generated configuration accepts only the
+  `postgres://` URI form with unencoded parameter names; keyword/value strings
+  belong in `runtimeConfigFile`.
 
 References cannot point into the Nix store. Kit requires embedding credential
 files to be user-owned regular mode-0600 files and rejects symlinks. Environment
@@ -160,7 +163,7 @@ Keep a tracked project-owned `.roborev.toml` under the project's existing owner,
 or explicitly migrate it before selecting an HM target. Sensitive repository
 webhook settings belong in an externally provisioned private repository file,
 rather than the non-secret renderer. Global-only keys are rejected in repository
-settings.
+settings at any depth, for example `ci.enabled` or `goal_review.kata_gate`.
 
 ### Native harness hooks, skills and MCP clients
 
@@ -201,7 +204,7 @@ When both are enabled, put base settings in `hooks.settings`; both artifacts
 contain the combined document and may select the same target. Other profiles
 require separate hook/MCP targets. HTTP MCP uses `mcp.transport = "http"` and an
 existing credential-free `mcp.url` ending in `/mcp`; native hooks select that
-daemon too. For stdio, `server` optionally selects the daemon and `mcp.url` must
+daemon too, so `server` must be empty. For stdio, `server` optionally selects the daemon and `mcp.url` must
 be omitted. Rendering a client does not enable the daemon's MCP listener: set
 global `settings.mcp.enabled` or its equivalent in the private runtime TOML.
 

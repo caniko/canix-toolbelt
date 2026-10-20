@@ -44,15 +44,13 @@ in {
       }) (lib.filterAttrs (_: repository: repository.target != null) cfg.repositories);
     assertions = lib.concatLists (lib.mapAttrsToList (name: repository: let
       settings = schema.clean repository.settings;
+      globalOnly = builtins.filter (path: lib.hasAttrByPath path settings) schema.globalOnlyPaths;
     in
       [
         {
-          assertion = builtins.all (key: !(builtins.hasAttr key settings)) schema.globalOnly;
-          message = "roborev.repositories.${name}.settings contains a global-only configuration key.";
-        }
-        {
-          assertion = lib.attrByPath ["ci" "github_app_private_key"] "" settings == "";
-          message = "Repository configuration cannot contain GitHub App credentials.";
+          # Includes GitHub App credentials, which exist only in the global ci table.
+          assertion = globalOnly == [];
+          message = "roborev.repositories.${name}.settings contains global-only configuration keys: ${lib.concatMapStringsSep ", " (lib.concatStringsSep ".") globalOnly}.";
         }
         {
           assertion =

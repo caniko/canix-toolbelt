@@ -161,8 +161,8 @@ in {
           message = "Roborev HTTP MCP requires a credential-free /mcp URL; stdio must omit url.";
         }
         {
-          assertion = !integration.hooks.enable || !integration.mcp.enable || integration.mcp.transport != "http" || integration.server == "";
-          message = "HTTP MCP selects the native hook daemon; omit integration.server.";
+          assertion = !integration.mcp.enable || integration.mcp.transport != "http" || integration.server == "";
+          message = "HTTP MCP selects its daemon by URL; omit integration.server.";
         }
         {
           assertion = !(builtins.elem name sharedProfiles && integration.hooks.enable && integration.mcp.enable) || integration.mcp.settings == {};
