@@ -44,7 +44,7 @@ No subscription credentials enter Nix configuration or the store. Imported
 Anthropic API/router environment variables are removed from the service.
 Meridian runs in passthrough mode: OpenCode retains tool execution.
 
-The package pins `opencode-with-claude` 1.11.1, Meridian 1.79.0 and their npm
+The package pins `opencode-with-claude` 1.11.1, Meridian 1.84.0 and their npm
 dependency closure. It selects a Nix-packaged Claude executable explicitly with
 `MERIDIAN_CLAUDE_PATH`, disables npm install scripts and supplies `server.js`
 for V2's local-directory loader. The upstream plugin already implements V2's
