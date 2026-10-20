@@ -184,6 +184,10 @@ admission. An already-active anchor
 cannot admit new workloads while DNS is unavailable. System-manager prechecks
 run only the narrow readiness client with systemd's `+` prefix so service UIDs
 need no additional user authorization. Established workloads remain running.
+System-manager admission is added after service submodules finish merging, so
+other modules' final command transformations (including writer-custody guards)
+remain intact. Merely importing those modules together does not enable either
+integration or create conflicting `serviceConfig.apply` declarations.
 Units using `RootDirectory` or `RootImage` retain the same inline readiness
 precheck. Admission denial is therefore a service execution failure governed by
 the workload's existing `Restart`, `StartLimitIntervalSec` and `StartLimitBurst`

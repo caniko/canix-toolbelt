@@ -2,12 +2,41 @@
   pkgs,
   inputs,
 }: let
+  # Other admission modules transform the final service config too. Their
+  # declarations must compose even when direct-network is disabled.
+  custodyGuard = {lib, ...}: {
+    options.systemd.services = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
+        options.serviceConfig = lib.mkOption {
+          apply = service:
+            if name == "backup"
+            then service // {ExecStartPre = ["${pkgs.coreutils}/bin/echo custody-guard"] ++ lib.toList (service.ExecStartPre or []);}
+            else service;
+        };
+      }));
+    };
+  };
+  disabled =
+    (import "${pkgs.path}/nixos/lib/eval-config.nix" {
+      system = pkgs.stdenv.hostPlatform.system;
+      modules = [
+        ../modules/nixos/networking/direct-network.nix
+        custodyGuard
+        {
+          system.stateVersion = "24.11";
+          canix-toolbelt.networking.directNetwork.package = throw "disabled direct-network package was forced";
+          systemd.services.unrelated.serviceConfig.ExecStart = "${pkgs.coreutils}/bin/true";
+          systemd.services.backup.serviceConfig.ExecStartPre = "${pkgs.coreutils}/bin/true";
+        }
+      ];
+    }).config;
   inherit
     ((import "${pkgs.path}/nixos/lib/eval-config.nix" {
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
         inputs.home-manager.nixosModules.home-manager
         ../modules/nixos/networking/direct-network.nix
+        custodyGuard
         {
           users.users.operator = {
             isNormalUser = true;
@@ -136,6 +165,10 @@
     then []
     else commands ++ [command]) [];
 in
+  assert disabled.systemd.services.unrelated.serviceConfig.ExecStart == "${pkgs.coreutils}/bin/true";
+  assert disabled.systemd.services.backup.serviceConfig.ExecStartPre == ["${pkgs.coreutils}/bin/echo custody-guard" "${pkgs.coreutils}/bin/true"];
+  assert !(disabled.systemd.services ? direct-network);
+  assert !(disabled.environment.etc ? "direct-network-policy.json");
   # An empty list emits no unit directive; inspect the rendered reset too.
   assert pkgs.lib.hasInfix "CapabilityBoundingSet=\n" config.systemd.units."direct-network-dns.service".text;
   assert config.users.users.direct-network-dns.isSystemUser;
@@ -150,7 +183,8 @@ in
   assert pkgs.lib.hasInfix "enable-cache hosts no" config.services.nscd.config;
   assert config.systemd.services.backup.serviceConfig.Slice == "canix-background-direct.slice";
   assert config.systemd.services.backup.serviceConfig.MemoryMax == "1G";
-  assert config.systemd.services.backup.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/true"];
+  assert config.systemd.services.backup.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "${pkgs.coreutils}/bin/echo custody-guard" "${pkgs.coreutils}/bin/true"];
+  assert pkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "ExecStartPre=+${pkgs.hello}/bin/canix-toolbelt-direct-network ready\nExecStartPre=${pkgs.coreutils}/bin/echo custody-guard\nExecStartPre=${pkgs.coreutils}/bin/true\n") config.systemd.units."backup.service".text;
   assert effective config.systemd.services.reset.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready" "/bin/true"];
   assert effective config.systemd.services.scalar-reset.serviceConfig.ExecStartPre == ["+${pkgs.hello}/bin/canix-toolbelt-direct-network ready"];
   assert pkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "ExecStartPre= \nExecStartPre=+${pkgs.hello}/bin/canix-toolbelt-direct-network ready\nExecStartPre=/bin/true\n") config.systemd.units."reset.service".text;

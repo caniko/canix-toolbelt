@@ -7,6 +7,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Keep the source-owned custody policy assertion aligned with the qualified
+  complete-job-log observer revision.
+- Verify complete original job logs when GitHub omits or restores redundant
+  numeric step-file copies in run-log ZIPs, preserving exact job identity,
+  aggregate coverage, shared content and historical failed custody packets.
+- Retain original hosted producers through transient GitHub API failures with
+  Simit's qualified native observer, complete job enrollment and independent
+  uploaded-artifact verification; preserve historical failed custody packets.
 - Use published Pklx 0.2 for embedded manifest and review-policy evaluation,
   removing the vulnerable ZIP 8 dependency while preserving typed loading and
   rejection of synchronous loading inside a Tokio runtime.
