@@ -1225,8 +1225,23 @@ mod tests {
     }
 
     fn executable(path: &Path, script: &str) {
-        fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        use std::io::Write;
+        // Write from a child process: a write descriptor held here leaks into
+        // children that concurrent tests fork, until they exec, and executing
+        // the script while any writer remains fails with ETXTBSY.
+        let mut writer = std::process::Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 700 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        writer
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
+            .unwrap();
+        assert!(writer.wait().unwrap().success());
     }
 
     #[test]
