@@ -58,7 +58,7 @@ name = "orchestration_shadow"
 required-features = ["orchestration"]
 
 [dependencies]
-fleetix = { version = "0.6.0", default-features = false, features = ["pkl"] }
+fleetix = { version = "0.7.0", default-features = false, features = ["pkl"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
