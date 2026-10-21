@@ -5,8 +5,16 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Regenerate CI with Simit d52947d: pull requests run once on pull_request (pushes only on trunk), the 80 installables and checks build in seven shared-store groups, CI no longer re-realizes flake checks (the groups realize them and the supported-systems gate evaluates them on both systems), and completion-driven producer custody replaces the long-polling retention workflow.
+
 ### Fixed
 
+- Answer every queued direct-network readiness request from one reconciliation
+  performed after accepting the batch, and wake on new requests. A
+  reconciliation per connection outlasted the client timeout once a queue
+  formed, so abandoned connections kept every unit's readiness failing.
 - Keep the source-owned custody policy assertion aligned with the qualified
   complete-job-log observer revision.
 - Verify complete original job logs when GitHub omits or restores redundant
@@ -41,6 +49,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   `qualification` CLI: inventories, bounded execution receipts, legacy evidence
   verification, Cargo graph comparison, deterministic source export and
   composition-bound handoff sealing.
+
 ## [0.5.0] - 2026-10-11
 
 ### Changed

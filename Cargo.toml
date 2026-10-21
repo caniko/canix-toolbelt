@@ -22,10 +22,9 @@ include = [
   "/scripts/generate-execution-protocol.py",
   "/EXECUTION_PROTOCOL.md",
   "/RUST.md",
-  "/.github/original-producers.json",
+  "/simit.toml",
   "/.github/workflows/ci.yaml",
   "/.github/workflows/nix-builds.yaml",
-  "/.github/workflows/retain-producer-evidence.yaml",
   "/BUILD_TRAIN.md",
   "/DIRECT_NETWORK.md",
   "/docs/direct-network.md",
@@ -45,7 +44,7 @@ default = []
 cli = ["dep:clap", "dep:signal-hook", "review", "qualification-cli"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
 build-train = ["fleetix/build-train-cli"]
-direct-network = ["rustix/net", "rustix/process", "dep:nix"]
+direct-network = ["rustix/event", "rustix/net", "rustix/process", "dep:nix"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
 qualification = ["dep:sha2", "dep:tar", "rustix/process"]
 qualification-cli = ["qualification", "dep:clap"]

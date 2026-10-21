@@ -26,7 +26,7 @@ jobs:
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -87,6 +87,8 @@ jobs:
 
           git_fetch --force --tags origin "refs/tags/${tag}:refs/tags/${tag}"
           git verify-tag "$tag"
+          signed_tag_name="$(git cat-file tag "refs/tags/$tag" | sed -n '1,/^$/s/^tag //p')"
+          test "$signed_tag_name" = "$tag" || { echo 'Signed tag object name differs from the release label' >&2; exit 1; }
           validated_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
           checkout_sha="$(git rev-parse --verify HEAD)"
           if [ "$validated_sha" != "$checkout_sha" ]; then
@@ -130,6 +132,31 @@ jobs:
             git rev-parse 'HEAD^{tree}' > "$SIMIT_NIX_BUILD_RESULTS/tree"
           fi
 
+      - name: Required gate crate-release
+        timeout-minutes: 30
+        env:
+          SIMIT_REQUIRED_GATE: "1"
+        run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c cargo publish --dry-run --locked --all-features --jobs 2
+      - name: Required gate operator-regressions
+        timeout-minutes: 30
+        env:
+          SIMIT_REQUIRED_GATE: "1"
+        run: bash scripts/prepare-hosted-source.sh && nix develop --max-jobs 1 --cores 2 -c bash scripts/operator-regressions.sh
+      - name: Required gate generated-parity
+        timeout-minutes: 30
+        env:
+          SIMIT_REQUIRED_GATE: "1"
+        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/d52947d94849bbfb6db22812adc90a3c2920c080 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
+      - name: Required gate supported-systems
+        timeout-minutes: 30
+        env:
+          SIMIT_REQUIRED_GATE: "1"
+        run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
+      - name: Required gate roborev-worker
+        timeout-minutes: 30
+        env:
+          SIMIT_REQUIRED_GATE: "1"
+        run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
       - name: Check flake
         run: nix flake check
 
@@ -181,7 +208,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/simit-crates/canix-toolbelt"
           cp "$RUNNER_TEMP/simit-package-target/package/canix-toolbelt-$version.crate" "$RUNNER_TEMP/simit-crates/canix-toolbelt/"
       - name: Retain original-run archive canix-toolbelt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: simit-crate-canix-toolbelt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/simit-crates/canix-toolbelt/*.crate
