@@ -7,6 +7,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- Answer every queued direct-network readiness request from one reconciliation
+  performed after accepting the batch, and wake on new requests. A
+  reconciliation per connection outlasted the client timeout once a queue
+  formed, so abandoned connections kept every unit's readiness failing.
 - Keep the source-owned custody policy assertion aligned with the qualified
   complete-job-log observer revision.
 - Verify complete original job logs when GitHub omits or restores redundant

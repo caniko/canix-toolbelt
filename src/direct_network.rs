@@ -1126,53 +1126,88 @@ pub fn daemon(policy_path: &Path) -> Result<()> {
     let mut state = State::default();
     let mut previous_error = String::new();
     loop {
-        let result = reconcile(&policy, &mut state);
-        if let Err(error) = &result {
-            let message = error.to_string();
-            if message != previous_error {
-                eprintln!("direct-network not ready: {message}");
-                previous_error = message;
-            }
-        } else {
-            previous_error.clear();
-        }
-        for _ in 0..16 {
-            let (mut stream, _) = match listener.accept() {
-                Ok(connection) => connection,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error.into()),
-            };
-            stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-            let credentials = rustix::net::sockopt::socket_peercred(&stream)?;
-            let Some(request) = read_authorized_request(
-                &mut stream,
-                credentials.uid.as_raw(),
-                &policy.allowed_users,
-            )?
-            else {
-                continue;
-            };
-            let routes_only = request == b"routes\n" && credentials.uid.is_root();
-            let supported = routes_only || request == b"ready\n";
-            // A slice may have appeared after the periodic snapshot. Enroll it
-            // synchronously before acknowledging its anchor's startup barrier.
-            let current = supported
-                && reconcile(&policy, &mut state).is_ok()
-                && (routes_only
-                    || state
-                        .dns_dispatch
-                        .as_ref()
-                        .is_some_and(|(servers, resolver)| {
-                            fs::read_to_string(&policy.servers_file).ok().as_deref()
-                                == Some(servers.as_str())
-                                && dns::observe(&policy, &state.cgroups)
-                                    .is_ok_and(|current| &current == resolver)
-                        }));
-            let message = if current { "ready\n" } else { "not-ready\n" };
-            let _ = stream.write_all(message.as_bytes());
-        }
-        thread::sleep(Duration::from_secs(1));
+        serve(&policy, &listener, &mut state, &mut previous_error)?;
+        // Wake for the next request, or reconcile periodically when idle.
+        let _ = rustix::event::poll(
+            &mut [rustix::event::PollFd::new(
+                &listener,
+                rustix::event::PollFlags::IN,
+            )],
+            Some(&rustix::event::Timespec {
+                tv_sec: 1,
+                tv_nsec: 0,
+            }),
+        );
     }
+}
+
+/// Accept every queued request, reconcile once, and answer the whole batch.
+///
+/// A reconciliation per request outlasts client timeouts once a queue forms,
+/// so abandoned connections would keep the queue from ever draining.
+fn serve(
+    policy: &Policy,
+    listener: &UnixListener,
+    state: &mut State,
+    previous_error: &mut String,
+) -> Result<()> {
+    let mut requests = Vec::new();
+    // Bound every accepted peer, rejected or silent, so a flood cannot postpone
+    // reconciliation. The remainder keeps the listener readable for the next.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    for _ in 0..256 {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let (mut stream, _) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => return Err(error.into()),
+        };
+        stream.set_write_timeout(Some(Duration::from_secs(1)))?;
+        let credentials = rustix::net::sockopt::socket_peercred(&stream)?;
+        let Some(request) =
+            read_authorized_request(&mut stream, credentials.uid.as_raw(), &policy.allowed_users)?
+        else {
+            continue;
+        };
+        let routes_only = request == b"routes\n" && credentials.uid.is_root();
+        let supported = routes_only || request == b"ready\n";
+        requests.push((stream, supported.then_some(routes_only)));
+    }
+    // A slice may have appeared after the previous snapshot. Reconciling after
+    // accepting enrolls it before acknowledging its anchor's startup barrier.
+    let result = reconcile(policy, state);
+    if let Err(error) = &result {
+        let message = error.to_string();
+        if message != *previous_error {
+            eprintln!("direct-network not ready: {message}");
+            *previous_error = message;
+        }
+    } else {
+        previous_error.clear();
+    }
+    let routes = result.is_ok();
+    let dns = routes
+        && requests.iter().any(|(_, kind)| *kind == Some(false))
+        && state
+            .dns_dispatch
+            .as_ref()
+            .is_some_and(|(servers, resolver)| {
+                fs::read_to_string(&policy.servers_file).ok().as_deref() == Some(servers.as_str())
+                    && dns::observe(policy, &state.cgroups)
+                        .is_ok_and(|current| &current == resolver)
+            });
+    for (mut stream, kind) in requests {
+        let current = match kind {
+            Some(true) => routes,
+            Some(false) => dns,
+            None => false,
+        };
+        // Peers that already gave up only cost this failed write.
+        let _ = stream.write_all(if current { b"ready\n" } else { b"not-ready\n" });
+    }
+    Ok(())
 }
 
 /// Wait a bounded time for the daemon's current route/DNS/cgroup readiness.
@@ -1462,6 +1497,47 @@ mod tests {
                     .unwrap(),
                 b"ready\n"
             );
+        }
+    }
+
+    #[test]
+    fn queued_requests_share_one_reconciliation_within_the_client_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        let ip = root.path().join("ip");
+        let count = root.path().join("reconciliations");
+        // Each reconciliation starts with a slow link snapshot, then fails.
+        executable(
+            &ip,
+            &format!("printf x >>'{}'; sleep 0.3; exit 1", count.display()),
+        );
+        let mut p = policy();
+        p.ip = ip.to_str().unwrap().into();
+        p.allowed_users = vec![rustix::process::geteuid().as_raw()];
+        let listener = UnixListener::bind(root.path().join("ready.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut clients = (0..32)
+            .map(|_| {
+                let mut client = UnixStream::connect(root.path().join("ready.sock")).unwrap();
+                client.write_all(b"ready\n").unwrap();
+                client
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        serve(&p, &listener, &mut State::default(), &mut String::new()).unwrap();
+        // request_ready's read timeout: later answers reach only abandoned peers.
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(fs::read_to_string(&count).unwrap(), "x");
+        for client in &mut clients {
+            client
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert_eq!(response, "not-ready\n");
         }
     }
 }
