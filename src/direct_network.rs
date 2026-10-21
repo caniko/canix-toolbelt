@@ -1152,8 +1152,13 @@ fn serve(
     previous_error: &mut String,
 ) -> Result<()> {
     let mut requests = Vec::new();
-    // Bounded per batch; the remainder keeps the listener readable for the next.
-    while requests.len() < 256 {
+    // Bound every accepted peer, rejected or silent, so a flood cannot postpone
+    // reconciliation. The remainder keeps the listener readable for the next.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    for _ in 0..256 {
+        if Instant::now() >= deadline {
+            break;
+        }
         let (mut stream, _) = match listener.accept() {
             Ok(connection) => connection,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
