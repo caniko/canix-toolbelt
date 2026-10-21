@@ -67,8 +67,6 @@ nix_builds = [
   ".#checks.x86_64-linux.host-selection-eval",
   ".#checks.x86_64-linux.harbor-db-compat-eval",
   ".#checks.x86_64-linux.harbor-db-compat-runtime",
-  ".#checks.x86_64-linux.direnv-eval",
-  ".#checks.x86_64-linux.direnv-runtime",
   ".#checks.x86_64-linux.gatus-instances-eval",
   ".#checks.x86_64-linux.gatus-publisher-eval",
   ".#checks.x86_64-linux.garage-buckets-registry-eval",
@@ -210,8 +208,6 @@ network = [
 services = [
   ".#checks.x86_64-linux.harbor-db-compat-eval",
   ".#checks.x86_64-linux.harbor-db-compat-runtime",
-  ".#checks.x86_64-linux.direnv-eval",
-  ".#checks.x86_64-linux.direnv-runtime",
   ".#checks.x86_64-linux.gatus-instances-eval",
   ".#checks.x86_64-linux.gatus-publisher-eval",
   ".#checks.x86_64-linux.garage-buckets-registry-eval",
