@@ -7,7 +7,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
-- Regenerate CI with Simit d52947d: pull requests run once on pull_request (pushes only on trunk), the 80 installables and checks build in seven shared-store groups, CI evaluates the flake without rebuilding it, and completion-driven producer custody replaces the long-polling retention workflow.
+- Regenerate CI with Simit d52947d: pull requests run once on pull_request (pushes only on trunk), the 80 installables and checks build in seven shared-store groups, CI no longer re-realizes flake checks (the groups realize them and the supported-systems gate evaluates them on both systems), and completion-driven producer custody replaces the long-polling retention workflow.
 
 ### Fixed
 

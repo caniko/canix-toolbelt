@@ -4,6 +4,9 @@ platform = "github"
 runtime = "nix"
 runner = "ubuntu-24.04"
 components = ["flake-evaluation"]
+# Grouped builds realize every check and the supported-systems gate evaluates
+# all checks on both systems; --no-build cannot evaluate this flake's IFD checks.
+nix_flake_check = false
 # Validate PR heads once (pull_request) and the default branch on push.
 push_branches = ["trunk"]
 nix_builds = [
