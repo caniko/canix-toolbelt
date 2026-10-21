@@ -22,13 +22,17 @@
  }
  
  type streamingCLIResult struct {
-@@ -96,8 +101,15 @@
+@@ -96,8 +101,19 @@
  		cmd.Env = append([]string(nil), spec.Env...)
  	}
  	cmd.Stdin = spec.Stdin
 +	graceful := spec.InterruptGracePeriod > 0 && runtime.GOOS != "windows"
++	var interruptDeadline time.Time
 +	if graceful {
-+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
++		cmd.Cancel = func() error {
++			interruptDeadline = time.Now().Add(spec.InterruptGracePeriod)
++			return cmd.Process.Signal(os.Interrupt)
++		}
 +	}
  	tracker := configureSubprocess(ctx, cmd)
  	cmd.WaitDelay = streamingCLIWaitDelay
@@ -38,7 +42,7 @@
  
  	sw := newSyncWriter(spec.Output)
  
-@@ -111,8 +123,10 @@
+@@ -111,8 +127,10 @@
  	defer stdout.Close()
  	cmd.Stdout = stdout
  
@@ -51,11 +55,18 @@
  
  	if err := cmd.Start(); err != nil {
  		return result, fmt.Errorf("start %s: %w", spec.Name, err)
-@@ -146,6 +160,9 @@
+@@ -146,6 +164,16 @@
  	result.WaitErr = waitErr
  	result.Stderr = stderrBuf.String()
  	result.Stdout = stdoutBuf.String()
 +	if graceful && tracker.canceledByContext.Load() {
++		// Wait can hide a pipe timeout behind context cancellation or exit 130,
++		// and reports ctx.Err even after a successful exit. Keep both distinct.
++		if !time.Now().Before(interruptDeadline) {
++			result.WaitErr = fmt.Errorf("cleanup deadline exceeded (exit %v): %w", result.WaitErr, exec.ErrWaitDelay)
++		} else if errors.Is(result.WaitErr, ctx.Err()) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
++			result.WaitErr = nil
++		}
 +		return result, ctx.Err()
 +	}
  
@@ -78,7 +89,16 @@
  	"unicode"
  )
  
-@@ -113,11 +118,34 @@
+@@ -100,6 +105,8 @@
+ 	output io.Writer,
+ ) (string, error) {
+ 	args := a.buildArgs()
++	sessionID := a.SessionID
++	confirmed := false
+ 
+ 	runResult, runErr := runStreamingCLI(ctx, streamingCLISpec{
+ 		Name:    "opencode",
+@@ -113,11 +120,30 @@
  		// noise. Skip stderr streaming; the full stderr is
  		// still captured by runStreamingCLI and surfaced via
  		// formatDetailedCLIWaitError on non-zero exit.
@@ -86,25 +106,21 @@
 -		DrainStdout:  true,
 -		Parse:        parseOpenCodeJSON,
 +		StreamStderr:         false,
-+		CaptureStdout:        true,
 +		DrainStdout:          true,
 +		InterruptGracePeriod: 10 * time.Second,
-+		Parse:                parseOpenCodeJSON,
- 	})
- 	if runErr != nil {
-+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
-+			sessionID := a.SessionID
-+			confirmed := false
-+			for line := range strings.SplitSeq(runResult.Stdout, "\n") {
++		Parse: func(r io.Reader, sw *syncWriter) (string, error) {
++			return parseOpenCodeJSONWithObserver(r, sw, func(line string, event opencodeEvent) {
 +				if sessionID == "" {
 +					sessionID = ExtractSessionID(line)
 +				}
-+				var event opencodeEvent
-+				if json.Unmarshal([]byte(line), &event) == nil && event.Type == "session_cancelled" &&
-+					sessionID != "" && ExtractSessionID(line) == sessionID {
++				if event.Type == "session_cancelled" && sessionID != "" && ExtractSessionID(line) == sessionID {
 +					confirmed = true
 +				}
-+			}
++			})
++		},
+ 	})
+ 	if runErr != nil {
++		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 +			var exitErr *exec.ExitError
 +			cleanExit := runResult.WaitErr == nil || (errors.As(runResult.WaitErr, &exitErr) && exitErr.ExitCode() == 130)
 +			if !confirmed || !cleanExit || runResult.ParseErr != nil {
@@ -116,15 +132,41 @@
  		return "", runErr
  	}
  
+@@ -157,11 +183,23 @@
+ func parseOpenCodeJSON(
+ 	r io.Reader, sw *syncWriter,
+ ) (string, error) {
++	return parseOpenCodeJSONWithObserver(r, sw, nil)
++}
++
++func parseOpenCodeJSONWithObserver(
++	r io.Reader, sw *syncWriter, observe func(string, opencodeEvent),
++) (string, error) {
+ 	textParts := newTrailingReviewText()
+ 
+ 	err := scanStreamJSONLines(r, sw, func(line string) error {
+ 		var ev opencodeEvent
+-		if json.Unmarshal([]byte(line), &ev) == nil && ev.Part != nil {
++		if json.Unmarshal([]byte(line), &ev) != nil {
++			return nil
++		}
++		if observe != nil {
++			observe(line, ev)
++		}
++		if ev.Part != nil {
+ 			var part opencodePart
+ 			if json.Unmarshal(ev.Part, &part) == nil && part.Type != "" {
+ 				if part.Type == "tool" {
 --- /dev/null
 +++ b/internal/agent/opencode_cancel_test.go
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,173 @@
 +package agent
 +
 +import (
 +	"context"
 +	"fmt"
 +	"os"
++	"os/exec"
 +	"os/signal"
 +	"path/filepath"
 +	"sync"
@@ -148,6 +190,9 @@
 +		os.Exit(1)
 +	}
 +	fmt.Println(`{"type":"session_cancelled","sessionID":"ses_review"}`)
++	if os.Getenv("ROBOREV_INTERRUPT_EXIT_ZERO") == "true" {
++		os.Exit(0)
++	}
 +	os.Exit(130)
 +}
 +
@@ -163,18 +208,22 @@
 +
 +func TestOpenCodeReviewWaitsForInterruptCleanup(t *testing.T) {
 +	skipIfWindows(t)
-+	for _, deadline := range []bool{false, true} {
-+		t.Run(fmt.Sprintf("deadline=%t", deadline), func(t *testing.T) {
++	for _, tc := range []struct {
++		deadline bool
++		exitZero bool
++	}{{false, false}, {false, true}, {true, false}, {true, true}} {
++		t.Run(fmt.Sprintf("deadline=%t/exitZero=%t", tc.deadline, tc.exitZero), func(t *testing.T) {
 +			binary, err := os.Executable()
 +			require.NoError(t, err)
 +			marker := filepath.Join(t.TempDir(), "cleaned")
 +			t.Setenv("ROBOREV_INTERRUPT_HELPER", "1")
 +			t.Setenv("ROBOREV_INTERRUPT_MARKER", marker)
++			t.Setenv("ROBOREV_INTERRUPT_EXIT_ZERO", fmt.Sprint(tc.exitZero))
 +			command := writeTempCommand(t, fmt.Sprintf("#!/bin/sh\ncase \"$1\" in *etxtbsy*) exit 0;; esac\nexec %q -test.run=^TestOpenCodeInterruptHelper$\n", binary))
 +			ctx, cancel := context.WithCancel(context.Background())
 +			trigger := cancel
 +			want := context.Canceled
-+			if deadline {
++			if tc.deadline {
 +				cancel()
 +				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
 +				trigger = func() {}
@@ -187,6 +236,51 @@
 +			cleaned, readErr := os.ReadFile(marker)
 +			require.NoError(t, readErr, "Review returned before session cleanup")
 +			require.Equal(t, "ses_review idle", string(cleaned))
++		})
++	}
++}
++
++func TestOpenCodeInterruptRetainedPipeIsUnconfirmed(t *testing.T) {
++	skipIfWindows(t)
++	for _, exitCode := range []int{0, 130} {
++		t.Run(fmt.Sprintf("exit=%d", exitCode), func(t *testing.T) {
++			pidFile := filepath.Join(t.TempDir(), "holder.pid")
++			t.Cleanup(func() {
++				data, err := os.ReadFile(pidFile)
++				var pid int
++				if err != nil {
++					return
++				}
++				if _, err := fmt.Sscan(string(data), &pid); err == nil && pid > 0 {
++					if process, err := os.FindProcess(pid); err == nil {
++						_ = process.Kill()
++					}
++				}
++			})
++			command := writeTempCommand(t, fmt.Sprintf(`#!/bin/sh
++case "$1" in *etxtbsy*) exit 0;; esac
++trap 'printf '"'"'%%s\n'"'"' '"'"'{"type":"session_cancelled","sessionID":"ses_review"}'"'"'; exit %d' INT
++sleep 60 &
++printf '%%s\n' "$!" > %q
++printf '%%s\n' '{"type":"step_start","sessionID":"ses_review"}'
++wait
++`, exitCode, pidFile))
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			started := time.Now()
++			result, err := runStreamingCLI(ctx, streamingCLISpec{
++				Name:                 "opencode",
++				Command:              command,
++				Output:               &interruptReadyWriter{cancel: cancel},
++				CaptureStdout:        true,
++				DrainStdout:          true,
++				InterruptGracePeriod: 50 * time.Millisecond,
++				Parse:                parseOpenCodeJSON,
++			})
++			require.ErrorIs(t, err, context.Canceled)
++			require.ErrorIs(t, result.WaitErr, exec.ErrWaitDelay)
++			require.Contains(t, result.Stdout, `"type":"session_cancelled"`)
++			require.Less(t, time.Since(started), 2*time.Second)
 +		})
 +	}
 +}
