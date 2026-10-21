@@ -2,7 +2,7 @@
 
 <!-- simit:badges:start -->
 
-[![CI](https://img.shields.io/badge/CI-managed+extra-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/canix-toolbelt)
+[![CI](https://img.shields.io/badge/CI-managed+extra-2088ff)](.github/workflows/ci.yaml) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](https://docs.rs/canix-toolbelt) [![crates.io](https://img.shields.io/badge/crates.io-publishable-f46623)](https://crates.io/crates/canix-toolbelt)
 
 <!-- simit:badges:end -->
 
@@ -31,13 +31,15 @@ Two output families:
 
 ### Hosted evidence custody
 
-`retain-producer-evidence.yaml` observes the existing exact-head, attempt-1
-CI and installable runs for both branch pushes and pull requests. It binds each
-packet to its own event and head, with separate push and PR archives. It retains
-the event payload, original provider logs, job metadata, source workflow hashes
-and a SHA-256-bound receipt for 32 days. The final step checks actual provider
-expiry against the 30-day floor and requires both original producer conclusions
-to pass. It never reruns either producer.
+The Simit-generated `producer-custody.yaml` observes completed, original
+attempt-1 `CI` and grouped `Nix installable builds` runs through `workflow_run`
+from the default branch, without a waiting runner. It retains provider logs,
+job metadata, executed workflow files and required artifacts, and reports
+`simit/producer-custody/<event>/<target>` on the source head. Pull requests are
+qualified by their `pull_request` runs; pushes run only on `trunk`. Enrollment
+lives in `[ci.custody]` of `simit.toml`, and
+`tests/producer_custody_enrollment.rs` keeps it complete. It never reruns a
+producer.
 Custody does not establish complete test coverage, zero skips or architecture
 execution; those still require independent inspection of the retained results.
 Failed pinentry integration cases print disposable fixture pane and process

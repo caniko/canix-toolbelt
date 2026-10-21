@@ -2,36 +2,14 @@
 
 ## Hosted original-producer custody
 
-`.github/original-producers.json` enrolls all six CI jobs and all 34 Nix matrix
-jobs. The retention workflow uses Simit's source-qualified immutable successor
-from [#82](https://github.com/caniko/simit/pull/82), exact revision
-`6f4f60c96cb79ac81863c05d7c7c6025f34a7dd4`, for `ci observe-original` and
-`ci verify-original-retention`. Its bounded transient GET retries include HTTP
-502; a watcher exit is never a terminal-state guarantee. Historical Python
-helpers, tests and failed packets remain unchanged.
-
-Complete logs are independently bound to each validated original job ID and
-must exactly cover the run ZIP's aggregate logs, including multiplicity. Only
-redundant nested positive-decimal numeric step-file copies may appear or
-disappear; complete job logs, all shared bytes and every other ZIP member remain
-exact. Historical packets without this stronger coverage are not backfilled or
-reclassified. This published maintenance revision is not a Simit trunk merge or
-registry release.
-
-The checkout retains the protected PR merge and both parents before selecting
-the enrolled source head. Observer credentials are scoped to capture and
-retention verification. All phases are bounded within the six-hour job limit,
-reserving time for packet upload and separate preflight/retention diagnostics.
-The actual uploaded ZIP digest, members, at least thirty days of retention and
-fresh original conclusions are independently revalidated. Required jobs and
-native steps must succeed; failed, skipped, cancelled or incomplete capture
-cannot pass. Push and PR originals remain distinct, and attempts are never
-rerun to repair custody.
-
-The engine's `qualified` field remains false: capture and retention do not
-authorize source acceptance, merge, publication or deployment. The registry
-`simit 0.21.0` release predates this observer repair and is not a substitute for
-the accepted immutable revision.
+`[ci.custody]` in `simit.toml` enrolls the six CI jobs and the seven grouped
+Nix build jobs (`build (<group>)`, artifacts `nix-build-<index>`). Simit's
+generated `producer-custody.yaml` runs on `workflow_run` completion from the
+default branch, captures each original attempt-1 producer and reports
+`simit/producer-custody/<event>/<target-sha256>` on the source head. It replaced
+the long-polling `retain-producer-evidence.yaml` and
+`.github/original-producers.json`, which held a runner for the whole producer
+run. Historical Python helpers, tests and failed packets remain unchanged.
 
 ### Failed packet: `b2ed9cc` push originals
 

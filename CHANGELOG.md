@@ -5,6 +5,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Regenerate CI with Simit d52947d: pull requests run once on pull_request (pushes only on trunk), the 80 installables and checks build in seven shared-store groups, CI evaluates the flake without rebuilding it, and completion-driven producer custody replaces the long-polling retention workflow.
+
 ### Fixed
 
 - Answer every queued direct-network readiness request from one reconciliation
@@ -45,6 +49,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   `qualification` CLI: inventories, bounded execution receipts, legacy evidence
   verification, Cargo graph comparison, deterministic source export and
   composition-bound handoff sealing.
+
 ## [0.5.0] - 2026-10-11
 
 ### Changed

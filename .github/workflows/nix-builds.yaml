@@ -3,7 +3,8 @@ name: Nix installable builds
 
 on:
   push:
-    branches: ["**"]
+    branches:
+      - "trunk"
   pull_request:
   workflow_dispatch:
 
@@ -11,67 +12,49 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow_ref }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow_ref }}-${{ github.event_name }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.ref_type == 'tag' && github.ref || format('refs/heads/{0}', github.event.pull_request.head.ref || github.ref_name) }}
   cancel-in-progress: true
 
 jobs:
   build:
+    name: build (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        installable:
-          - ".#checks.x86_64-linux.direct-network-transitions"
-          - ".#checks.x86_64-linux.execution-protocol"
-          - ".#canix-toolbelt-pinentry"
-          - ".#rage-pinentry"
-          - ".#checks.x86_64-linux.pinentry-home-eval"
-          - ".#canix-toolbelt"
-          - ".#canix-toolbelt-build-train"
-          - ".#canix-toolbelt-direct-network"
-          - ".#checks.x86_64-linux.direct-network-eval"
-          - ".#checks.x86_64-linux.executor-admission-eval"
-          - ".#checks.x86_64-linux.build-train-eval"
-          - ".#checks.x86_64-linux.build-train-policy"
-          - ".#canix-toolbelt-roborev-worker"
-          - ".#roborev"
-          - ".#checks.x86_64-linux.roborev-module"
-          - ".#checks.x86_64-linux.roborev-unit"
-          - ".#checks.x86_64-linux.resumable-operator-eval"
-          - ".#checks.x86_64-linux.resumable-operator-runtime"
-          - ".#opencode-browser-adapter"
-          - ".#opencode-with-claude"
-          - ".#checks.x86_64-linux.opencode-claude-eval"
-          - ".#checks.x86_64-linux.opencode-jev-runtime"
-          - ".#checks.x86_64-linux.headroom-eval"
-          - ".#checks.x86_64-linux.browser-connection-eval"
-          - ".#checks.x86_64-linux.browser-connection-runtime"
-          - ".#checks.x86_64-linux.browser-connection-smoke"
-          - ".#checks.x86_64-linux.direnv-eval"
-          - ".#checks.x86_64-linux.direnv-runtime"
-          - ".#checks.x86_64-linux.harbor-db-compat-eval"
-          - ".#checks.x86_64-linux.harbor-db-compat-runtime"
-          - ".#checks.x86_64-linux.dns-publication-eval"
-          - ".#checks.x86_64-linux.opencode-environment-eval"
-          - ".#checks.x86_64-linux.opencode-environment-runtime"
-          - ".#checks.x86_64-linux.opencode-environment-legacy"
+        include:
+          - group: "agents"
+            installables: '[".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval"]'
+          - group: "core"
+            installables: '[".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol"]'
+          - group: "network"
+            installables: '[".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval"]'
+          - group: "pinentry"
+            installables: '[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval"]'
+          - group: "platform"
+            installables: '[".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"]'
+          - group: "roborev"
+            installables: '[".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell"]'
+          - group: "services"
+            installables: '[".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval"]'
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Prepare Nix build evidence
-        env:
-          INSTALLABLE: ${{ matrix.installable }}
         run: |
           SIMIT_NIX_BUILD_RESULTS="$RUNNER_TEMP/simit-nix-build-${{ strategy.job-index }}"
-          printf '%s\n' "SIMIT_NIX_BUILD_RESULTS=$SIMIT_NIX_BUILD_RESULTS" >> "$GITHUB_ENV"
           mkdir -p "$SIMIT_NIX_BUILD_RESULTS"
+          printf '%s\n' "SIMIT_NIX_BUILD_RESULTS=$SIMIT_NIX_BUILD_RESULTS" >> "$GITHUB_ENV"
           git rev-parse HEAD > "$SIMIT_NIX_BUILD_RESULTS/revision"
-          printf '%s\n' "$INSTALLABLE" > "$SIMIT_NIX_BUILD_RESULTS/installable"
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
@@ -80,6 +63,29 @@ jobs:
           git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
 
+      - name: Provision grouped-build Rust engine
+        shell: bash
+        env:
+          SIMIT_CI_ENGINE_REVISION: ${{ vars.SIMIT_CI_ENGINE_REVISION }}
+          BASH_ENV: ''
+          ENV: ''
+          NIX_CONFIG: 'experimental-features = nix-command flakes'
+          NIX_USER_CONF_FILES: /dev/null
+          NIX_PATH: ''
+        run: |
+          [[ "$SIMIT_CI_ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo 'Enroll an immutable SIMIT_CI_ENGINE_REVISION containing ci nix-group' >&2; exit 1; }
+          case "$(uname -s):$(uname -m)" in
+            Linux:x86_64|Linux:aarch64|Linux:arm64|Darwin:arm64|Darwin:aarch64) ;;
+            *) echo 'unsupported grouped engine runner system' >&2; exit 1 ;;
+          esac
+          engine_path=$(env -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_OAUTH_TOKEN -u ATTIC_TOKEN -u CACHIX_AUTH_TOKEN -u CACHIX_SIGNING_KEY nix build --no-link --no-update-lock-file --print-out-paths --option accept-flake-config false --option access-tokens '' --option substituters https://cache.nixos.org "github:caniko/simit/$SIMIT_CI_ENGINE_REVISION#default")
+          [[ "$engine_path" =~ ^/nix/store/[0-9a-z]{32}-[A-Za-z0-9+._?=-]+$ ]] || { echo 'Invalid engine output inventory' >&2; exit 1; }
+          test -x "$engine_path/bin/simit"
+          "$engine_path/bin/simit" ci nix-group --help > /dev/null
+          printf '%s\n' "$SIMIT_CI_ENGINE_REVISION" > "$SIMIT_NIX_BUILD_RESULTS/engine-source-revision"
+          engine_digest=$(nix hash file --type sha256 --base16 "$engine_path/bin/simit")
+          printf '%s  %s\n' "$engine_digest" "$engine_path/bin/simit" > "$SIMIT_NIX_BUILD_RESULTS/engine-executable.sha256"
+          printf '%s\n' "SIMIT_CI_ENGINE=$engine_path/bin/simit" >> "$GITHUB_ENV"
       - name: Project setup
         run: |
           set -eu
@@ -105,26 +111,138 @@ jobs:
             git rev-parse 'HEAD^{tree}' > "$SIMIT_NIX_BUILD_RESULTS/tree"
           fi
 
-      - name: Build ${{ matrix.installable }}
-        env:
-          INSTALLABLE: ${{ matrix.installable }}
+      - name: Resolve cached Nix inputs
+        id: simit-nix-cache
+        shell: bash
         run: |
           set -euo pipefail
-          exec 3> >(tee "$SIMIT_NIX_BUILD_RESULTS/build.log" >&2)
-          log_pid=$!
-          status=0
-          nix build --no-link --no-update-lock-file --max-jobs 1 --cores 2 --json "$INSTALLABLE" 2>&3 | tee "$SIMIT_NIX_BUILD_RESULTS/result.json" || status=$?
-          exec 3>&-
-          wait "$log_pid"
-          exit "$status"
+          cache_root="$RUNNER_TEMP/simit-nix-cache"
+          mkdir -p "$cache_root"
+          resolve() {
+            local drv
+            drv=$(nix path-info --derivation --no-update-lock-file "$2")
+            [[ "$drv" =~ ^/nix/store/([0-9a-z]{32})-[^/]+\.drv$ ]] || { echo "Cached Nix input $2 must select exactly one local derivation" >&2; exit 1; }
+            printf '%s\n' "$drv" > "$cache_root/$1.drv"
+            printf 'key-%s=simit-nix-input-v1-%s\n' "$1" "${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          }
+          resolve 0 .#canix-toolbelt-zellij
+      - name: Restore cached Nix input 0
+        id: simit-nix-cache-0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/simit-nix-cache/0
+          key: ${{ steps.simit-nix-cache.outputs.key-0 }}
+      - name: Import cached Nix inputs
+        shell: bash
+        env:
+          SIMIT_NIX_GROUP: ${{ matrix.group }}
+          SIMIT_NIX_CACHE_HIT_0: ${{ steps.simit-nix-cache-0.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          cache_root="$RUNNER_TEMP/simit-nix-cache"
+          case "$SIMIT_NIX_GROUP" in
+            agents) members=(.#opencode-browser-adapter .#opencode-with-claude .#checks.x86_64-linux.opencode-claude-eval .#checks.x86_64-linux.opencode-jev-runtime .#checks.x86_64-linux.opencode-environment-eval .#checks.x86_64-linux.opencode-environment-runtime .#checks.x86_64-linux.opencode-environment-legacy .#checks.x86_64-linux.browser-connection-eval .#checks.x86_64-linux.browser-connection-runtime .#checks.x86_64-linux.browser-connection-smoke .#checks.x86_64-linux.headroom-eval .#checks.x86_64-linux.agent-safety-eval .#checks.x86_64-linux.agent-safety-home-eval .#checks.x86_64-linux.dev-agent-isolation-eval .#checks.x86_64-linux.dev-agent-isolation-scope .#checks.x86_64-linux.dev-oom-guard-pause-eval .#checks.x86_64-linux.dev-oom-guard-protection .#checks.x86_64-linux.chromium-gpu-eval) ;;
+            core) members=(.#canix-toolbelt .#canix-toolbelt-build-train .#canix-toolbelt-direct-network .#checks.x86_64-linux.direct-network-transitions .#checks.x86_64-linux.direct-network-eval .#checks.x86_64-linux.direct-link-eval .#checks.x86_64-linux.executor-admission-eval .#checks.x86_64-linux.build-train-eval .#checks.x86_64-linux.build-train-policy .#checks.x86_64-linux.resumable-operator-eval .#checks.x86_64-linux.resumable-operator-runtime .#checks.x86_64-linux.execution-protocol) ;;
+            network) members=(.#checks.x86_64-linux.vpn-netns-eval .#checks.x86_64-linux.vpn-netns-runtime .#checks.x86_64-linux.public-edge .#checks.x86_64-linux.public-edge-eval .#checks.x86_64-linux.wg-home-endpoint-selection .#checks.x86_64-linux.wg-home-shared-eval .#checks.x86_64-linux.cloud-host-eval .#checks.x86_64-linux.cloud-host-install-bios .#checks.x86_64-linux.cloud-host-install-uefi .#checks.x86_64-linux.dns-apex-cname-assertion .#checks.x86_64-linux.dns-caddy-redirect-routes .#checks.x86_64-linux.dns-lib-helpers-eval .#checks.x86_64-linux.dns-octodns-apply-force .#checks.x86_64-linux.dns-pages-zone-eval .#checks.x86_64-linux.dns-publication-eval .#checks.x86_64-linux.ssh-aliases-eval .#checks.x86_64-linux.host-selection-eval) ;;
+            pinentry) members=(.#canix-toolbelt-pinentry .#rage-pinentry .#checks.x86_64-linux.pinentry-home-eval) ;;
+            platform) members=(.#checks.x86_64-linux.activation-contracts-eval .#checks.x86_64-linux.activation-manifest-eval .#checks.x86_64-linux.gpu-backends-eval .#checks.x86_64-linux.gpu-media-eval .#checks.x86_64-linux.gpu-render-eval .#checks.x86_64-linux.gpu-routes-eval .#checks.x86_64-linux.keyboard-layout-shortcut-eval .#checks.x86_64-linux.nexus-device-types-assertion .#checks.x86_64-linux.nexus-profiles .#checks.x86_64-linux.pre-commit .#checks.x86_64-linux.profile-transition-check .#checks.x86_64-linux.treefmt) ;;
+            roborev) members=(.#canix-toolbelt-roborev-worker .#roborev .#checks.x86_64-linux.roborev-module .#checks.x86_64-linux.roborev-unit .#checks.x86_64-linux.roborev-shell) ;;
+            services) members=(.#checks.x86_64-linux.harbor-db-compat-eval .#checks.x86_64-linux.harbor-db-compat-runtime .#checks.x86_64-linux.direnv-eval .#checks.x86_64-linux.direnv-runtime .#checks.x86_64-linux.gatus-instances-eval .#checks.x86_64-linux.gatus-publisher-eval .#checks.x86_64-linux.garage-buckets-registry-eval .#checks.x86_64-linux.attic-projects-registry-eval .#checks.x86_64-linux.kanidm-preset-eval .#checks.x86_64-linux.rauthy-preset-eval .#checks.x86_64-linux.service-topology-v2-eval .#checks.x86_64-linux.site-helpers-eval .#checks.x86_64-linux.project-tree-eval) ;;
+            *) echo 'Unknown Nix execution group' >&2; exit 1 ;;
+          esac
+          gate_drvs=$(nix path-info --derivation --no-update-lock-file "${members[@]}")
+          gates=$(nix-store --query --outputs $gate_drvs)
+          test -n "$gates"
+          import_input() {
+            local hit="SIMIT_NIX_CACHE_HIT_$1" outputs closure
+            [ "${!hit}" = true ] || return 0
+            outputs=$(nix-store --query --outputs "$(cat "$cache_root/$1.drv")")
+            if ! closure=$(nix path-info --store "file://$cache_root/$1" --recursive $outputs); then
+              echo "::warning::Cached Nix input $1 is unreadable; building it normally"
+              rm -rf "$cache_root/$1"
+              return 0
+            fi
+            if grep -xF -- "$gates" <<< "$closure"; then
+              echo "Cached Nix input $1 contains the qualification outputs above" >&2
+              exit 1
+            fi
+            nix copy --no-check-sigs --from "file://$cache_root/$1" $outputs || echo "::warning::Cached Nix input $1 failed to import; building it normally"
+            rm -rf "$cache_root/$1"
+          }
+          import_input 0
+      - name: Build Nix group
+        shell: bash
+        env:
+          SIMIT_NIX_GROUP: ${{ matrix.group }}
+        run: |
+          case "$SIMIT_NIX_GROUP" in
+            agents)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            core)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            network)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            pinentry)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            platform)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            roborev)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            services)
+              (umask 077; set -C; printf '%s' '{"schema":"simit.nix-group-spec.v1","members":[".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval"],"plan":[".#canix-toolbelt-pinentry",".#rage-pinentry",".#checks.x86_64-linux.pinentry-home-eval",".#canix-toolbelt",".#canix-toolbelt-build-train",".#canix-toolbelt-direct-network",".#checks.x86_64-linux.direct-network-transitions",".#checks.x86_64-linux.direct-network-eval",".#checks.x86_64-linux.direct-link-eval",".#checks.x86_64-linux.executor-admission-eval",".#checks.x86_64-linux.build-train-eval",".#checks.x86_64-linux.build-train-policy",".#checks.x86_64-linux.resumable-operator-eval",".#checks.x86_64-linux.resumable-operator-runtime",".#checks.x86_64-linux.execution-protocol",".#canix-toolbelt-roborev-worker",".#roborev",".#checks.x86_64-linux.roborev-module",".#checks.x86_64-linux.roborev-unit",".#checks.x86_64-linux.roborev-shell",".#opencode-browser-adapter",".#opencode-with-claude",".#checks.x86_64-linux.opencode-claude-eval",".#checks.x86_64-linux.opencode-jev-runtime",".#checks.x86_64-linux.opencode-environment-eval",".#checks.x86_64-linux.opencode-environment-runtime",".#checks.x86_64-linux.opencode-environment-legacy",".#checks.x86_64-linux.browser-connection-eval",".#checks.x86_64-linux.browser-connection-runtime",".#checks.x86_64-linux.browser-connection-smoke",".#checks.x86_64-linux.headroom-eval",".#checks.x86_64-linux.agent-safety-eval",".#checks.x86_64-linux.agent-safety-home-eval",".#checks.x86_64-linux.dev-agent-isolation-eval",".#checks.x86_64-linux.dev-agent-isolation-scope",".#checks.x86_64-linux.dev-oom-guard-pause-eval",".#checks.x86_64-linux.dev-oom-guard-protection",".#checks.x86_64-linux.chromium-gpu-eval",".#checks.x86_64-linux.vpn-netns-eval",".#checks.x86_64-linux.vpn-netns-runtime",".#checks.x86_64-linux.public-edge",".#checks.x86_64-linux.public-edge-eval",".#checks.x86_64-linux.wg-home-endpoint-selection",".#checks.x86_64-linux.wg-home-shared-eval",".#checks.x86_64-linux.cloud-host-eval",".#checks.x86_64-linux.cloud-host-install-bios",".#checks.x86_64-linux.cloud-host-install-uefi",".#checks.x86_64-linux.dns-apex-cname-assertion",".#checks.x86_64-linux.dns-caddy-redirect-routes",".#checks.x86_64-linux.dns-lib-helpers-eval",".#checks.x86_64-linux.dns-octodns-apply-force",".#checks.x86_64-linux.dns-pages-zone-eval",".#checks.x86_64-linux.dns-publication-eval",".#checks.x86_64-linux.ssh-aliases-eval",".#checks.x86_64-linux.host-selection-eval",".#checks.x86_64-linux.harbor-db-compat-eval",".#checks.x86_64-linux.harbor-db-compat-runtime",".#checks.x86_64-linux.direnv-eval",".#checks.x86_64-linux.direnv-runtime",".#checks.x86_64-linux.gatus-instances-eval",".#checks.x86_64-linux.gatus-publisher-eval",".#checks.x86_64-linux.garage-buckets-registry-eval",".#checks.x86_64-linux.attic-projects-registry-eval",".#checks.x86_64-linux.kanidm-preset-eval",".#checks.x86_64-linux.rauthy-preset-eval",".#checks.x86_64-linux.service-topology-v2-eval",".#checks.x86_64-linux.site-helpers-eval",".#checks.x86_64-linux.project-tree-eval",".#checks.x86_64-linux.activation-contracts-eval",".#checks.x86_64-linux.activation-manifest-eval",".#checks.x86_64-linux.gpu-backends-eval",".#checks.x86_64-linux.gpu-media-eval",".#checks.x86_64-linux.gpu-render-eval",".#checks.x86_64-linux.gpu-routes-eval",".#checks.x86_64-linux.keyboard-layout-shortcut-eval",".#checks.x86_64-linux.nexus-device-types-assertion",".#checks.x86_64-linux.nexus-profiles",".#checks.x86_64-linux.pre-commit",".#checks.x86_64-linux.profile-transition-check",".#checks.x86_64-linux.treefmt"],"check_systems":["x86_64-linux"],"limits":["--max-jobs","1","--cores","2"],"post_build":[],"post_build_always":[],"fresh_installables":[]}' > "$SIMIT_NIX_BUILD_RESULTS/group-spec.json")
+              ;;
+            *) echo 'Unknown Nix execution group' >&2; exit 1 ;;
+          esac
+          "$SIMIT_CI_ENGINE" ci nix-group --spec "$SIMIT_NIX_BUILD_RESULTS/group-spec.json"
+      - name: Export cached Nix inputs
+        id: simit-nix-cache-save
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SIMIT_NIX_CACHE_HIT_0: ${{ steps.simit-nix-cache-0.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          cache_root="$RUNNER_TEMP/simit-nix-cache"
+          export_input() {
+            local hit="SIMIT_NIX_CACHE_HIT_$1" outputs kib
+            [ "${!hit}" != true ] && test -s "$cache_root/$1.drv" || return 0
+            outputs=$(nix-store --query --outputs "$(cat "$cache_root/$1.drv")")
+            nix-store --check-validity $outputs 2>/dev/null || return 0
+            if ! nix copy --to "file://$cache_root/$1?compression=zstd" $outputs; then
+              echo "::warning::Cached Nix input $1 failed to export; not saving it"
+              rm -rf "$cache_root/$1"
+              return 0
+            fi
+            # POSIX du: Darwin has no byte-granular -b.
+            kib=$(du -sk "$cache_root/$1" | cut -f1)
+            if [ "$kib" -gt 4194304 ]; then
+              echo "::warning::Cached Nix input $1 closure is $kib KiB; not saving above 4194304 KiB"
+              rm -rf "$cache_root/$1"
+              return 0
+            fi
+            printf 'save-%s=true\n' "$1" >> "$GITHUB_OUTPUT"
+          }
+          export_input 0
+      - name: Save cached Nix input 0
+        if: ${{ !cancelled() && steps.simit-nix-cache-save.outputs.save-0 == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/simit-nix-cache/0
+          key: ${{ steps.simit-nix-cache.outputs.key-0 }}
       - name: Upload Nix build evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
 
         with:
           name: nix-build-${{ strategy.job-index }}
           retention-days: 32
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             ${{ runner.temp }}/simit-nix-build-${{ strategy.job-index }}
             /nix/var/log/nix/drvs
