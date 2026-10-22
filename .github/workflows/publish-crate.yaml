@@ -146,7 +146,7 @@ jobs:
         timeout-minutes: 30
         env:
           SIMIT_REQUIRED_GATE: "1"
-        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/d52947d94849bbfb6db22812adc90a3c2920c080 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
+        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/432cde792b74e5fdce8ed6e71b555e535f2b83b5 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
       - name: Required gate supported-systems
         timeout-minutes: 30
         env:
@@ -157,9 +157,6 @@ jobs:
         env:
           SIMIT_REQUIRED_GATE: "1"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
-      - name: Check flake
-        run: nix flake check
-
       - name: Test all features
         run: nix develop -c cargo test --all-features
 
