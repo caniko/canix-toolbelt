@@ -203,7 +203,6 @@
             direct-network-transitions = import ./nixos-tests/direct-network-transitions.nix {inherit pkgs inputs;};
             build-train-policy = assert (import ./nixos-tests/build-train-policy.nix {inherit inputs;}) != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
-            direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             opencode-environment-eval = import ./nixos-tests/opencode-environment-eval.nix {inherit pkgs;};
             opencode-claude-eval = import ./nixos-tests/opencode-claude-eval.nix {
@@ -282,7 +281,6 @@
             vpn-netns-runtime = import ./nixos-tests/vpn-netns-runtime.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-            direnv-runtime = import ./nixos-tests/direnv-runtime.nix {inherit pkgs;};
             resumable-operator-runtime = import ./nixos-tests/resumable-operator-runtime.nix {inherit pkgs;};
             harbor-db-compat-runtime = import ./nixos-tests/harbor-db-compat-runtime.nix {
               inherit pkgs;
