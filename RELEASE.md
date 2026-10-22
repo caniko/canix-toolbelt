@@ -1,5 +1,36 @@
 # Rust release execution
 
+## Paperclip integration qualification (2026-10-19)
+
+The qualification branch retains two rejected candidates. Neither is accepted
+for downstream adoption:
+
+- `acf23fa1ae943ec471688a9c30e07c432bd8dd85`: the original
+  [CI run](https://github.com/caniko/canix-toolbelt/actions/runs/39184097857)
+  failed its ZIP dependency audit. The successor uses published Pklx `0.2.0`.
+- `bd75045594045fbaf3ed2c98bff209187ea974cb`: the original
+  [CI run](https://github.com/caniko/canix-toolbelt/actions/runs/39189037001)
+  passed all six jobs. Its original
+  [Nix run](https://github.com/caniko/canix-toolbelt/actions/runs/39189036972)
+  passed 32 of 34 jobs. Roborev's Nix installer download failed with a connection
+  reset before project setup. The resumable-operator runtime's cache transfer
+  failed with HTTP 416 before VM execution; the underlying transport cause
+  remains unproven.
+
+The original attempt-1 runs are terminal. The
+[retention run](https://github.com/caniko/canix-toolbelt/actions/runs/39189036965)
+retained their evidence and correctly rejected acceptance. Its
+[custody artifact](https://github.com/caniko/canix-toolbelt/actions/runs/39189036965/artifacts/12160742578)
+has SHA-256 `e103df691519a21c91f2aab60f05b167bdf722c0b67b57bc68476e3b4a41f815`.
+The retained Nix provider-log archive has SHA-256
+`7d8f1f02dbc9b45435ec61192b29fa27c4e17c4a730fc3019450294c1bb98b1c`.
+
+Qualification of the successor requires fresh original attempt-1 execution of
+every mandatory producer, inspection of mandatory outcomes and environment
+bindings, and verified remaining artifact retention of at least 30 days.
+Historical passes and retained failures provide no successor execution credit.
+Package publication and production activation require their separate gates.
+
 ## 0.4.0 shared construction
 
 The optional Unix `build-train` feature uses the published Fleetix `0.5.1` and

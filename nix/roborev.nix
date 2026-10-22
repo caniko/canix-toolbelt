@@ -5,12 +5,12 @@
   buildPkgs ? pkgs.buildPackages,
 }: let
   inherit (pkgs) lib;
-  version = "0.71.0";
+  version = "0.72.0";
   src = pkgs.fetchFromGitHub {
     owner = "kenn-io";
     repo = "roborev";
-    rev = "2087d5abc7a65f2d6de555ae49fc55795aefb78f";
-    hash = "sha256-Lc0GVDKCfZDBo44SfEi2QnSikkzumtcoKOGXQupRYE8=";
+    rev = "1d6571d0993d7d56ba0d7da312d27191b881c913";
+    hash = "sha256-wGVD+nsaqzzGRjP0ChPQB8Uwc+WPv+dCBj+x/i+cdlM=";
   };
   toolchain = harborGo.lib.mkGoToolchain {
     inherit pkgs;
@@ -83,7 +83,9 @@
   package = harborGo.lib.mkGoPackage {
     inherit pkgs toolchain version src;
     pname = "roborev";
-    vendorHash = "sha256-deCvjJHN3uNK+KYfgoJKxiZFShW5bVnLMksTx2SdrS4=";
+    # Retire when upstream includes graceful OpenCode session cancellation.
+    patches = [./roborev-opencode-cancellation.patch];
+    vendorHash = "sha256-qDwjJIZqGx1f5otZIRKAYL1GaCvbZFSG4tO5Ix/wp0I=";
     subPackages = ["cmd/roborev"];
     # Agent/config tests create isolated Git fixtures inside the sandbox.
     nativeBuildInputs = [buildPkgs.git];
@@ -126,7 +128,10 @@
       "$out/bin/roborev" version
       runHook postInstallCheck
     '';
-    passthru = {inherit frontend deps toolchain bunToolchain;};
+    passthru = {
+      inherit frontend deps toolchain bunToolchain;
+      opencodeCancellationVersion = 1;
+    };
     meta = {
       description = "Continuous code review orchestrator with embedded web assets";
       homepage = "https://github.com/kenn-io/roborev";

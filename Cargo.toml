@@ -22,11 +22,15 @@ include = [
   "/scripts/generate-execution-protocol.py",
   "/EXECUTION_PROTOCOL.md",
   "/RUST.md",
+  "/simit.toml",
+  "/.github/workflows/ci.yaml",
+  "/.github/workflows/nix-builds.yaml",
   "/BUILD_TRAIN.md",
   "/DIRECT_NETWORK.md",
   "/docs/direct-network.md",
   "/ORCHESTRATION.md",
   "/CHANGELOG.md",
+  "/docs/qualification.md",
   "/LICENSE",
   "/Cargo.toml",
   "/Cargo.lock",
@@ -37,11 +41,13 @@ all-features = true
 
 [features]
 default = []
-cli = ["dep:clap", "dep:signal-hook", "review"]
+cli = ["dep:clap", "dep:signal-hook", "review", "qualification-cli"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
 build-train = ["fleetix/build-train-cli"]
-direct-network = ["rustix/net", "rustix/process", "dep:nix"]
+direct-network = ["rustix/event", "rustix/net", "rustix/process", "dep:nix"]
 orchestration = ["dep:sha2", "dep:fs2", "dep:chrono", "dep:tempfile"]
+qualification = ["dep:sha2", "dep:tar", "rustix/process"]
+qualification-cli = ["qualification", "dep:clap"]
 
 [[bin]]
 name = "canix-toolbelt"
@@ -58,7 +64,9 @@ name = "orchestration_shadow"
 required-features = ["orchestration"]
 
 [dependencies]
-fleetix = { version = "0.7.0", default-features = false, features = ["pkl"] }
+fleetix = { version = "0.7.0", default-features = false }
+pklx = { version = "0.2.0", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 miette = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
@@ -73,6 +81,7 @@ url = { version = "2", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 zeroize = { version = "1", optional = true }
 tempfile = { version = "3", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

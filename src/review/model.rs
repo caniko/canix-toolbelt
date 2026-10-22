@@ -207,7 +207,7 @@ impl Policy {
     /// from the untrusted source branch of the request being reviewed.
     pub fn load(path: &std::path::Path) -> Result<Self, Error> {
         let policy: Self = if path.extension().is_some_and(|s| s == "pkl") {
-            fleetix::pkl::load_sync(path)
+            crate::runtime::load_pkl_sync(path)
                 .map_err(|e| Error(format!("review policy evaluation failed: {e}")))?
         } else {
             serde_json::from_slice(&std::fs::read(path)?)?
