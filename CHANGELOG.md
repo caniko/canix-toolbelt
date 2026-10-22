@@ -5,6 +5,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Regenerate CI with Simit 432cde7. Grouped Nix builds restore the pinned
+  Simit engine from the Actions cache instead of compiling it in every group
+  job. Tag-time publication no longer re-runs a full `nix flake check`, which
+  the build groups already realize. The source-preparation workflow now also
+  triggers on and retains the generated `producer-custody.yaml`.
+
 ## [0.5.0] - 2026-10-21
 
 ### Added
