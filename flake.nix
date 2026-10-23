@@ -196,6 +196,7 @@
 
         checks =
           {
+            check-helpers = import ./nixos-tests/check-helpers.nix {inherit inputs pkgs;};
             execution-protocol = import ./nixos-tests/execution-protocol.nix {inherit pkgs;};
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs inputs;};
             direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
