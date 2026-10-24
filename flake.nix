@@ -330,9 +330,28 @@
             ldflags = ["-s" "-w"];
             doCheck = false;
           };
-        apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
-          domain = "canix-toolbelt.tartanoglu.com";
-        };
+        apps =
+          {
+            deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
+              domain = "canix-toolbelt.tartanoglu.com";
+            };
+          }
+          // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            # Simit prebuild publication on trunk (secret ATTIC_TOKEN): the
+            # packages Canix consumes, so its hosts substitute them.
+            push-flake-inputs = inputs.harbor-rs.lib.mkAtticPush {
+              inherit pkgs;
+              flake = ".";
+              paths = with config.packages; [canix-toolbelt-build-train canix-toolbelt-direct-network crush];
+              adapter = inputs.harbor-rs.lib.mkAdapter {
+                attic = {
+                  endpoint = "https://attic.candee.baby";
+                  cache = "canix";
+                  tokenEnvVar = "ATTIC_TOKEN";
+                };
+              };
+            };
+          };
         devShells.default = pkgs.mkShell {
           packages = [config.treefmt.build.wrapper pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.cargo-audit pkgs.cmake pkgs.pkg-config pkgs.perl];
           # This shell uses stable Rust; do not inherit Canix's nightly-only flags.
