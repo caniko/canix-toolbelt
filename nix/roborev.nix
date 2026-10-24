@@ -143,8 +143,9 @@
 in
   assert lib.assertMsg (lib.versionAtLeast buildPkgs.nodejs.version "24.2.0")
   "roborev frontend checks require Node 24.2+ for native TypeScript and import.meta.main";
-  assert lib.assertMsg (toolchain.go.version == "1.27.1")
-  "roborev's frozen Harbor contract requires Go 1.27.1; requalify before changing toolchains";
+  # Go point releases flow through; a new minor series needs requalification.
+  assert lib.assertMsg (lib.versions.majorMinor toolchain.go.version == "1.27")
+  "roborev's Harbor contract targets Go 1.27; requalify before changing the Go minor series";
   assert lib.assertMsg
   # The pinned stdenv flattens its input `env` onto the resulting derivation.
   (package.GOOS == pkgs.stdenv.hostPlatform.go.GOOS && package.GOARCH == pkgs.stdenv.hostPlatform.go.GOARCH)
