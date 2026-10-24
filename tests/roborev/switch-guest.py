@@ -5,9 +5,9 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
-import tomllib
 from namespace import fixture, require_isolation
 
 

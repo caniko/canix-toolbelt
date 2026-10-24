@@ -10,7 +10,7 @@ import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -128,7 +128,7 @@ def main():
                 receipt["producers"].append(result)
         receipt["capture_complete"] = True
     finally:
-        receipt["observed_at"] = datetime.now(timezone.utc).isoformat()
+        receipt["observed_at"] = datetime.now(UTC).isoformat()
         receipt["members"] = {str(path.relative_to(destination)): hashlib.sha256(path.read_bytes()).hexdigest()
                               for path in sorted(destination.rglob("*")) if path.is_file()}
         write("receipt.json", receipt)

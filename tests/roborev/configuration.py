@@ -6,9 +6,9 @@ import os
 import socket
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
-import tomllib
 import yaml
 from schema import check
 
