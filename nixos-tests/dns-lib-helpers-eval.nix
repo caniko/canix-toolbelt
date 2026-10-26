@@ -141,5 +141,41 @@ in
           };
         message = "expected missing, unowned and orphan DDNS excludes to be reported with the most specific zone";
       }
+      {
+        name = "ddns-exclude-drift-zone-scope";
+        assertion =
+          dns.ddnsExcludeDrift {
+            inherit lib;
+            zones = {
+              # The parent-zone exclude cannot protect a child-zone record.
+              "example.com".exclude = [
+                {
+                  name = "host.sub";
+                  type = "A";
+                }
+              ];
+              "Sub.Example.com".exclude = [
+                {
+                  name = "HOST";
+                  type = "A";
+                }
+              ];
+              # octoDNS leaves A records of this zone alone.
+              "example.org".manageRecordTypes = ["TXT"];
+            };
+            ip4Domains = ["host.sub.EXAMPLE.com" "example.org"];
+          }
+          == {
+            missingExcludes = [];
+            orphanExcludes = [
+              {
+                name = "host.sub";
+                type = "A";
+                zoneName = "example.com";
+              }
+            ];
+          };
+        message = "expected zone-scoped, case-insensitive matching that honours manageRecordTypes";
+      }
     ];
   }
