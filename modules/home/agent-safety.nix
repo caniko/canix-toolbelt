@@ -175,6 +175,14 @@ in {
     })
     # A separate file keeps Codex's own `default.rules` writable.
     (mkIf (cfg.enable && cfg.codex.enable) {
+      # Rules cannot express a catch-all: Codex sends unmatched commands
+      # through its sandboxed approval policy, which stands in for `ask`.
+      assertions = [
+        {
+          assertion = cfg.defaultAction == "ask";
+          message = "programs.agentSafety.codex requires defaultAction = \"ask\"; Codex rules cannot express an `${cfg.defaultAction}` default.";
+        }
+      ];
       home.file.".codex/rules/agent-safety.rules".text = safety.renderCodexRules {
         rules = permission.bash;
         inherit (cfg.codex) executableDirs;

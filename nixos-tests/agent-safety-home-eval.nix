@@ -16,6 +16,10 @@
             default = {};
           };
         };
+        options.assertions = lib.mkOption {
+          type = lib.types.listOf lib.types.attrs;
+          default = [];
+        };
         options.home.profileDirectory = lib.mkOption {
           type = lib.types.str;
           default = "/etc/profiles/per-user/tester";
@@ -41,6 +45,9 @@
     ];
   };
 
+  denyDefault = evaluated.extendModules {
+    modules = [{programs.agentSafety.defaultAction = "deny";}];
+  };
   permission = evaluated.config.programs.opencode.settings.permission;
   codexRules = lib.splitString "\n" evaluated.config.home.file.".codex/rules/agent-safety.rules".text;
   hasCodexRule = tokens: decision:
@@ -64,6 +71,11 @@ in
         name = "deny-rule";
         assertion = permission.bash."sudo *" == "deny";
         message = "central deny rules must render into OpenCode";
+      }
+      {
+        name = "codex-default-ask";
+        assertion = lib.all (entry: entry.assertion) evaluated.config.assertions && !(lib.all (entry: entry.assertion) denyDefault.config.assertions);
+        message = "Codex rendering must accept only the ask default";
       }
       {
         name = "codex-allow";
