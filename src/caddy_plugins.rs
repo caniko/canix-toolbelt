@@ -19,6 +19,8 @@ use std::process::Command;
 /// Boxed error, convertible into `anyhow`/`miette` reports.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+/// Nixpkgs' `lib.fakeHash`, forcing the vendor derivation to report its hash.
+pub const FAKE_HASH: &str = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const PLUGINS_MARKER: &str = "caddy.plugins";
 const HASH_MARKER: &str = "caddy.pluginsHash";
 
@@ -136,9 +138,12 @@ pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
         .collect()
 }
 
-/// Replace `module@old` with `module@new`.
+/// Replace complete `"module@old"` literals with `"module@new"`.
 pub fn bump_version(source: &str, module: &str, old: &str, new: &str) -> String {
-    source.replace(&format!("{module}@{old}"), &format!("{module}@{new}"))
+    source.replace(
+        &format!("\"{module}@{old}\""),
+        &format!("\"{module}@{new}\""),
+    )
 }
 
 /// Replace every `caddy.pluginsHash = "..."` value with `hash`; also returns
@@ -171,19 +176,16 @@ pub fn extract_got_hashes(stderr: &str) -> Vec<String> {
         .collect()
 }
 
-/// Expression for the flake's vendor derivation; `None` forces `lib.fakeHash`.
+/// Expression for the flake's vendor derivation; `None` forces [`FAKE_HASH`].
 pub fn vendor_expr(flake: &Path, system: &str, plugins: &[Plugin], hash: Option<&str>) -> String {
     let plugins = plugins
         .iter()
         .map(|p| format!("\"{}@{}\"", p.module, p.version))
         .collect::<Vec<_>>()
         .join(" ");
-    let hash = hash.map_or_else(|| "lib.fakeHash".to_string(), |hash| format!("\"{hash}\""));
+    let hash = hash.unwrap_or(FAKE_HASH);
     format!(
-        "(let \
-           flake = builtins.getFlake {flake}; \
-           lib = flake.inputs.nixpkgs.lib; \
-         in flake.legacyPackages.{system}.caddyPluginsVendorFor [ {plugins} ] {hash})",
+        "((builtins.getFlake {flake}).legacyPackages.{system}.caddyPluginsVendorFor [ {plugins} ] \"{hash}\")",
         flake = nix_string(&flake.display().to_string()),
     )
 }
@@ -316,9 +318,16 @@ pub fn discover(root: &Path) -> Result<Vec<Plugin>> {
     Ok(plugins)
 }
 
-/// Files under `root` declaring `caddy.pluginsHash`, relative to `root`.
+/// Files under `root` assigning a `caddy.pluginsHash = "..."` literal,
+/// relative to `root`.
 pub fn hash_files(root: &Path) -> Result<Vec<PathBuf>> {
-    find_nix_files(root, HASH_MARKER)
+    let mut files = Vec::new();
+    for file in find_nix_files(root, HASH_MARKER)? {
+        if set_plugins_hash(&fs::read_to_string(root.join(&file))?, "").1 > 0 {
+            files.push(file);
+        }
+    }
+    Ok(files)
 }
 
 /// Go module proxy path encoding: uppercase letters become `!` + lowercase.
@@ -417,9 +426,9 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
         updated = bump_version(&updated, module, old, new);
     }
     let (updated, replaced) = set_plugins_hash(&updated, &resolved.hash);
-    if replaced == 0 && !hash_files(&root)?.is_empty() {
+    if replaced == 0 {
         return Err(format!(
-            "{} declares caddy.pluginsHash without a `caddy.pluginsHash = \"...\"` string assignment",
+            "{} has no `caddy.pluginsHash = \"...\"` string assignment to update",
             file.display()
         )
         .into());
@@ -507,6 +516,10 @@ mod tests {
             bump_version(SAMPLE_MULTI, "github.com/never/here", "v1", "v2"),
             SAMPLE_MULTI
         );
+        assert_eq!(
+            bump_version(r#""m@v1" "m@v1+incompatible""#, "m", "v1", "v2"),
+            r#""m@v2" "m@v1+incompatible""#
+        );
     }
 
     #[test]
@@ -556,7 +569,7 @@ mod tests {
             "/path/to/flake",
             "x86_64-linux",
             "\"github.com/foo/bar@v1\"",
-            "lib.fakeHash",
+            FAKE_HASH,
             "caddyPluginsVendorFor",
         ] {
             assert!(expr.contains(part), "{part} missing from {expr}");
@@ -567,7 +580,7 @@ mod tests {
         );
         let expr = vendor_expr(Path::new("/my dir/a\"${b}"), "s", &plugins, None);
         assert!(
-            expr.contains(r#"builtins.getFlake "/my dir/a\"\${b}";"#),
+            expr.contains(r#"(builtins.getFlake "/my dir/a\"\${b}")."#),
             "{expr}"
         );
         assert_eq!(escape_module("github.com/Azure/x"), "github.com/!azure/x");
@@ -610,7 +623,7 @@ mod tests {
             Ok("x86_64-linux".into())
         }
         fn probe(&mut self, expr: &str) -> Result<String> {
-            assert!(expr.contains("lib.fakeHash"));
+            assert!(expr.contains(FAKE_HASH));
             Ok("got:    sha256-NEW=\n".into())
         }
         fn realize(&mut self, expr: &str) -> Result<String> {
@@ -634,6 +647,8 @@ mod tests {
         };
         git(&["init", "-q"]);
         fs::write(dir.path().join("caddy.nix"), SAMPLE_TLS).unwrap();
+        // Reading the option elsewhere does not make another hash owner.
+        fs::write(dir.path().join("other.nix"), "x: x.caddy.pluginsHash\n").unwrap();
         let dry = refresh(dir.path(), &mut Fake, true, true).unwrap();
         assert!(dry.resolved.is_none());
         assert_eq!(

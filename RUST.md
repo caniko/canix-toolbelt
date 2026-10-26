@@ -209,9 +209,11 @@ interfaces are documented in the repository's `docs/roborev.md`.
 ## Caddy plugin refresh
 
 The `caddy-plugins` feature refreshes a flake's `caddy.plugins` versions and
-`caddy.pluginsHash`. Plugin and hash declarations must live in one Nix file, and
-the flake must expose the `caddy-helpers` flake module's
-`legacyPackages.<system>.caddyPluginsVendorFor`. `caddy_plugins::refresh`
+`caddy.pluginsHash`. Both must be literal assignments in one Nix file
+(`caddy.plugins = [ "github.com/OWNER/REPO@VERSION" ]` and
+`caddy.pluginsHash = "sha256-..."`), and the flake must expose the
+`caddy-helpers` flake module's `legacyPackages.<system>.caddyPluginsVendorFor`
+for the system returned by `Nix::system`. `caddy_plugins::refresh`
 forces the vendor fixed-output derivation with a fake hash, realizes it with
 the reported hash and rewrites the file. Consumers implement the `Nix` trait to
 apply their own evaluation leases, build bounds and GC roots, and publish the
