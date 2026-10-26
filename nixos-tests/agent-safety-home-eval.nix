@@ -47,7 +47,7 @@
         programs.agentSafety.policy = {
           allow = ["git status" "git log *" "nix eval *" "rm *"];
           ask = ["chmod -R*"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *" "chmod" "FOO=bar curl *" ""];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *" "chmod" "FOO=bar curl *" "mkfs /dev/sda # wipe" ""];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -70,6 +70,9 @@
   };
   exactOnly = evaluated.extendModules {
     modules = [{programs.agentSafety.policy.allow = lib.mkForce ["git status"];}];
+  };
+  plainDeny = evaluated.extendModules {
+    modules = [{programs.agentSafety.policy.deny = lib.mkForce ["rm -rf *"];}];
   };
   customHome = evaluated.extendModules {
     modules = [{home.sessionVariables.CODEX_HOME = "/home/tester/.local/state/codex";}];
@@ -144,6 +147,16 @@ in
         name = "codex-env-wrapped-shell-prompt";
         assertion = builtins.elem ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'' codexRules;
         message = "env-wrapped denies must prompt unreducible shell scripts";
+      }
+      {
+        name = "codex-control-flow-shell-prompt";
+        assertion = lib.hasInfix ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'' plainDeny.config.home.file.".codex/rules/agent-safety.rules".text;
+        message = "a plain deny must prompt unreducible shell scripts such as control flow";
+      }
+      {
+        name = "codex-shell-comment";
+        assertion = hasCodexRule ["mkfs" "/dev/sda"] "forbidden" && !(lib.any (lib.hasInfix "\"#") codexRules);
+        message = "a trailing shell comment must not become argv words";
       }
       {
         name = "codex-same-prefix-ask";

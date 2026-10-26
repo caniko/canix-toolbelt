@@ -242,8 +242,10 @@
     isAssignment = token: builtins.match "[A-Za-z_][A-Za-z0-9_]*=.*" token != null;
     isLiteral = token: builtins.match ".*[][*?'\"\\$`{}~|&;<>()].*" token == null;
     analyse = pattern: let
-      # Shell argv never holds the empty words that repeated spaces would give.
-      tokens = lib.filter (token: builtins.isString token && token != "") (builtins.split "[[:space:]]+" pattern);
+      # The shell drops a word-initial `#` comment and never yields the empty
+      # words that repeated spaces would give.
+      command = builtins.head (builtins.split "(^|[[:space:]])#" pattern);
+      tokens = lib.filter (token: builtins.isString token && token != "") (builtins.split "[[:space:]]+" command);
       trailing = tokens != [] && lib.last tokens == "*";
       body =
         if trailing
@@ -330,12 +332,13 @@
       else [{unrepresentable = "${action} ${pattern}";}];
     results = lib.concatMap render (builtins.attrNames rules);
     # Codex evaluates a shell script it cannot reduce to plain commands (for
-    # example one with variable assignments) as the whole `bash -lc` argv, so
-    # no bare rule reaches `FOO=1 sudo`. Prompt for those scripts instead.
-    # ponytail: this degrades env-wrapped denies to prompts and prompts every
+    # example one with variable assignments or `if`/`for` control flow) as the
+    # whole `bash -lc` argv, so no bare rule reaches `FOO=1 sudo` or
+    # `if true; then rm -rf /; fi`. Prompt for those scripts instead.
+    # ponytail: this degrades such denies to prompts and prompts every
     # unreducible script; per-script rules would need Codex-side parsing.
-    envWrapped = lib.any (pattern: rules.${pattern} != "allow" && (stripEnvironmentPrefix pattern != pattern || analysed.${pattern}.assigned)) (builtins.attrNames rules);
-    shellPrompt = lib.optional envWrapped ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'';
+    guarded = lib.any (pattern: pattern != "*" && rules.${pattern} != "allow") (builtins.attrNames rules);
+    shellPrompt = lib.optional guarded ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'';
     rendered = lib.filter (result: result ? tokens) results;
     unrepresentable = map (result: result.unrepresentable) (lib.filter (result: result ? unrepresentable) results);
     quote = lib.concatMapStringsSep ", " builtins.toJSON;
