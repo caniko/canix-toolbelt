@@ -241,7 +241,8 @@
     # Shell operators split Codex segments, so they end a prefix like a glob.
     isLiteral = token: builtins.match ".*[][*?'\"\\$`{}~|&;<>()].*" token == null;
     analyse = pattern: let
-      tokens = lib.splitString " " pattern;
+      # Shell argv never holds the empty words that repeated spaces would give.
+      tokens = lib.filter (token: builtins.isString token && token != "") (builtins.split "[[:space:]]+" pattern);
       trailing = lib.last tokens == "*";
       body =
         if trailing

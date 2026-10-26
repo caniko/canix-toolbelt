@@ -46,7 +46,7 @@
         };
         programs.agentSafety.policy = {
           allow = ["git status" "git log *" "nix eval *" "rm *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *"];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -139,7 +139,7 @@ in
       }
       {
         name = "codex-deny";
-        assertion = hasCodexRule ["sudo"] "forbidden";
+        assertion = hasCodexRule ["sudo"] "forbidden" && hasCodexRule ["doas"] "forbidden";
         message = "literal denies must render as forbidden Codex rules";
       }
       {
