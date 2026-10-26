@@ -46,7 +46,8 @@
         };
         programs.agentSafety.policy = {
           allow = ["git status" "git log *" "nix eval *" "rm *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *"];
+          ask = ["chmod -R*"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *" "chmod" "FOO=bar curl *" ""];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -143,6 +144,16 @@ in
         name = "codex-env-wrapped-shell-prompt";
         assertion = builtins.elem ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'' codexRules;
         message = "env-wrapped denies must prompt unreducible shell scripts";
+      }
+      {
+        name = "codex-same-prefix-ask";
+        assertion = hasCodexRule ["chmod"] "prompt" && !(hasCodexRule ["chmod"] "forbidden");
+        message = "a globbed ask on the deny's prefix must cap it at prompt";
+      }
+      {
+        name = "codex-literal-assignment";
+        assertion = !(lib.any (lib.hasInfix "FOO=bar") (lib.filter (lib.hasPrefix "prefix_rule") codexRules)) && lib.any (lib.hasInfix "[\"-c\", \"-lc\"]") codexRules;
+        message = "a literal assignment must not become an argv word and must prompt shell scripts";
       }
       {
         name = "codex-allow";

@@ -239,26 +239,33 @@
       deny = "forbidden";
     };
     # Shell operators split Codex segments, so they end a prefix like a glob.
+    isAssignment = token: builtins.match "[A-Za-z_][A-Za-z0-9_]*=.*" token != null;
     isLiteral = token: builtins.match ".*[][*?'\"\\$`{}~|&;<>()].*" token == null;
     analyse = pattern: let
       # Shell argv never holds the empty words that repeated spaces would give.
       tokens = lib.filter (token: builtins.isString token && token != "") (builtins.split "[[:space:]]+" pattern);
-      trailing = lib.last tokens == "*";
+      trailing = tokens != [] && lib.last tokens == "*";
       body =
         if trailing
         then lib.init tokens
         else tokens;
+      # A leading `NAME=value` is a shell assignment, never an argv word.
+      assigned = tokens != [] && isAssignment (builtins.head tokens);
       literal =
-        (builtins.foldl' (acc: token:
-            if acc.stop || !isLiteral token
-            then acc // {stop = true;}
-            else acc // {tokens = acc.tokens ++ [token];}) {
-            stop = false;
-            tokens = [];
-          }
-          body).tokens;
+        if assigned
+        then []
+        else
+          (builtins.foldl' (acc: token:
+              if acc.stop || !isLiteral token
+              then acc // {stop = true;}
+              else acc // {tokens = acc.tokens ++ [token];}) {
+              stop = false;
+              tokens = [];
+            }
+            body).tokens;
     in {
-      inherit literal trailing;
+      inherit literal trailing assigned;
+      empty = tokens == [];
       exact = literal == body;
     };
     analysed = lib.mapAttrs (pattern: _: analyse pattern) rules;
@@ -282,7 +289,7 @@
       lib.any (other:
         lib.take length other.literal
         == literal
-        && (builtins.length other.literal > length || (!trailing && other.trailing && builtins.length other.literal == length)))
+        && (builtins.length other.literal > length || (builtins.length other.literal == length && (!other.exact || (!trailing && other.trailing)))))
       lenient;
     render = pattern: let
       action = rules.${pattern};
@@ -309,7 +316,7 @@
       bareAction = rules.${unwrapped} or rules."*" or "allow";
       coveredWrapper = unwrapped != pattern && strictness.${bareAction} >= strictness.${action};
     in
-      if decision == null || pattern == "*"
+      if decision == null || pattern == "*" || analysed.${pattern}.empty
       then []
       else if literal != []
       then [
@@ -327,7 +334,7 @@
     # no bare rule reaches `FOO=1 sudo`. Prompt for those scripts instead.
     # ponytail: this degrades env-wrapped denies to prompts and prompts every
     # unreducible script; per-script rules would need Codex-side parsing.
-    envWrapped = lib.any (pattern: rules.${pattern} != "allow" && stripEnvironmentPrefix pattern != pattern) (builtins.attrNames rules);
+    envWrapped = lib.any (pattern: rules.${pattern} != "allow" && (stripEnvironmentPrefix pattern != pattern || analysed.${pattern}.assigned)) (builtins.attrNames rules);
     shellPrompt = lib.optional envWrapped ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'';
     rendered = lib.filter (result: result ? tokens) results;
     unrepresentable = map (result: result.unrepresentable) (lib.filter (result: result ? unrepresentable) results);
