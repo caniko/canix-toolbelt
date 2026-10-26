@@ -45,8 +45,8 @@
           executables = ["demo"];
         };
         programs.agentSafety.policy = {
-          allow = ["git status" "nix eval *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *"];
+          allow = ["git status" "git log *" "nix eval *"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *"];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -63,6 +63,9 @@
         programs.agentSafety.policy.deny = ["*"];
       }
     ];
+  };
+  bareWrapperDeny = evaluated.extendModules {
+    modules = [{programs.agentSafety.policy.deny = lib.mkForce ["*=* curl *"];}];
   };
   customHome = evaluated.extendModules {
     modules = [{home.sessionVariables.CODEX_HOME = "/home/tester/.local/state/codex";}];
@@ -98,6 +101,13 @@ in
         message = "Codex rendering must accept only the ask default";
       }
       {
+        name = "codex-unrepresentable-listed";
+        assertion =
+          lib.hasInfix "\n#   deny *=* curl *\n" bareWrapperDeny.config.home.file.".codex/rules/agent-safety.rules".text
+          && !(lib.any (lib.hasInfix "*=* sudo") codexRules);
+        message = "uncovered wrappers must be listed; covered ones dropped";
+      }
+      {
         name = "codex-home";
         assertion = customHome.config.home.file ? ".local/state/codex/rules/agent-safety.rules";
         message = "rules must follow CODEX_HOME";
@@ -106,6 +116,11 @@ in
         name = "codex-shell-operators";
         assertion = hasCodexRule ["cat" "secrets"] "prompt" && !(lib.any (lib.hasInfix "\"|\"") codexRules);
         message = "shell operators must end the literal prefix";
+      }
+      {
+        name = "codex-refined-deny-prompts";
+        assertion = hasCodexRule ["git"] "prompt" && !(hasCodexRule ["git"] "forbidden") && hasCodexRule ["git" "log"] "allow";
+        message = "a deny refined by a longer allow must be capped at prompt";
       }
       {
         name = "codex-allow";

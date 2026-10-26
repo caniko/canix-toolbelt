@@ -240,8 +240,7 @@
     };
     # Shell operators split Codex segments, so they end a prefix like a glob.
     isLiteral = token: builtins.match ".*[][*?'\"\\$`{}~|&;<>()].*" token == null;
-    render = pattern: let
-      action = rules.${pattern};
+    analyse = pattern: let
       tokens = lib.splitString " " pattern;
       trailing = lib.last tokens == "*";
       body =
@@ -257,22 +256,59 @@
             tokens = [];
           }
           body).tokens;
+    in {
+      inherit literal trailing;
       exact = literal == body;
+    };
+    analysed = lib.mapAttrs (pattern: _: analyse pattern) rules;
+    lenientLiterals = lib.concatMap (pattern:
+      lib.optional (rules.${pattern} != "deny" && pattern != "*") analysed.${pattern}.literal)
+    (builtins.attrNames rules);
+    # OpenCode lets a longer allow/ask refine a deny; Codex resolves overlaps
+    # strictest-wins, so such a deny is capped at prompt instead of blocking
+    # the refinement.
+    refined = literal:
+      lib.any (other: builtins.length other > builtins.length literal && lib.take (builtins.length literal) other == literal) lenientLiterals;
+    render = pattern: let
+      action = rules.${pattern};
+      inherit (analysed.${pattern}) literal trailing exact;
       decision =
         if action == "allow"
         then
           if exact && trailing
           then "allow"
           else null
-        else if exact
+        else if exact && !(action == "deny" && refined literal)
         then decisions.${action}
         else "prompt";
-    in
-      lib.optional (decision != null && literal != []) {
-        inherit decision;
-        tokens = literal;
+      # Codex never reduces an env-assigned script to its inner command, and
+      # it has no glob for program names. A wrapper ask/deny whose bare twin
+      # (or the catch-all) is at least as strict is dropped; any other
+      # ask/deny without a literal prefix is listed as unrepresentable.
+      strictness = {
+        allow = 0;
+        ask = 1;
+        deny = 2;
       };
-    rendered = lib.concatMap render (builtins.attrNames rules);
+      unwrapped = lib.removePrefix "/nix/store/*/bin/" (stripEnvironmentPrefix pattern);
+      bareAction = rules.${unwrapped} or rules."*" or "allow";
+      coveredWrapper = unwrapped != pattern && strictness.${bareAction} >= strictness.${action};
+    in
+      if decision == null || pattern == "*"
+      then []
+      else if literal != []
+      then [
+        {
+          inherit decision;
+          tokens = literal;
+        }
+      ]
+      else if coveredWrapper
+      then []
+      else [{unrepresentable = "${action} ${pattern}";}];
+    results = lib.concatMap render (builtins.attrNames rules);
+    rendered = lib.filter (result: result ? tokens) results;
+    unrepresentable = map (result: result.unrepresentable) (lib.filter (result: result ? unrepresentable) results);
     quote = lib.concatMapStringsSep ", " builtins.toJSON;
     # Only allowed names are pinned, so a deny-only name still matches any
     # path. ponytail: a name with both allows and denies is pinned, so its
@@ -280,9 +316,14 @@
     bareNames = lib.unique (lib.filter (name: !(lib.hasInfix "/" name)) (map (rule: builtins.head rule.tokens) (lib.filter (rule: rule.decision == "allow") rendered)));
     prefixRules = map (rule: "prefix_rule(pattern=[${quote rule.tokens}], decision=${builtins.toJSON rule.decision})") rendered;
     hostExecutables = map (name: "host_executable(name=${builtins.toJSON name}, paths=[${quote (map (dir: "${dir}/${name}") executableDirs)}])") bareNames;
+    # Kept visible rather than silently dropped; Codex's approval policy and
+    # sandbox govern these commands instead.
+    notes =
+      lib.optional (unrepresentable != []) "# Not representable as Codex execpolicy rules:"
+      ++ map (entry: "#   ${builtins.replaceStrings ["\n"] [" "] entry}") (lib.sort lib.lessThan unrepresentable);
   in
     lib.concatMapStrings (line: line + "\n")
-    (lib.unique (lib.sort lib.lessThan (prefixRules ++ hostExecutables)));
+    (lib.unique (lib.sort lib.lessThan (prefixRules ++ hostExecutables)) ++ notes);
 
   mergeRules = {
     defaultAction ? "ask",
