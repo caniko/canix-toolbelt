@@ -164,7 +164,13 @@ in {
         type = types.listOf types.str;
         default = ["${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"];
         defaultText = lib.literalExpression ''["''${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"]'';
-        description = "Directories whose binaries may match a rule by bare name; other absolute paths fall through to Codex's approval policy.";
+        description = "Directories whose binaries may match an allowed bare name; other absolute paths fall through to Codex's approval policy.";
+      };
+      home = mkOption {
+        type = types.str;
+        default = config.home.sessionVariables.CODEX_HOME or "${config.home.homeDirectory}/.codex";
+        defaultText = lib.literalExpression ''config.home.sessionVariables.CODEX_HOME or "''${config.home.homeDirectory}/.codex"'';
+        description = "Codex home whose `rules/` directory receives the policy; must be inside the home directory.";
       };
     };
   };
@@ -177,13 +183,18 @@ in {
     (mkIf (cfg.enable && cfg.codex.enable) {
       # Rules cannot express a catch-all: Codex sends unmatched commands
       # through its sandboxed approval policy, which stands in for `ask`.
+      # `permission.bash."*"` also catches an explicit `deny = ["*"]`.
       assertions = [
         {
-          assertion = cfg.defaultAction == "ask";
-          message = "programs.agentSafety.codex requires defaultAction = \"ask\"; Codex rules cannot express an `${cfg.defaultAction}` default.";
+          assertion = permission.bash."*" == "ask";
+          message = "programs.agentSafety.codex requires a catch-all `ask`; Codex rules cannot express `${permission.bash."*"}`.";
+        }
+        {
+          assertion = lib.hasPrefix "${config.home.homeDirectory}/" cfg.codex.home;
+          message = "programs.agentSafety.codex.home must be inside the home directory.";
         }
       ];
-      home.file.".codex/rules/agent-safety.rules".text = safety.renderCodexRules {
+      home.file."${lib.removePrefix "${config.home.homeDirectory}/" cfg.codex.home}/rules/agent-safety.rules".text = safety.renderCodexRules {
         rules = permission.bash;
         inherit (cfg.codex) executableDirs;
       };

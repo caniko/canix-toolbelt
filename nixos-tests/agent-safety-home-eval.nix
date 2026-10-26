@@ -20,6 +20,14 @@
           type = lib.types.listOf lib.types.attrs;
           default = [];
         };
+        options.home.homeDirectory = lib.mkOption {
+          type = lib.types.str;
+          default = "/home/tester";
+        };
+        options.home.sessionVariables = lib.mkOption {
+          type = lib.types.attrs;
+          default = {};
+        };
         options.home.profileDirectory = lib.mkOption {
           type = lib.types.str;
           default = "/etc/profiles/per-user/tester";
@@ -38,7 +46,7 @@
         };
         programs.agentSafety.policy = {
           allow = ["git status" "nix eval *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *"];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -48,8 +56,20 @@
   denyDefault = evaluated.extendModules {
     modules = [{programs.agentSafety.defaultAction = "deny";}];
   };
+  denyEverything = evaluated.extendModules {
+    modules = [
+      {
+        programs.agentSafety.programs = lib.mkForce {};
+        programs.agentSafety.policy.deny = ["*"];
+      }
+    ];
+  };
+  customHome = evaluated.extendModules {
+    modules = [{home.sessionVariables.CODEX_HOME = "/home/tester/.local/state/codex";}];
+  };
   permission = evaluated.config.programs.opencode.settings.permission;
   codexRules = lib.splitString "\n" evaluated.config.home.file.".codex/rules/agent-safety.rules".text;
+  passes = cfg: lib.all (entry: entry.assertion) cfg.config.assertions;
   hasCodexRule = tokens: decision:
     builtins.elem "prefix_rule(pattern=[${lib.concatMapStringsSep ", " builtins.toJSON tokens}], decision=\"${decision}\")" codexRules;
 in
@@ -74,8 +94,18 @@ in
       }
       {
         name = "codex-default-ask";
-        assertion = lib.all (entry: entry.assertion) evaluated.config.assertions && !(lib.all (entry: entry.assertion) denyDefault.config.assertions);
+        assertion = passes evaluated && !(passes denyDefault) && !(passes denyEverything);
         message = "Codex rendering must accept only the ask default";
+      }
+      {
+        name = "codex-home";
+        assertion = customHome.config.home.file ? ".local/state/codex/rules/agent-safety.rules";
+        message = "rules must follow CODEX_HOME";
+      }
+      {
+        name = "codex-shell-operators";
+        assertion = hasCodexRule ["cat" "secrets"] "prompt" && !(lib.any (lib.hasInfix "\"|\"") codexRules);
+        message = "shell operators must end the literal prefix";
       }
       {
         name = "codex-allow";
@@ -100,9 +130,10 @@ in
       {
         name = "codex-host-executables";
         assertion =
-          builtins.elem "host_executable(name=\"sudo\", paths=[\"/etc/profiles/per-user/tester/bin/sudo\", \"/run/current-system/sw/bin/sudo\", \"/run/wrappers/bin/sudo\"])" codexRules
+          builtins.elem "host_executable(name=\"demo\", paths=[\"/etc/profiles/per-user/tester/bin/demo\", \"/run/current-system/sw/bin/demo\", \"/run/wrappers/bin/demo\"])" codexRules
+          && !(lib.any (lib.hasPrefix "host_executable(name=\"sudo\"") codexRules)
           && !(lib.any (lib.hasPrefix "host_executable(name=\"./") codexRules);
-        message = "bare names must be pinned to the profile and system bin directories";
+        message = "allowed bare names must be pinned; deny-only names must keep basename fallback";
       }
       {
         name = "codex-skips-widening";
