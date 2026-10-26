@@ -262,8 +262,16 @@
       exact = literal == body;
     };
     analysed = lib.mapAttrs (pattern: _: analyse pattern) rules;
-    lenient = lib.concatMap (pattern:
-      lib.optional (rules.${pattern} != "deny" && pattern != "*") analysed.${pattern})
+    # Only refinements that render count: an exact or globbed allow is dropped,
+    # so it must not weaken a deny it could never re-allow.
+    lenient = lib.concatMap (pattern: let
+      entry = analysed.${pattern};
+    in
+      lib.optional (pattern
+        != "*"
+        && entry.literal != []
+        && (rules.${pattern} == "ask" || (rules.${pattern} == "allow" && entry.exact && entry.trailing)))
+      entry)
     (builtins.attrNames rules);
     # OpenCode lets a longer allow/ask (or `x *` against an exact `x`) refine
     # a deny; Codex resolves overlaps strictest-wins, so such a deny is capped

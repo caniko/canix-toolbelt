@@ -67,6 +67,9 @@
   bareWrapperDeny = evaluated.extendModules {
     modules = [{programs.agentSafety.policy.deny = lib.mkForce ["*=* curl *"];}];
   };
+  exactOnly = evaluated.extendModules {
+    modules = [{programs.agentSafety.policy.allow = lib.mkForce ["git status"];}];
+  };
   customHome = evaluated.extendModules {
     modules = [{home.sessionVariables.CODEX_HOME = "/home/tester/.local/state/codex";}];
   };
@@ -121,6 +124,15 @@ in
         name = "codex-refined-deny-prompts";
         assertion = hasCodexRule ["git"] "prompt" && !(hasCodexRule ["git"] "forbidden") && hasCodexRule ["git" "log"] "allow";
         message = "a deny refined by a longer allow must be capped at prompt";
+      }
+      {
+        name = "codex-unrendered-allow-keeps-deny";
+        assertion = let
+          rules = lib.splitString "\n" exactOnly.config.home.file.".codex/rules/agent-safety.rules".text;
+        in
+          builtins.elem ''prefix_rule(pattern=["git"], decision="forbidden")'' rules
+          && !(builtins.elem ''prefix_rule(pattern=["git"], decision="prompt")'' rules);
+        message = "an exact allow that cannot render must not weaken its deny";
       }
       {
         name = "codex-same-prefix-refinement";
