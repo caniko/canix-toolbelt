@@ -154,10 +154,18 @@ in {
       description = "Optional OS containment profile configuration.";
     };
 
-    codex.enable = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Render the Bash policy as Codex execpolicy rules.";
+    codex = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Render the Bash policy as Codex execpolicy rules.";
+      };
+      executableDirs = mkOption {
+        type = types.listOf types.str;
+        default = ["${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"];
+        defaultText = lib.literalExpression ''["''${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"]'';
+        description = "Directories whose binaries may match a rule by bare name; other absolute paths fall through to Codex's approval policy.";
+      };
     };
   };
 
@@ -167,7 +175,10 @@ in {
     })
     # A separate file keeps Codex's own `default.rules` writable.
     (mkIf (cfg.enable && cfg.codex.enable) {
-      home.file.".codex/rules/agent-safety.rules".text = safety.renderCodexRules permission.bash;
+      home.file.".codex/rules/agent-safety.rules".text = safety.renderCodexRules {
+        rules = permission.bash;
+        inherit (cfg.codex) executableDirs;
+      };
     })
   ];
 }

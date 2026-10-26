@@ -16,6 +16,10 @@
             default = {};
           };
         };
+        options.home.profileDirectory = lib.mkOption {
+          type = lib.types.str;
+          default = "/etc/profiles/per-user/tester";
+        };
         options.home.file = lib.mkOption {
           type = lib.types.attrsOf lib.types.attrs;
           default = {};
@@ -30,7 +34,7 @@
         };
         programs.agentSafety.policy = {
           allow = ["git status" "nix eval *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'"];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -75,6 +79,18 @@ in
         name = "codex-glob-deny-prompts";
         assertion = hasCodexRule ["nix" "eval"] "prompt" && !(hasCodexRule ["nix" "eval"] "forbidden");
         message = "a mid-pattern glob deny must degrade to a prompt on its literal prefix";
+      }
+      {
+        name = "codex-quoted-prompts";
+        assertion = hasCodexRule ["rm" "-rf"] "prompt" && !(lib.any (lib.hasInfix "'some") codexRules);
+        message = "quoted words must degrade to a prompt on the literal prefix";
+      }
+      {
+        name = "codex-host-executables";
+        assertion =
+          builtins.elem "host_executable(name=\"sudo\", paths=[\"/etc/profiles/per-user/tester/bin/sudo\", \"/run/current-system/sw/bin/sudo\", \"/run/wrappers/bin/sudo\"])" codexRules
+          && !(lib.any (lib.hasPrefix "host_executable(name=\"./") codexRules);
+        message = "bare names must be pinned to the profile and system bin directories";
       }
       {
         name = "codex-skips-widening";

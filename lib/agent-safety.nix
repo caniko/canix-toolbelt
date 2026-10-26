@@ -220,17 +220,25 @@
 
   # Codex execpolicy matches literal argv prefixes and resolves overlapping
   # rules strictest-wins, so only literal patterns translate exactly. Exact
-  # allows are dropped because a prefix rule would widen them.
+  # allows are dropped because a prefix rule would widen them, and quoted,
+  # escaped or expanded words never equal Codex's parsed argv.
   # ponytail: an ask/deny glob degrades to `prompt` on its literal prefix, so
   # OpenCode-allowed refinements under it (for example IFD-guarded nix
   # evaluations) prompt in Codex; per-argument alternatives would recover them.
-  renderCodexRules = rules: let
+  #
+  # Codex may resolve an absolute program path through a bare-name rule. Each
+  # bare name is pinned to `executableDirs`, so a workspace or store binary
+  # sharing the name falls through to the approval policy instead.
+  renderCodexRules = {
+    rules,
+    executableDirs ? [],
+  }: let
     decisions = {
       allow = "allow";
       ask = "prompt";
       deny = "forbidden";
     };
-    isLiteral = token: builtins.match ".*[*?].*" token == null;
+    isLiteral = token: builtins.match ".*[][*?'\"\\$`{}~].*" token == null;
     render = pattern: let
       action = rules.${pattern};
       tokens = lib.splitString " " pattern;
@@ -259,11 +267,18 @@
         then decisions.${action}
         else "prompt";
     in
-      lib.optional (decision != null && literal != [])
-      "prefix_rule(pattern=[${lib.concatMapStringsSep ", " builtins.toJSON literal}], decision=${builtins.toJSON decision})";
+      lib.optional (decision != null && literal != []) {
+        inherit decision;
+        tokens = literal;
+      };
+    rendered = lib.concatMap render (builtins.attrNames rules);
+    quote = lib.concatMapStringsSep ", " builtins.toJSON;
+    bareNames = lib.unique (lib.filter (name: !(lib.hasInfix "/" name)) (map (rule: builtins.head rule.tokens) rendered));
+    prefixRules = map (rule: "prefix_rule(pattern=[${quote rule.tokens}], decision=${builtins.toJSON rule.decision})") rendered;
+    hostExecutables = map (name: "host_executable(name=${builtins.toJSON name}, paths=[${quote (map (dir: "${dir}/${name}") executableDirs)}])") bareNames;
   in
     lib.concatMapStrings (line: line + "\n")
-    (lib.unique (lib.sort lib.lessThan (lib.concatMap render (builtins.attrNames rules))));
+    (lib.unique (lib.sort lib.lessThan (prefixRules ++ hostExecutables)));
 
   mergeRules = {
     defaultAction ? "ask",
