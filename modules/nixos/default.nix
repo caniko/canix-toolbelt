@@ -51,6 +51,7 @@
   impure-files = ./registry/impure-files.nix;
   initrd-ssh = ./services/initrd-ssh.nix;
   kanidm-preset = ./services/kanidm-preset.nix;
+  n8n = ./services/n8n.nix;
   power-cycle-relay = ./services/power-cycle-relay.nix;
   public-edge = ./services/public-edge.nix;
   pypi-server = ./services/pypi-server.nix;
@@ -58,6 +59,7 @@
   rbac = ./registry/rbac.nix;
   samba = ./services/samba.nix;
   service-registry = ./registry/services.nix;
+  windmill = ./services/windmill.nix;
   wol-relay = ./services/wol-relay.nix;
 
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;

@@ -274,6 +274,7 @@
             wg-home-shared-eval = import ./nixos-tests/wg-home-shared-eval.nix {inherit pkgs;};
             ssh-aliases-eval = import ./nixos-tests/ssh-aliases-eval.nix {inherit pkgs;};
             service-topology-v2-eval = import ./nixos-tests/service-topology-v2-eval.nix {inherit inputs pkgs;};
+            automation-presets-eval = import ./nixos-tests/automation-presets-eval.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
