@@ -13,13 +13,15 @@ in {
         type = lib.types.listOf lib.types.str;
         default = [];
         description = ''
-          Network interfaces Samba binds to. When non-empty, the
+          Network interfaces allowed to reach Samba. When non-empty, the
           system-wide firewall does NOT open Samba ports — instead,
-          ports 139/445 are opened only on the listed interfaces, and
-          smbd is configured with `bind interfaces only = yes` so it
-          refuses connections on unlisted interfaces. Loopback (`lo`)
-          is always added. Empty list (default) preserves the legacy
-          all-interfaces behaviour.
+          ports 139/445 (and wsdd discovery) are opened only on the listed
+          interfaces, which requires the NixOS firewall. smbd itself
+          listens on all addresses: `bind interfaces only` binds once at
+          start, so it stays loopback-only when it wins the race against
+          DHCP, and Samba never binds non-broadcast interfaces such as
+          WireGuard. Empty list (default) opens the ports on every
+          interface.
         '';
         example = ["eno1" "wg-home"];
       };
@@ -57,23 +59,24 @@ in {
   config = lib.mkMerge [
     (lib.mkIf cfg.samba.enable (let
       scoped = cfg.samba.interfaces != [];
-      bindIfaces = ["lo"] ++ cfg.samba.interfaces;
     in {
+      assertions = [
+        {
+          assertion = scoped -> config.networking.firewall.enable;
+          message = "canix-toolbelt.services.samba.interfaces is enforced by the NixOS firewall; enable networking.firewall.";
+        }
+      ];
+
       services.samba = {
         enable = true;
         nmbd.enable = false;
         openFirewall = !scoped;
         settings =
           {
-            global =
-              {
-                workgroup = "WORKGROUP";
-                security = "user";
-              }
-              // lib.optionalAttrs scoped {
-                interfaces = lib.concatStringsSep " " bindIfaces;
-                "bind interfaces only" = "yes";
-              };
+            global = {
+              workgroup = "WORKGROUP";
+              security = "user";
+            };
           }
           // lib.mapAttrs (_: share: {
             inherit (share) path;
