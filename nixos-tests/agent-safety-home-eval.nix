@@ -45,8 +45,8 @@
           executables = ["demo"];
         };
         programs.agentSafety.policy = {
-          allow = ["git status" "git log *" "nix eval *"];
-          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *"];
+          allow = ["git status" "git log *" "nix eval *" "rm *"];
+          deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm"];
         };
         programs.agentSafety.codex.enable = true;
       }
@@ -121,6 +121,16 @@ in
         name = "codex-refined-deny-prompts";
         assertion = hasCodexRule ["git"] "prompt" && !(hasCodexRule ["git"] "forbidden") && hasCodexRule ["git" "log"] "allow";
         message = "a deny refined by a longer allow must be capped at prompt";
+      }
+      {
+        name = "codex-same-prefix-refinement";
+        assertion = hasCodexRule ["rm"] "prompt" && !(hasCodexRule ["rm"] "forbidden") && hasCodexRule ["rm"] "allow";
+        message = "an exact deny refined by `x *` must be capped at prompt";
+      }
+      {
+        name = "codex-env-wrapped-shell-prompt";
+        assertion = builtins.elem ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'' codexRules;
+        message = "env-wrapped denies must prompt unreducible shell scripts";
       }
       {
         name = "codex-allow";

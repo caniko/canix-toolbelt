@@ -261,14 +261,20 @@
       exact = literal == body;
     };
     analysed = lib.mapAttrs (pattern: _: analyse pattern) rules;
-    lenientLiterals = lib.concatMap (pattern:
-      lib.optional (rules.${pattern} != "deny" && pattern != "*") analysed.${pattern}.literal)
+    lenient = lib.concatMap (pattern:
+      lib.optional (rules.${pattern} != "deny" && pattern != "*") analysed.${pattern})
     (builtins.attrNames rules);
-    # OpenCode lets a longer allow/ask refine a deny; Codex resolves overlaps
-    # strictest-wins, so such a deny is capped at prompt instead of blocking
-    # the refinement.
-    refined = literal:
-      lib.any (other: builtins.length other > builtins.length literal && lib.take (builtins.length literal) other == literal) lenientLiterals;
+    # OpenCode lets a longer allow/ask (or `x *` against an exact `x`) refine
+    # a deny; Codex resolves overlaps strictest-wins, so such a deny is capped
+    # at prompt instead of blocking the refinement.
+    refined = literal: trailing: let
+      length = builtins.length literal;
+    in
+      lib.any (other:
+        lib.take length other.literal
+        == literal
+        && (builtins.length other.literal > length || (!trailing && other.trailing && builtins.length other.literal == length)))
+      lenient;
     render = pattern: let
       action = rules.${pattern};
       inherit (analysed.${pattern}) literal trailing exact;
@@ -278,7 +284,7 @@
           if exact && trailing
           then "allow"
           else null
-        else if exact && !(action == "deny" && refined literal)
+        else if exact && !(action == "deny" && refined literal trailing)
         then decisions.${action}
         else "prompt";
       # Codex never reduces an env-assigned script to its inner command, and
@@ -307,6 +313,13 @@
       then []
       else [{unrepresentable = "${action} ${pattern}";}];
     results = lib.concatMap render (builtins.attrNames rules);
+    # Codex evaluates a shell script it cannot reduce to plain commands (for
+    # example one with variable assignments) as the whole `bash -lc` argv, so
+    # no bare rule reaches `FOO=1 sudo`. Prompt for those scripts instead.
+    # ponytail: this degrades env-wrapped denies to prompts and prompts every
+    # unreducible script; per-script rules would need Codex-side parsing.
+    envWrapped = lib.any (pattern: rules.${pattern} != "allow" && stripEnvironmentPrefix pattern != pattern) (builtins.attrNames rules);
+    shellPrompt = lib.optional envWrapped ''prefix_rule(pattern=[["bash", "sh", "zsh"], ["-c", "-lc"]], decision="prompt")'';
     rendered = lib.filter (result: result ? tokens) results;
     unrepresentable = map (result: result.unrepresentable) (lib.filter (result: result ? unrepresentable) results);
     quote = lib.concatMapStringsSep ", " builtins.toJSON;
@@ -323,7 +336,7 @@
       ++ map (entry: "#   ${builtins.replaceStrings ["\n"] [" "] entry}") (lib.sort lib.lessThan unrepresentable);
   in
     lib.concatMapStrings (line: line + "\n")
-    (lib.unique (lib.sort lib.lessThan (prefixRules ++ hostExecutables)) ++ notes);
+    (lib.unique (lib.sort lib.lessThan (prefixRules ++ hostExecutables)) ++ shellPrompt ++ notes);
 
   mergeRules = {
     defaultAction ? "ask",
