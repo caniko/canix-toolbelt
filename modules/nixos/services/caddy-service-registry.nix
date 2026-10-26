@@ -28,6 +28,19 @@
       inherit address;
     };
 
+  # Non-throwing view of what resolveEndpoint dials, for assertions.
+  dialEndpoint = endpointName: let
+    source = serviceCfg.endpoints.${endpointName} or null;
+  in
+    if source != null && source.bind == "loopback" && source.targetHost != hostname
+    then
+      if source.remoteVia == null
+      then null
+      else serviceCfg.endpoints.${source.remoteVia} or null
+    else source;
+
+  proxyEndpointNames = route: [route.action.endpoint] ++ route.action.fallbackEndpoints;
+
   renderRoute = site: route:
     caddyLib.mkHttpRoute {
       inherit (site) hostname;
@@ -36,6 +49,7 @@
         if route.action.type == "proxy"
         then resolveEndpoint route.action.endpoint
         else null;
+      fallbacks = map resolveEndpoint route.action.fallbackEndpoints;
       inherit (cfg) staticRoots;
     };
 
@@ -65,14 +79,14 @@
     lib.concatMap (route:
       if route.action.type != "proxy"
       then []
-      else let
-        source = serviceCfg.endpoints.${route.action.endpoint} or null;
-      in
-        lib.optional (source != null && source.bind == "loopback" && source.remoteVia != null && source.targetHost == hostname) {
-          inherit site source;
-          sourceName = route.action.endpoint;
-          relayName = source.remoteVia;
-        })
+      else
+        lib.concatMap (sourceName: let
+          source = serviceCfg.endpoints.${sourceName} or null;
+        in
+          lib.optional (source != null && source.bind == "loopback" && source.remoteVia != null && source.targetHost == hostname) {
+            inherit site source sourceName;
+            relayName = source.remoteVia;
+          }) (proxyEndpointNames route))
     site.routes) (builtins.attrNames serviceCfg.httpSites);
 
   relayNames = lib.unique (map (use: use.relayName) relayUses);
@@ -112,6 +126,13 @@
   authPolicies = lib.unique (builtins.filter (policy: policy != null) (map (route: route.authPolicy) activeRoutes));
   caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
 
+  scopeForAccess = {
+    cloudflare = "public";
+    direct = "public";
+    vpn = "vpn";
+    lan = "lan";
+  };
+
   siteAssertions =
     lib.mapAttrsToList (siteName: site: let
       group = serviceCfg.ingressGroups.${site.ingress} or null;
@@ -119,26 +140,30 @@
       assertion =
         group
         != null
-        && ((site.access == "vpn") == (group.scope == "vpn"));
+        && scopeForAccess.${site.access} == group.scope;
       message = "canix-toolbelt Caddy registry: site `${siteName}` must reference an ingress group whose scope matches access `${site.access}`";
     })
     serviceCfg.httpSites;
 
   routeAssertions = lib.concatMap (siteName: let
     site = serviceCfg.httpSites.${siteName};
+    group = serviceCfg.ingressGroups.${site.ingress} or null;
+    active = group != null && groupIsActive site.ingress group;
   in
-    map (route: let
-      endpoint =
-        if route.action.type == "proxy"
-        then serviceCfg.endpoints.${route.action.endpoint} or null
-        else null;
-    in {
-      assertion =
-        route.action.type
-        != "proxy"
-        || (endpoint != null && endpoint.transport != "tcp");
-      message = "canix-toolbelt Caddy registry: site `${siteName}` proxy routes require a non-TCP endpoint";
-    })
+    lib.concatMap (route: let
+      names = proxyEndpointNames route;
+      dials = builtins.filter (dial: dial != null) (map dialEndpoint names);
+    in
+      lib.optionals (route.action.type == "proxy") [
+        {
+          assertion = builtins.all (name: let endpoint = serviceCfg.endpoints.${name} or null; in endpoint != null && endpoint.transport != "tcp") names;
+          message = "canix-toolbelt Caddy registry: site `${siteName}` proxy routes require existing non-TCP endpoints";
+        }
+        {
+          assertion = !active || builtins.length (lib.unique (map (dial: {inherit (dial) transport tlsServerName;}) dials)) <= 1;
+          message = "canix-toolbelt Caddy registry: site `${siteName}` proxy endpoints must share transport and tlsServerName as dialed from `${hostname}`";
+        }
+      ])
     site.routes) (builtins.attrNames serviceCfg.httpSites);
 in {
   imports = [./caddy-base.nix];

@@ -278,7 +278,7 @@
           fqdn = site.hostname;
         };
       in
-        if site.dnsPublication != "managed" || site.access == "vpn" || zone == null
+        if site.dnsPublication != "managed" || builtins.elem site.access ["vpn" "lan"] || zone == null
         then []
         else [
           {

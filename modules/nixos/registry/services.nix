@@ -46,6 +46,11 @@
         default = null;
         description = "Endpoint registry key.";
       };
+      fallbackEndpoints = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Ordered proxy endpoints tried after `endpoint`; all share its transport and TLS server name.";
+      };
       stripPrefix = mkOption {
         type = types.nullOr types.str;
         default = null;
@@ -154,7 +159,7 @@
         description = "Ingress group key.";
       };
       access = mkOption {
-        type = types.enum ["cloudflare" "direct" "vpn"];
+        type = types.enum ["cloudflare" "direct" "vpn" "lan"];
         description = "Site access policy.";
       };
       dnsPublication = mkOption {
@@ -176,7 +181,7 @@
   ingressGroupSubmodule = types.submodule {
     options = {
       scope = mkOption {
-        type = types.enum ["public" "vpn"];
+        type = types.enum ["public" "vpn" "lan"];
         description = "Ingress network scope.";
       };
       hosts = mkOption {
@@ -197,8 +202,9 @@
   lanInterface = host.lanInterface or null;
 
   actionAssertions = lib.concatMap (siteName:
-    map (route: let
+    lib.concatMap (route: let
       inherit (route) action;
+      proxyEndpoints = [action.endpoint] ++ action.fallbackEndpoints;
       valid =
         if action.type == "proxy"
         then action.endpoint != null
@@ -207,10 +213,16 @@
         else if action.type == "redirect"
         then action.to != null && action.status != null && action.status >= 300 && action.status <= 399
         else action.status != null;
-    in {
-      assertion = valid;
-      message = "canix-toolbelt service-registry: site `${siteName}` has an incomplete `${action.type}` action";
-    })
+    in [
+      {
+        assertion = valid;
+        message = "canix-toolbelt service-registry: site `${siteName}` has an incomplete `${action.type}` action";
+      }
+      {
+        assertion = action.fallbackEndpoints == [] || (action.type == "proxy" && lib.unique proxyEndpoints == proxyEndpoints);
+        message = "canix-toolbelt service-registry: site `${siteName}` fallbackEndpoints must be unique, differ from the primary endpoint, and only back proxy actions";
+      }
+    ])
     cfg.httpSites.${siteName}.routes) (builtins.attrNames cfg.httpSites);
 
   endpointAssertions =
@@ -231,10 +243,10 @@
   proxyUses = lib.concatMap (siteName: let
     site = cfg.httpSites.${siteName};
   in
-    map (route: {
-      inherit siteName site route;
-      endpointName = route.action.endpoint;
-    }) (builtins.filter (route: route.action.type == "proxy") site.routes)) (builtins.attrNames cfg.httpSites);
+    lib.concatMap (route:
+      map (endpointName: {
+        inherit siteName site route endpointName;
+      }) ([route.action.endpoint] ++ route.action.fallbackEndpoints)) (builtins.filter (route: route.action.type == "proxy") site.routes)) (builtins.attrNames cfg.httpSites);
 
   directEndpointNames = lib.unique (map (use: use.endpointName) proxyUses);
   relayNames = lib.unique (builtins.filter (name: name != null) (map (use: let
