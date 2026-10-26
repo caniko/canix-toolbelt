@@ -4,7 +4,7 @@
   osConfig ? null,
   ...
 }: let
-  inherit (lib) mkIf mkOption types;
+  inherit (lib) mkIf mkMerge mkOption types;
   safety = import ../../lib/agent-safety.nix {inherit lib;};
   cfg = config.programs.agentSafety;
 
@@ -153,9 +153,21 @@ in {
       default = {};
       description = "Optional OS containment profile configuration.";
     };
+
+    codex.enable = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Render the Bash policy as Codex execpolicy rules.";
+    };
   };
 
-  config = mkIf (cfg.enable && config.programs.opencode.enable) {
-    programs.opencode.settings.permission = permission;
-  };
+  config = mkMerge [
+    (mkIf (cfg.enable && config.programs.opencode.enable) {
+      programs.opencode.settings.permission = permission;
+    })
+    # A separate file keeps Codex's own `default.rules` writable.
+    (mkIf (cfg.enable && cfg.codex.enable) {
+      home.file.".codex/rules/agent-safety.rules".text = safety.renderCodexRules permission.bash;
+    })
+  ];
 }

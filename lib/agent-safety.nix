@@ -218,6 +218,53 @@
     then lib.hasPrefix leftPrefix rightPattern
     else lib.hasPrefix rightPrefix leftPattern;
 
+  # Codex execpolicy matches literal argv prefixes and resolves overlapping
+  # rules strictest-wins, so only literal patterns translate exactly. Exact
+  # allows are dropped because a prefix rule would widen them.
+  # ponytail: an ask/deny glob degrades to `prompt` on its literal prefix, so
+  # OpenCode-allowed refinements under it (for example IFD-guarded nix
+  # evaluations) prompt in Codex; per-argument alternatives would recover them.
+  renderCodexRules = rules: let
+    decisions = {
+      allow = "allow";
+      ask = "prompt";
+      deny = "forbidden";
+    };
+    isLiteral = token: builtins.match ".*[*?].*" token == null;
+    render = pattern: let
+      action = rules.${pattern};
+      tokens = lib.splitString " " pattern;
+      trailing = lib.last tokens == "*";
+      body =
+        if trailing
+        then lib.init tokens
+        else tokens;
+      literal =
+        (builtins.foldl' (acc: token:
+            if acc.stop || !isLiteral token
+            then acc // {stop = true;}
+            else acc // {tokens = acc.tokens ++ [token];}) {
+            stop = false;
+            tokens = [];
+          }
+          body).tokens;
+      exact = literal == body;
+      decision =
+        if action == "allow"
+        then
+          if exact && trailing
+          then "allow"
+          else null
+        else if exact
+        then decisions.${action}
+        else "prompt";
+    in
+      lib.optional (decision != null && literal != [])
+      "prefix_rule(pattern=[${lib.concatMapStringsSep ", " builtins.toJSON literal}], decision=${builtins.toJSON decision})";
+  in
+    lib.concatMapStrings (line: line + "\n")
+    (lib.unique (lib.sort lib.lessThan (lib.concatMap render (builtins.attrNames rules))));
+
   mergeRules = {
     defaultAction ? "ask",
     programs ? {},
@@ -250,6 +297,7 @@ in {
     mergeRules
     normalize
     renderActionRules
+    renderCodexRules
     renderProgram
     renderPrograms
     ;
