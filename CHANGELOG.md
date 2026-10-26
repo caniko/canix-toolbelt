@@ -5,6 +5,18 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- `caddy_plugins` (feature `caddy-plugins`, enabled by `cli`): discover
+  `caddy.plugins` declarations in a flake, bump them to their latest Go proxy
+  versions and refresh `caddy.pluginsHash` through the `caddy-helpers` flake
+  module's `caddyPluginsVendorFor`. Realization goes through the `Nix` trait so
+  consumers keep their own evaluation leases and GC roots; publication of the
+  returned vendor store path stays with the caller.
+- `canix-toolbelt caddy-plugins [--root DIR] [--hash-only] [--dry-run] [-- PUBLISH...]`
+  runs the refresh with the `nix` CLI and passes the realized vendor path to an
+  optional publish command, for example `-- attic push CACHE`.
+
 ### Changed
 
 - Regenerate CI with Simit 432cde7. Grouped Nix builds restore the pinned

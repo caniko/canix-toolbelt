@@ -28,6 +28,22 @@ enum Command {
     /// Inspect deployment-provided runtime facts
     #[command(subcommand)]
     Runtime(RuntimeCommand),
+    /// Bump Caddy plugins and refresh the flake's vendor `pluginsHash`
+    CaddyPlugins {
+        /// Flake checkout exposing `legacyPackages.<system>.caddyPluginsVendorFor`
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        /// Keep plugin versions; only recompute the hash
+        #[arg(long)]
+        hash_only: bool,
+        /// Report available updates without editing or building
+        #[arg(long)]
+        dry_run: bool,
+        /// Command run with the realized vendor store path appended
+        /// (for example `-- attic push CACHE`)
+        #[arg(last = true)]
+        publish: Vec<String>,
+    },
     /// Run or cancel a durable systemd stage controller
     #[cfg(unix)]
     #[command(subcommand)]
@@ -98,6 +114,37 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let manifest = RuntimeManifest::load_from(&path)?;
             let mut stdout = std::io::stdout().lock();
             serde_json::to_writer_pretty(&mut stdout, &manifest)?;
+            writeln!(stdout)?;
+        }
+        Command::CaddyPlugins {
+            root,
+            hash_only,
+            dry_run,
+            publish,
+        } => {
+            use canix_toolbelt::caddy_plugins;
+            let refresh =
+                caddy_plugins::refresh(&root, &mut caddy_plugins::NixCommand, hash_only, dry_run)
+                    .map_err(|error| error as Box<dyn std::error::Error>)?;
+            if let (Some(resolved), Some((program, args))) =
+                (&refresh.resolved, publish.split_first())
+            {
+                let status = std::process::Command::new(program)
+                    .args(args)
+                    .arg(&resolved.store_path)
+                    .status()?;
+                if !status.success() {
+                    return Err(format!("publish command failed: {status}").into());
+                }
+            }
+            let report = serde_json::json!({
+                "plugins": refresh.plugins.iter().map(|p| format!("{}@{}", p.module, p.version)).collect::<Vec<_>>(),
+                "updates": refresh.updates.iter().map(|(module, old, new)| serde_json::json!({"module": module, "from": old, "to": new})).collect::<Vec<_>>(),
+                "hash": refresh.resolved.as_ref().map(|r| &r.hash),
+                "storePath": refresh.resolved.as_ref().map(|r| &r.store_path),
+            });
+            let mut stdout = std::io::stdout().lock();
+            serde_json::to_writer_pretty(&mut stdout, &report)?;
             writeln!(stdout)?;
         }
         #[cfg(unix)]

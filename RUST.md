@@ -206,6 +206,26 @@ Legacy serialized records still decode; incomplete historical journals cannot
 authorize a new dispatch. The independent Linux worker and reusable Nix
 interfaces are documented in the repository's `docs/roborev.md`.
 
+## Caddy plugin refresh
+
+The `caddy-plugins` feature refreshes a flake's `caddy.plugins` versions and
+`caddy.pluginsHash`. Plugin and hash declarations must live in one Nix file, and
+the flake must expose the `caddy-helpers` flake module's
+`legacyPackages.<system>.caddyPluginsVendorFor`. `caddy_plugins::refresh`
+forces the vendor fixed-output derivation with a fake hash, realizes it with
+the reported hash and rewrites the file. Consumers implement the `Nix` trait to
+apply their own evaluation leases, build bounds and GC roots, and publish the
+returned vendor store path themselves; the pure parsing and editing helpers are
+public for consumers that keep their own orchestration.
+
+```sh
+canix-toolbelt caddy-plugins --dry-run
+canix-toolbelt caddy-plugins -- attic push CACHE
+```
+
+The CLI uses the `nix` command (`--impure`, `--no-link`) and appends the vendor
+store path to the optional publish command after `--`.
+
 ## Source-bound qualification
 
 The optional `qualification` library captures explicit source/input inventories,
