@@ -204,7 +204,6 @@
             direct-network-transitions = import ./nixos-tests/direct-network-transitions.nix {inherit pkgs inputs;};
             build-train-policy = assert (import ./nixos-tests/build-train-policy.nix {inherit inputs;}) != {}; pkgs.writeText "build-train-policy-parity" "ok";
             cloud-host-eval = import ./nixos-tests/cloud-host-eval.nix {inherit inputs pkgs;};
-            direnv-eval = import ./nixos-tests/direnv-eval.nix {inherit pkgs;};
             public-edge-eval = import ./nixos-tests/public-edge-eval.nix {inherit inputs pkgs;};
             opencode-environment-eval = import ./nixos-tests/opencode-environment-eval.nix {inherit pkgs;};
             opencode-claude-eval = import ./nixos-tests/opencode-claude-eval.nix {
@@ -283,7 +282,6 @@
             vpn-netns-runtime = import ./nixos-tests/vpn-netns-runtime.nix {inherit pkgs;};
           }
           // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-            direnv-runtime = import ./nixos-tests/direnv-runtime.nix {inherit pkgs;};
             resumable-operator-runtime = import ./nixos-tests/resumable-operator-runtime.nix {inherit pkgs;};
             harbor-db-compat-runtime = import ./nixos-tests/harbor-db-compat-runtime.nix {
               inherit pkgs;
@@ -333,9 +331,28 @@
             ldflags = ["-s" "-w"];
             doCheck = false;
           };
-        apps.deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
-          domain = "canix-toolbelt.tartanoglu.com";
-        };
+        apps =
+          {
+            deploy-pages = inputs.plinth.lib.${system}.mkDeployPagesApp {
+              domain = "canix-toolbelt.tartanoglu.com";
+            };
+          }
+          // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            # Simit prebuild publication on trunk (secret ATTIC_TOKEN): the
+            # packages Canix consumes, so its hosts substitute them.
+            push-flake-inputs = inputs.harbor-rs.lib.mkAtticPush {
+              inherit pkgs;
+              flake = ".";
+              paths = with config.packages; [canix-toolbelt-build-train canix-toolbelt-direct-network crush];
+              adapter = inputs.harbor-rs.lib.mkAdapter {
+                attic = {
+                  endpoint = "https://attic.candee.baby";
+                  cache = "canix";
+                  tokenEnvVar = "ATTIC_TOKEN";
+                };
+              };
+            };
+          };
         devShells.default = pkgs.mkShell {
           packages = [config.treefmt.build.wrapper pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.cargo-audit pkgs.cmake pkgs.pkg-config pkgs.perl];
           # This shell uses stable Rust; do not inherit Canix's nightly-only flags.

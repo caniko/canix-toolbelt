@@ -29,6 +29,7 @@
 in {
   dataDir = "${homeDirectory}/state $literal %pct \"quote\" \\back";
   package = {
+    inherit (package) version;
     derivation = package.drvPath;
     output = toString package;
   };

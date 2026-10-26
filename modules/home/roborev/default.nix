@@ -4,5 +4,7 @@
   imports = [
     ./program.nix
     ./service.nix
+    ./repositories.nix
+    ./integrations.nix
   ];
 }

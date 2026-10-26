@@ -24,15 +24,39 @@
 
   cfg = config.programs.roborev;
   toml = pkgs.formats.toml {};
+  schema = import ./schema.nix {inherit lib toml;};
+  settings = schema.clean cfg.settings;
   commandKeys = {
     opencode = "opencode_cmd";
     codex = "codex_cmd";
     "claude-code" = "claude_code_cmd";
+    gemini = "gemini_cmd";
+    cursor = "cursor_cmd";
+    pi = "pi_cmd";
+    grok = "grok_cmd";
   };
-  knownAgents = builtins.attrNames commandKeys;
+  commandNames = {
+    copilot = "copilot";
+    droid = "droid";
+    kilo = "kilo";
+    kiro = "kiro-cli";
+  };
+  knownAgents = builtins.attrNames (commandKeys // commandNames);
   agentNames = builtins.attrNames cfg.agentCommands;
-  reservedKeys = ["default_agent"] ++ builtins.attrValues commandKeys;
-  reservedUsed = builtins.filter (key: builtins.hasAttr key cfg.settings) reservedKeys;
+  commandConflicts =
+    builtins.filter (
+      name:
+        builtins.hasAttr name commandKeys
+        && builtins.hasAttr commandKeys.${name} settings
+        && settings.${commandKeys.${name}} != cfg.agentCommands.${name}
+    )
+    agentNames;
+  acpName = lib.removePrefix "acp." cfg.defaultAgent;
+  acpCommand = lib.attrByPath ["acp" acpName "command"] "" settings;
+  configuredCommand =
+    if builtins.hasAttr cfg.defaultAgent commandKeys
+    then settings.${commandKeys.${cfg.defaultAgent}} or ""
+    else "";
 
   absoluteString = value:
     builtins.isString value
@@ -45,16 +69,12 @@
     && !hasPrefix "/nix/store/" value
     && !hasInfix "//" value
     && !hasInfix "/../" "${value}/"
-    && !hasInfix "/./" "${value}/";
+    && !hasInfix "/./" "${value}/"
+    && !hasSuffix "/" value;
 
   envReference = value:
     builtins.isString value
     && builtins.match "[$][{][A-Za-z_][A-Za-z0-9_]*[}]" value != null;
-
-  appKey = lib.attrByPath ["ci" "github_app_private_key"] "" cfg.settings;
-  anthropicKey = cfg.settings.anthropic_api_key or "";
-  webTokenFile = lib.attrByPath ["web" "auth_token_file"] "" cfg.settings;
-  embeddingKey = lib.attrByPath ["search" "embeddings" "api_key"] "" cfg.settings;
 
   # Ignore unknown names here so the assertion, rather than a missing-attribute
   # exception, reports mistakes in the interface.
@@ -64,12 +84,15 @@
   ) (lib.filterAttrs (name: _: builtins.hasAttr name commandKeys) cfg.agentCommands);
 
   effectiveSettings =
-    cfg.settings
+    settings
     // commandSettings
     // {
       default_agent = cfg.defaultAgent;
     };
-  configFile = toml.generate "roborev-config.toml" effectiveSettings;
+  configFile =
+    if cfg.runtimeConfigFile == null
+    then toml.generate "roborev-config.toml" effectiveSettings
+    else config.lib.file.mkOutOfStoreSymlink cfg.runtimeConfigFile;
   agentBinDirs = map builtins.dirOf (builtins.attrValues cfg.agentCommands);
   basePackages = with pkgs; [
     bash
@@ -82,9 +105,26 @@
     openssh
     ripgrep
   ];
-  runtimePath = concatStringsSep ":" (
+  baseRuntimePath = concatStringsSep ":" (
     agentBinDirs ++ [(lib.makeBinPath (basePackages ++ cfg.extraPackages))]
   );
+  runtimePath = "${wrappedPackage}/libexec/roborev-agents:${baseRuntimePath}";
+  environment =
+    cfg.environment
+    // lib.optionalAttrs (cfg.colorMode != null) {
+      ROBOREV_COLOR_MODE = cfg.colorMode;
+    };
+  environmentFlags = lib.concatStringsSep " " (lib.mapAttrsToList (
+      name: value: "--set ${escapeShellArg name} ${escapeShellArg value}"
+    )
+    environment);
+  runtimeConfigCheck = lib.optionalString (cfg.runtimeConfigFile != null) ''
+    roborev_runtime=${escapeShellArg cfg.runtimeConfigFile}
+    if [[ -L "$roborev_runtime" || ! -f "$roborev_runtime" || ! -r "$roborev_runtime" || "$(${pkgs.coreutils}/bin/stat -c '%u:%a' "$roborev_runtime")" != "$(${pkgs.coreutils}/bin/id -u):600" ]]; then
+      echo "roborev: runtimeConfigFile must be a readable, user-owned regular file with mode 0600" >&2
+      exit 1
+    fi
+  '';
   telemetry =
     if cfg.enableTelemetry
     then "1"
@@ -95,10 +135,21 @@
     paths = [cfg.package];
     nativeBuildInputs = [pkgs.makeWrapper];
     postBuild = ''
+      mkdir -p "$out/libexec/roborev-agents"
+      ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
+          name: path:
+            lib.optionalString (builtins.hasAttr name commandNames)
+            # Only env must exist in the build sandbox; the approved agent may
+            # be provisioned at a runtime path. Preserve it as one argv element.
+            "makeWrapper ${pkgs.coreutils}/bin/env \"$out/libexec/roborev-agents/${commandNames.${name}}\" --add-flags ${escapeShellArg (escapeShellArg path)}"
+        )
+        cfg.agentCommands)}
       wrapProgram "$out/bin/roborev" \
         --set ROBOREV_DATA_DIR ${escapeShellArg cfg.dataDir} \
         --set ROBOREV_TELEMETRY_ENABLED ${escapeShellArg telemetry} \
-        --set PATH ${escapeShellArg runtimePath}
+        --set PATH "$out/libexec/roborev-agents":${escapeShellArg baseRuntimePath} \
+        --run ${escapeShellArg runtimeConfigCheck} \
+        ${environmentFlags}
     '';
     meta.mainProgram = "roborev";
   };
@@ -143,16 +194,16 @@ in {
     };
 
     defaultAgent = mkOption {
-      type = types.enum knownAgents;
+      type = types.str;
       default = "opencode";
-      description = "Explicit default harness; it must exist in agentCommands.";
+      description = "Explicit built-in or acp.<name> agent. Generated configuration requires a pinned executable; runtimeConfigFile owns agent selection in runtime-file mode.";
     };
 
     agentCommands = mkOption {
       type = types.attrsOf types.str;
       default = {};
       description = ''
-        Mapping of opencode, codex, or claude-code to absolute executable paths.
+        Mapping of any supported built-in review agent to an absolute executable path.
         Values are single executable paths, not shell commands with arguments.
         Pass an existing approved containment wrapper when one is in use.
         These are execution choices, not a security allowlist.
@@ -160,14 +211,39 @@ in {
     };
 
     settings = mkOption {
-      inherit (toml) type;
+      type = schema.globalType;
       default = {};
       description = ''
-        Non-secret upstream TOML settings. default_agent and *_cmd for the
-        supported harnesses are owned by defaultAgent and agentCommands.
+        Typed, non-secret upstream TOML settings with a freeform escape hatch.
+        default_agent is owned by defaultAgent. Command settings may be supplied
+        directly; when agentCommands supplies the same agent they must agree.
         Use runtime file paths or upstream-supported environment references
         for credentials. Never put plaintext secrets in this attribute set.
       '';
+    };
+
+    runtimeConfigFile = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Complete private runtime TOML file, outside the Nix store. Its contents
+        are never read during evaluation or builds. This mode supports config-only
+        secrets such as auth_key and webhook URLs. It is mutually exclusive with
+        settings and agentCommands; use extraPackages for runtime dependencies.
+        The runtime file must be owned by this user and mode 0600.
+      '';
+    };
+
+    colorMode = mkOption {
+      type = types.nullOr (types.enum ["auto" "dark" "light" "none"]);
+      default = null;
+      description = "Roborev color mode. Null inherits the caller's environment; NO_COLOR retains upstream precedence.";
+    };
+
+    environment = mkOption {
+      type = types.attrsOf types.str;
+      default = {};
+      description = "Non-secret environment shared by the wrapped CLI and service. Credentials belong in runtime files or service environmentFiles.";
     };
 
     enableTelemetry = mkOption {
@@ -190,71 +266,69 @@ in {
 
   config = mkMerge [
     (mkIf cfg.enable {
-      assertions = [
-        {
-          assertion =
-            absoluteString cfg.dataDir
-            && hasPrefix "${config.home.homeDirectory}/" cfg.dataDir
-            && !hasInfix "/../" "${cfg.dataDir}/"
-            && !hasInfix "/./" "${cfg.dataDir}/"
-            && !hasInfix "//" cfg.dataDir
-            && !hasSuffix "/" cfg.dataDir;
-          message = "programs.roborev.dataDir must be a normalized absolute directory below homeDirectory.";
-        }
-        {
-          assertion = builtins.all (name: builtins.elem name knownAgents) agentNames;
-          message = "programs.roborev.agentCommands accepts only opencode, codex and claude-code.";
-        }
-        {
-          assertion = builtins.all absoluteString (builtins.attrValues cfg.agentCommands);
-          message = "roborev agentCommands must be absolute executable paths, without newline characters.";
-        }
-        {
-          assertion = builtins.all (path: !hasInfix ":" (builtins.dirOf path)) (builtins.attrValues cfg.agentCommands);
-          message = "roborev agent command directories must not contain PATH separators.";
-        }
-        {
-          assertion = builtins.hasAttr cfg.defaultAgent cfg.agentCommands;
-          message = "The roborev defaultAgent must have an explicit agentCommands entry.";
-        }
-        {
-          assertion = reservedUsed == [];
-          message = "Use roborev.defaultAgent and agentCommands instead of these settings: ${concatStringsSep ", " reservedUsed}";
-        }
-        {
-          assertion = (cfg.settings.auth_key or "") == "";
-          message = "This module does not materialize a secret daemon auth_key. Use the private Unix socket, or add tested runtime secret support; never put a key in settings.";
-        }
-        {
-          assertion = (lib.attrByPath ["web" "auth_token"] "" cfg.settings) == "";
-          message = "Use web.auth_token_file with a runtime path, not an inline web.auth_token.";
-        }
-        {
-          assertion = anthropicKey == "" || envReference anthropicKey;
-          message = "anthropic_api_key must be absent, empty, or an upstream environment-variable reference, never a literal key.";
-        }
-        {
-          assertion = webTokenFile == "" || runtimeSecretPath webTokenFile;
-          message = "web.auth_token_file must be an absolute runtime string outside the Nix store.";
-        }
-        {
-          assertion = embeddingKey == "";
-          message = "Embedding credentials are outside this module's tested baseline; never serialize them in settings.";
-        }
-        {
-          assertion =
-            builtins.isString appKey
-            && (
-              appKey == "" || envReference appKey || runtimeSecretPath appKey
-            );
-          message = "ci.github_app_private_key must be a runtime file path or environment reference, never inline PEM.";
-        }
-      ];
+      assertions =
+        [
+          {
+            assertion =
+              absoluteString cfg.dataDir
+              && hasPrefix "${config.home.homeDirectory}/" cfg.dataDir
+              && !hasInfix "/../" "${cfg.dataDir}/"
+              && !hasInfix "/./" "${cfg.dataDir}/"
+              && !hasInfix "//" cfg.dataDir
+              && !hasSuffix "/" cfg.dataDir;
+            message = "programs.roborev.dataDir must be a normalized absolute directory below homeDirectory.";
+          }
+          {
+            assertion = builtins.all (name: builtins.elem name knownAgents) agentNames;
+            message = "programs.roborev.agentCommands accepts only supported built-in review agents; configure named ACP commands under settings.acp.";
+          }
+          {
+            assertion = builtins.all absoluteString (builtins.attrValues cfg.agentCommands);
+            message = "roborev agentCommands must be absolute executable paths, without newline characters.";
+          }
+          {
+            assertion = builtins.all (path: !hasInfix ":" (builtins.dirOf path)) (builtins.attrValues cfg.agentCommands);
+            message = "roborev agent command directories must not contain PATH separators.";
+          }
+          {
+            assertion =
+              cfg.runtimeConfigFile
+              != null
+              || (builtins.elem cfg.defaultAgent knownAgents && (builtins.hasAttr cfg.defaultAgent cfg.agentCommands || absoluteString configuredCommand))
+              || (hasPrefix "acp." cfg.defaultAgent && acpName != "" && !hasInfix "." acpName && lib.trim acpName == acpName && absoluteString acpCommand);
+            message = "The roborev defaultAgent requires an explicit agentCommands entry, absolute upstream command override, or defined acp.<name> command.";
+          }
+          {
+            assertion = !(settings ? default_agent) && commandConflicts == [];
+            message = "Use roborev.defaultAgent for default_agent; settings command overrides and agentCommands must agree (${concatStringsSep ", " commandConflicts}).";
+          }
+          {
+            assertion = cfg.runtimeConfigFile == null || (runtimeSecretPath cfg.runtimeConfigFile && cfg.runtimeConfigFile != "${cfg.dataDir}/config.toml");
+            message = "roborev.runtimeConfigFile must be an absolute runtime string outside the Nix store.";
+          }
+          {
+            assertion = cfg.runtimeConfigFile == null || (settings == {} && cfg.agentCommands == {});
+            message = "roborev.runtimeConfigFile is a complete configuration and cannot be combined with settings or agentCommands.";
+          }
+          {
+            assertion = builtins.all (name: builtins.match "[A-Za-z_][A-Za-z0-9_]*" name != null) (builtins.attrNames cfg.environment);
+            message = "roborev.environment names must be valid environment variable identifiers.";
+          }
+          {
+            assertion = builtins.all (name: !(builtins.elem name ["PATH" "HOME" "ROBOREV_DATA_DIR" "ROBOREV_TELEMETRY_ENABLED" "ROBOREV_COLOR_MODE"])) (builtins.attrNames cfg.environment);
+            message = "Use dedicated roborev options for managed environment variables.";
+          }
+          {
+            assertion = builtins.all (value: builtins.match ".*[[:cntrl:]].*" value == null) (builtins.attrValues cfg.environment);
+            message = "roborev.environment values must not contain control characters.";
+          }
+        ]
+        ++ (import ./credentials.nix {inherit lib settings runtimeSecretPath envReference;});
 
       programs.roborev.finalPackage = wrappedPackage;
       programs.roborev._configFile = configFile;
       programs.roborev._runtimePath = runtimePath;
-      programs.roborev.settings = {
+      programs.roborev.settings = mkIf (cfg.runtimeConfigFile == null) {
         server_addr = mkDefault "unix://";
         max_workers = mkDefault 2;
         isolate_reviews = mkDefault true;
@@ -279,6 +353,7 @@ in {
         # Do not force an overwrite of an existing unmanaged configuration.
       };
       home.activation.roborevDataDirCheck = lib.hm.dag.entryBefore ["writeBoundary"] ''
+        ${runtimeConfigCheck}
         roborev_dir=${escapeShellArg cfg.dataDir}
         roborev_home=${escapeShellArg config.home.homeDirectory}
         roborev_uid=$(${pkgs.coreutils}/bin/id -u)

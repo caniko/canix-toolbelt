@@ -40,7 +40,7 @@ in
         hash = "sha256-ZwW8D8oSnCegK65OHORhnANnDw8eYk7RJp5Ap2rTs84=";
       };
       sourceRoot = "package";
-      npmDepsHash = "sha256-NN3sxBzlkbUeKAlDwV4L6nM6NjpB2kdy/fyJPHVCI+g=";
+      npmDepsHash = "sha256-XtZ+Ma+x7++x2w6vc1rlmNNHFzwlYW8dFKu5kTpX8ho=";
       dontNpmBuild = true;
       npmFlags = ["--ignore-scripts"];
       nativeBuildInputs = [makeWrapper autoPatchelfHook];

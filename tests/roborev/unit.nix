@@ -22,6 +22,8 @@
                               "data": str(data), "rotation": os.environ.get("RR_ROTATION"),
                               "telemetry": os.environ["ROBOREV_TELEMETRY_ENABLED"],
                               "path": os.environ["PATH"], "pid": os.getpid(),
+                              "shared_environment": os.environ.get("RR_SHARED_VALUE"),
+                              "color_mode": os.environ.get("ROBOREV_COLOR_MODE"),
                               "cwd": os.getcwd(),
                               "workers": tomllib.loads((data / "config.toml").read_text())["max_workers"],
                               "recorder_revision": ${builtins.toJSON recorderRevision},
@@ -59,6 +61,8 @@
           package = recorder;
           dataDir = "${homeDirectory}/state $literal %pct \"quote\" \\back";
           agentCommands.opencode = agentCommand;
+          environment.RR_SHARED_VALUE = "dollar $ percent % quote \"";
+          colorMode = "dark";
         };
         services.roborev = {
           enable = true;

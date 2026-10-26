@@ -5,8 +5,65 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Regenerate CI with Simit 432cde7. Grouped Nix builds restore the pinned
+  Simit engine from the Actions cache instead of compiling it in every group
+  job. Tag-time publication no longer re-runs a full `nix flake check`, which
+  the build groups already realize. The source-preparation workflow now also
+  triggers on and retains the generated `producer-custody.yaml`.
+
+## [0.5.0] - 2026-10-21
+
+### Added
+
+- Reusable source-bound Rust qualification operations and an independent
+  `qualification` CLI: inventories, bounded execution receipts, legacy evidence
+  verification, Cargo graph comparison, deterministic source export and
+  composition-bound handoff sealing.
+- Provider-free execution wire types and pure validators generated for Rust and
+  TypeScript from one versioned schema. Bind discovery to exact implementation,
+  configuration and credential-reference identities; preserve u64 counters as
+  strings and reject unavailable guarantees before execution. Ship shared
+  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
+- Host-neutral native campaign journal, admission and bounded recovery primitives
+  behind the `orchestration` feature, including native input reconciliation,
+  complete forge-history collection, evidence replication, bounded context
+  compaction and a read-only legacy shadow probe.
+- Expose held registration, admission, bounded completion waiting, drain and
+  activation-readiness commands through the existing `build-train` frontend.
+- Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
+  with a pinned Meridian backend, per-user Fleetix loopback endpoints and
+  runtime credentials. Preserve per-session project context and external
+  service ownership through the native plugin lifecycle.
+
+### Changed
+
+- Regenerate CI with Simit d52947d: pull requests run once on pull_request (pushes only on trunk), the 80 installables and checks build in seven shared-store groups, CI no longer re-realizes flake checks (the groups realize them and the supported-systems gate evaluates them on both systems), and completion-driven producer custody replaces the long-polling retention workflow.
+- Consume registry Fleetix 0.7.0 (Pklx 0.2.1 / Pklr 5, ZIP 9) for native shared
+  construction, so consumers resolve a single Fleetix version without ZIP 8.
+- Consume registry Fleetix 0.6.0 for native shared construction. Preserve the
+  Toolbelt library paths and frontend return type through compatibility adapters
+  while sharing Fleetix's exact service, connection and command types. Native
+  execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
+- Alias the existing NixOS option paths to Fleetix's service module, including
+  retained-deployment staging, operator-bound policy, configurable private paths
+  and preserved runtime-directory ownership through offline rollover.
+
 ### Fixed
 
+- Answer every queued direct-network readiness request from one reconciliation
+  performed after accepting the batch, and wake on new requests. A
+  reconciliation per connection outlasted the client timeout once a queue
+  formed, so abandoned connections kept every unit's readiness failing.
+- Keep the source-owned custody policy assertion aligned with the qualified
+  complete-job-log observer revision.
+- Verify complete original job logs when GitHub omits or restores redundant
+  numeric step-file copies in run-log ZIPs, preserving exact job identity,
+  aggregate coverage, shared content and historical failed custody packets.
+- Retain original hosted producers through transient GitHub API failures with
+  Simit's qualified native observer, complete job enrollment and independent
+  uploaded-artifact verification; preserve historical failed custody packets.
 - Use published Pklx 0.2 for embedded manifest and review-policy evaluation,
   removing the vulnerable ZIP 8 dependency while preserving typed loading and
   rejection of synchronous loading inside a Tokio runtime.
@@ -26,27 +83,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Require prepared immutable service images with readiness bind targets for
   inline admission. `RootDirectoryStartOnly=true` remains an authored host-control
   opt-in, not an automatic fallback for unprepared images.
-
-### Added
-
-- Reusable source-bound Rust qualification operations and an independent
-  `qualification` CLI: inventories, bounded execution receipts, legacy evidence
-  verification, Cargo graph comparison, deterministic source export and
-  composition-bound handoff sealing.
-## [0.5.0] - 2026-10-11
-
-### Changed
-
-- Consume registry Fleetix 0.6.0 for native shared construction. Preserve the
-  Toolbelt library paths and frontend return type through compatibility adapters
-  while sharing Fleetix's exact service, connection and command types. Native
-  execution and root ownership remain in Fleetix over nix-manager-core 0.3.0.
-- Alias the existing NixOS option paths to Fleetix's service module, including
-  retained-deployment staging, operator-bound policy, configurable private paths
-  and preserved runtime-directory ownership through offline rollover.
-
-### Fixed
-
 - Keep trusted publisher verification on the admitted signed source rather than
   the workflow's default-branch revision. Permit signed-tag and trusted-publisher
   recovery while retaining original-attempt-only branch/PR qualification.
@@ -128,24 +164,6 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
   retain routing-only coverage in the disposable namespace probe. Retry transient
   pinentry fixture observations within the existing deadline while retaining
   permanent failure diagnostics and separate concurrent prompt assertions.
-
-### Added
-
-- Provider-free execution wire types and pure validators generated for Rust and
-  TypeScript from one versioned schema. Bind discovery to exact implementation,
-  configuration and credential-reference identities; preserve u64 counters as
-  strings and reject unavailable guarantees before execution. Ship shared
-  canonical-byte/error-code fixtures and a dedicated hosted conformance check.
-- Host-neutral native campaign journal, admission and bounded recovery primitives
-  behind the `orchestration` feature, including native input reconciliation,
-  complete forge-history collection, evidence replication, bounded context
-  compaction and a read-only legacy shadow probe.
-- Expose held registration, admission, bounded completion waiting, drain and
-  activation-readiness commands through the existing `build-train` frontend.
-- Reusable OpenCode V2 Claude subscription and Jev Home Manager integration,
-  with a pinned Meridian backend, per-user Fleetix loopback endpoints and
-  runtime credentials. Preserve per-session project context and external
-  service ownership through the native plugin lifecycle.
 
 ## [0.4.1] - 2026-10-07
 

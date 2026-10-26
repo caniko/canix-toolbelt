@@ -7,9 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 
 def main():
@@ -93,6 +92,8 @@ def main():
                         "rotation": "synthetic-before", "telemetry": "0", "cwd": str(home)}
             assert all(records[-1][key] == value for key, value in expected.items()), records
             assert all(records[-1]["tools"].values()), records
+            assert records[-1]["shared_environment"] == 'dollar $ percent % quote "'
+            assert records[-1]["color_mode"] == "dark"
             direct = subprocess.run(
                 [projection["wrappedPackage"] + "/bin/roborev", "config", "validate", "--global"],
                 env={"HOME": str(home), "PATH": "/nonexistent"},
@@ -102,6 +103,8 @@ def main():
             caller = json.loads((data / "invocations.jsonl").read_text().splitlines()[-1])
             assert caller["data"] == str(data) and caller["path"] == projection["runtimePath"]
             assert all(caller["tools"].values()), caller
+            assert caller["shared_environment"] == records[-1]["shared_environment"]
+            assert caller["color_mode"] == records[-1]["color_mode"]
             environment_file.write_text("RR_ROTATION=synthetic-after\n")
             systemctl("restart", name)
             assert json.loads((data / "invocations.jsonl").read_text().splitlines()[-1])["rotation"] == "synthetic-after"

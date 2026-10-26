@@ -1,5 +1,34 @@
 # Source-bound qualification
 
+## Hosted original-producer custody
+
+`[ci.custody]` in `simit.toml` enrolls the six CI jobs and the seven grouped
+Nix build jobs (`build (<group>)`, artifacts `nix-build-<index>`). Simit's
+generated `producer-custody.yaml` runs on `workflow_run` completion from the
+default branch, captures each original attempt-1 producer and reports
+`simit/producer-custody/<event>/<target-sha256>` on the source head. It replaced
+the long-polling `retain-producer-evidence.yaml` and
+`.github/original-producers.json`, which held a runner for the whole producer
+run. Historical Python helpers, tests and failed packets remain unchanged.
+
+### Failed packet: `b2ed9cc` push originals
+
+Push custody [39338038977](https://github.com/caniko/canix-toolbelt/actions/runs/39338038977)
+for `b2ed9ccbce228c24853564fdd1a2fd07df8a848e` failed with `simit: producer did
+not complete successfully`, because two Nix producers in
+[39338038850](https://github.com/caniko/canix-toolbelt/actions/runs/39338038850)
+failed. Its PR originals and PR custody passed. Neither was rerun, and the packet
+stays failed.
+
+- `build (.#roborev)`: cache.nixos.org returned HTTP 416 and broken pipes while
+  substituting `binutils-2.46`.
+- `build (.#checks.x86_64-linux.direct-network-transitions)`: after `wg-proton`
+  was restored, the inbound IPv6 direct probe (`directpeer` source
+  `2001:db8:20::20` to `[2001:db8:1::1]:4096`) timed out in `check_direct()`.
+  The same module, daemon and test sources passed in five other originals.
+  **Open follow-up:** find the cause of this intermittent IPv6 reply-path
+  timeout.
+
 ## Hosted coverage applicability
 
 `qualification verify-coverage SEAL --expected requirements.json --receipts

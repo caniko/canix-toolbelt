@@ -31,12 +31,12 @@ jobs:
           set -euo pipefail
           [[ "$PUBLISHER_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo 'Enroll a qualified immutable Simit publisher revision' >&2; exit 1; }
       - name: Checkout independent publisher source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Checkout qualified publisher engine
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: caniko/simit
           ref: ${{ vars.SIMIT_PUBLISHER_REVISION }}
@@ -49,8 +49,8 @@ jobs:
           components: rustfmt, clippy
 
       - name: Build trusted publisher engine
-        working-directory: .simit-publisher-engine
-        run: cargo build --release --locked
+        working-directory: /
+        run: cargo build --release --locked --manifest-path "$GITHUB_WORKSPACE/.simit-publisher-engine/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/.simit-publisher-engine/target"
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           .simit-publisher-engine/target/release/simit release publisher --publisher-stage prepare --repo "$GITHUB_REPOSITORY" --package canix-toolbelt --source-workflow .github/workflows/publish-crate.yaml --publisher-workflow .github/workflows/trusted-publish-crate.yaml --reconstruct-package canix-toolbelt --publisher-output "$RUNNER_TEMP/verified-canix-toolbelt" > "$RUNNER_TEMP/verified-canix-toolbelt.json"
       - name: Checkout original signed source for verification
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           path: .simit-release-source
@@ -136,7 +136,7 @@ jobs:
           XDG_CACHE_HOME: "/tmp/.cache"
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
-        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/db79439e9a7f4863fccba33aee9f325bf9c760c2 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
+        run: bash scripts/prepare-hosted-source.sh && nix run --max-jobs 1 --cores 2 github:caniko/simit/432cde792b74e5fdce8ed6e71b555e535f2b83b5 -- init ci --platform github --ci-provider actions --runtime nix --check --diff
       - name: Required gate supported-systems
         timeout-minutes: 30
         working-directory: .simit-release-source
@@ -169,12 +169,12 @@ jobs:
           set -euo pipefail
           [[ "$PUBLISHER_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo 'Enroll a qualified immutable Simit publisher revision' >&2; exit 1; }
       - name: Checkout independent publisher source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Checkout qualified publisher engine
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: caniko/simit
           ref: ${{ vars.SIMIT_PUBLISHER_REVISION }}
@@ -187,8 +187,8 @@ jobs:
           components: rustfmt, clippy
 
       - name: Build trusted publisher engine
-        working-directory: .simit-publisher-engine
-        run: cargo build --release --locked
+        working-directory: /
+        run: cargo build --release --locked --manifest-path "$GITHUB_WORKSPACE/.simit-publisher-engine/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/.simit-publisher-engine/target"
       - name: Upload independently verified archive canix-toolbelt
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  options,
   ...
 }: let
   cfg = config.canix-toolbelt.services.initrd-ssh;
@@ -36,7 +37,9 @@ in {
   config = mkIf cfg.enable {
     assertions = [
       {
-        assertion = config.boot.initrd.systemd.enable;
+        # nixpkgs removed scripted initrd (and this option, which now throws
+        # when read) once systemd became the only initrd.
+        assertion = !(options.boot.initrd.systemd.enable ? default) || config.boot.initrd.systemd.enable;
         message = "initrd-ssh requires boot.initrd.systemd.enable = true";
       }
     ];

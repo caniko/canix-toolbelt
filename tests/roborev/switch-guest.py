@@ -5,9 +5,9 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
-import tomllib
 from namespace import fixture, require_isolation
 
 
@@ -88,7 +88,7 @@ def main():
         assert selected_binary.resolve() == expected_binary.resolve(), observed_profile
         versions = subprocess.run([str(selected_binary), "version"], env=env, cwd=home,
                                   capture_output=True, text=True, timeout=30, check=False)
-        assert versions.returncode == 0 and "v0.71.0" in versions.stdout, versions.stdout + versions.stderr
+        assert versions.returncode == 0 and f"v{projection['package']['version']}" in versions.stdout.split(), versions.stdout + versions.stderr
         validated = subprocess.run([str(selected_binary), "config", "validate", "--global"], env=env, cwd=home,
                                    capture_output=True, text=True, timeout=30, check=False)
         assert validated.returncode == 0, validated.stdout + validated.stderr

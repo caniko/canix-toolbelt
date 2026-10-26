@@ -5,12 +5,12 @@
   buildPkgs ? pkgs.buildPackages,
 }: let
   inherit (pkgs) lib;
-  version = "0.71.0";
+  version = "0.72.0";
   src = pkgs.fetchFromGitHub {
     owner = "kenn-io";
     repo = "roborev";
-    rev = "2087d5abc7a65f2d6de555ae49fc55795aefb78f";
-    hash = "sha256-Lc0GVDKCfZDBo44SfEi2QnSikkzumtcoKOGXQupRYE8=";
+    rev = "1d6571d0993d7d56ba0d7da312d27191b881c913";
+    hash = "sha256-wGVD+nsaqzzGRjP0ChPQB8Uwc+WPv+dCBj+x/i+cdlM=";
   };
   toolchain = harborGo.lib.mkGoToolchain {
     inherit pkgs;
@@ -85,7 +85,7 @@
     pname = "roborev";
     # Retire when upstream includes graceful OpenCode session cancellation.
     patches = [./roborev-opencode-cancellation.patch];
-    vendorHash = "sha256-deCvjJHN3uNK+KYfgoJKxiZFShW5bVnLMksTx2SdrS4=";
+    vendorHash = "sha256-qDwjJIZqGx1f5otZIRKAYL1GaCvbZFSG4tO5Ix/wp0I=";
     subPackages = ["cmd/roborev"];
     # Agent/config tests create isolated Git fixtures inside the sandbox.
     nativeBuildInputs = [buildPkgs.git];
@@ -143,8 +143,9 @@
 in
   assert lib.assertMsg (lib.versionAtLeast buildPkgs.nodejs.version "24.2.0")
   "roborev frontend checks require Node 24.2+ for native TypeScript and import.meta.main";
-  assert lib.assertMsg (toolchain.go.version == "1.27.1")
-  "roborev's frozen Harbor contract requires Go 1.27.1; requalify before changing toolchains";
+  # Go point releases flow through; a new minor series needs requalification.
+  assert lib.assertMsg (lib.versions.majorMinor toolchain.go.version == "1.27")
+  "roborev's Harbor contract targets Go 1.27; requalify before changing the Go minor series";
   assert lib.assertMsg
   # The pinned stdenv flattens its input `env` onto the resulting derivation.
   (package.GOOS == pkgs.stdenv.hostPlatform.go.GOOS && package.GOARCH == pkgs.stdenv.hostPlatform.go.GOARCH)
