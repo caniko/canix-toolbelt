@@ -5,6 +5,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-26
+
 ### Added
 
 - `caddy_plugins` (feature `caddy-plugins`, enabled by `cli`): discover
@@ -308,7 +310,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Registry Fleetix `0.2` integration, allowing downstream consumers to share
   one supported Fleetix series with the runtime loader.
 
-[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.5.1...HEAD
+[0.5.1]: https://github.com/caniko/canix-toolbelt/compare/0.5.0...0.5.1
 [0.3.0]: https://github.com/caniko/canix-toolbelt/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0
