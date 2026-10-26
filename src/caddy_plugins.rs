@@ -391,6 +391,20 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
         return Ok(Refresh::default());
     }
     validate_single_owner(&occurrences, &hash_files(&root)?)?;
+    // Every occurrence lives in this one file (validate_single_owner).
+    let file = root.join(&occurrences[0].file);
+    let raw = fs::read_to_string(&file)?;
+    // One hash covers exactly one plugin set; reject anything else up front.
+    let lists = assignment_values(&raw, PLUGINS_MARKER, '[', ']').len();
+    let hashes = set_plugins_hash(&raw, "").1;
+    if lists != 1 || hashes != 1 {
+        return Err(format!(
+            "{} must contain exactly one `caddy.plugins = [ ... ]` list and one \
+             `caddy.pluginsHash = \"...\"` string assignment (found {lists} and {hashes})",
+            file.display()
+        )
+        .into());
+    }
     let mut latest = BTreeMap::new();
     if !hash_only {
         // ponytail: sequential Go proxy lookups; parallelize if plugin sets grow.
@@ -418,21 +432,11 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
         });
     }
     let resolved = resolve_hash(&root, &plugins, nix)?;
-    // Every occurrence lives in this one file (validate_single_owner).
-    let file = root.join(&occurrences[0].file);
-    let raw = fs::read_to_string(&file)?;
     let mut updated = raw.clone();
     for (module, old, new) in &updates {
         updated = bump_version(&updated, module, old, new);
     }
-    let (updated, replaced) = set_plugins_hash(&updated, &resolved.hash);
-    if replaced == 0 {
-        return Err(format!(
-            "{} has no `caddy.pluginsHash = \"...\"` string assignment to update",
-            file.display()
-        )
-        .into());
-    }
+    let (updated, _) = set_plugins_hash(&updated, &resolved.hash);
     if updated != raw {
         fs::write(&file, updated)?;
     }
@@ -671,5 +675,9 @@ mod tests {
             fs::read_to_string(dir.path().join("caddy.nix")).unwrap(),
             computed
         );
+        // Two independent plugin sets cannot share one resolved hash.
+        let two = format!("{SAMPLE_TLS}{SAMPLE_TLS}");
+        fs::write(dir.path().join("caddy.nix"), &two).unwrap();
+        assert!(refresh(dir.path(), &mut Fake, true, true).is_err());
     }
 }

@@ -209,7 +209,7 @@ interfaces are documented in the repository's `docs/roborev.md`.
 ## Caddy plugin refresh
 
 The `caddy-plugins` feature refreshes a flake's `caddy.plugins` versions and
-`caddy.pluginsHash`. Both must be literal assignments in one Nix file
+`caddy.pluginsHash`. The flake needs exactly one of each, as literal assignments in one Nix file
 (`caddy.plugins = [ "github.com/OWNER/REPO@VERSION" ]` and
 `caddy.pluginsHash = "sha256-..."`), and the flake must expose the
 `caddy-helpers` flake module's `legacyPackages.<system>.caddyPluginsVendorFor`
