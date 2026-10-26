@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,7 +21,6 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 
 const PLUGINS_MARKER: &str = "caddy.plugins";
 const HASH_MARKER: &str = "caddy.pluginsHash";
-const HASH_ASSIGNMENT: &str = "caddy.pluginsHash = \"";
 
 /// One `module@version` occurrence in a Nix file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,18 +101,37 @@ impl Nix for NixCommand {
     }
 }
 
-/// Extract `"github.com/...@version"` string literals from Nix source.
-pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
+/// Byte ranges of the values delimited by `open`/`close` in `name = <open>...<close>`
+/// assignments, tolerating any whitespace around `=`.
+fn assignment_values(source: &str, name: &str, open: char, close: char) -> Vec<Range<usize>> {
     source
-        .match_indices("\"github.com/")
+        .match_indices(name)
         .filter_map(|(start, _)| {
-            let literal = &source[start + 1..];
-            let (module, version) = literal[..literal.find('"')?].split_once('@')?;
-            (!version.is_empty()).then(|| Plugin {
-                file: file.to_path_buf(),
-                module: module.to_string(),
-                version: version.to_string(),
-            })
+            let after = start + name.len();
+            let rest = source[after..].trim_start().strip_prefix('=')?;
+            let value = rest.trim_start().strip_prefix(open)?;
+            let begin = source.len() - value.len();
+            Some(begin..begin + value.find(close)?)
+        })
+        .collect()
+}
+
+/// Extract `"github.com/...@version"` literals from `caddy.plugins = [ ... ]` lists.
+pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
+    assignment_values(source, PLUGINS_MARKER, '[', ']')
+        .into_iter()
+        .flat_map(|range| {
+            let list = &source[range];
+            list.match_indices("\"github.com/")
+                .filter_map(move |(start, _)| {
+                    let literal = &list[start + 1..];
+                    let (module, version) = literal[..literal.find('"')?].split_once('@')?;
+                    (!version.is_empty()).then(|| Plugin {
+                        file: file.to_path_buf(),
+                        module: module.to_string(),
+                        version: version.to_string(),
+                    })
+                })
         })
         .collect()
 }
@@ -122,19 +141,19 @@ pub fn bump_version(source: &str, module: &str, old: &str, new: &str) -> String 
     source.replace(&format!("{module}@{old}"), &format!("{module}@{new}"))
 }
 
-/// Replace every `caddy.pluginsHash = "..."` value with `hash`.
-pub fn set_plugins_hash(source: &str, hash: &str) -> String {
+/// Replace every `caddy.pluginsHash = "..."` value with `hash`; also returns
+/// how many assignments were replaced.
+pub fn set_plugins_hash(source: &str, hash: &str) -> (String, usize) {
+    let ranges = assignment_values(source, HASH_MARKER, '"', '"');
     let mut out = String::with_capacity(source.len());
-    let mut rest = source;
-    while let Some(start) = rest.find(HASH_ASSIGNMENT) {
-        let value = &rest[start + HASH_ASSIGNMENT.len()..];
-        let Some(end) = value.find('"') else { break };
-        out.push_str(&rest[..start + HASH_ASSIGNMENT.len()]);
+    let mut copied = 0;
+    for range in &ranges {
+        out.push_str(&source[copied..range.start]);
         out.push_str(hash);
-        rest = &value[end..];
+        copied = range.end;
     }
-    out.push_str(rest);
-    out
+    out.push_str(&source[copied..]);
+    (out, ranges.len())
 }
 
 /// Every `got: sha256-...` hash reported by a failed fixed-output build.
@@ -162,11 +181,19 @@ pub fn vendor_expr(flake: &Path, system: &str, plugins: &[Plugin], hash: Option<
     let hash = hash.map_or_else(|| "lib.fakeHash".to_string(), |hash| format!("\"{hash}\""));
     format!(
         "(let \
-           flake = builtins.getFlake (toString {flake}); \
+           flake = builtins.getFlake {flake}; \
            lib = flake.inputs.nixpkgs.lib; \
          in flake.legacyPackages.{system}.caddyPluginsVendorFor [ {plugins} ] {hash})",
-        flake = flake.display(),
+        flake = nix_string(&flake.display().to_string()),
     )
+}
+
+fn nix_string(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace("${", "\\${");
+    format!("\"{escaped}\"")
 }
 
 /// Sorted, deduplicated `module@version` identity of a plugin set.
@@ -294,6 +321,18 @@ pub fn hash_files(root: &Path) -> Result<Vec<PathBuf>> {
     find_nix_files(root, HASH_MARKER)
 }
 
+/// Go module proxy path encoding: uppercase letters become `!` + lowercase.
+fn escape_module(module: &str) -> String {
+    let mut escaped = String::with_capacity(module.len());
+    for c in module.chars() {
+        if c.is_ascii_uppercase() {
+            escaped.push('!');
+        }
+        escaped.push(c.to_ascii_lowercase());
+    }
+    escaped
+}
+
 /// Latest version of a Go module from `proxy.golang.org`.
 pub fn fetch_latest(module: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
@@ -301,7 +340,7 @@ pub fn fetch_latest(module: &str) -> Result<String> {
         #[serde(rename = "Version")]
         version: String,
     }
-    let url = format!("https://proxy.golang.org/{module}/@latest");
+    let url = format!("https://proxy.golang.org/{}/@latest", escape_module(module));
     let latest: Latest = ureq::get(&url)
         .call()
         .map_err(|e| format!("GET {url}: {e}"))?
@@ -377,7 +416,14 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
     for (module, old, new) in &updates {
         updated = bump_version(&updated, module, old, new);
     }
-    updated = set_plugins_hash(&updated, &resolved.hash);
+    let (updated, replaced) = set_plugins_hash(&updated, &resolved.hash);
+    if replaced == 0 && !hash_files(&root)?.is_empty() {
+        return Err(format!(
+            "{} declares caddy.pluginsHash without a `caddy.pluginsHash = \"...\"` string assignment",
+            file.display()
+        )
+        .into());
+    }
     if updated != raw {
         fs::write(&file, updated)?;
     }
@@ -431,10 +477,19 @@ mod tests {
             extract_plugins(raw, Path::new("x.nix"))[0].module,
             "github.com/owner/parent/sub"
         );
-        assert!(extract_plugins(r#""github.com/no-version" "x@y""#, Path::new("x.nix")).is_empty());
-        // An unbalanced quote in a comment must not hide later literals.
-        let raw = "# a \"quote\n\"x\" \"github.com/a@v1\"";
-        assert_eq!(extract_plugins(raw, Path::new("x.nix"))[0].version, "v1");
+        assert!(
+            extract_plugins(
+                r#"caddy.plugins = ["github.com/no-version" "x@y"];"#,
+                Path::new("x.nix")
+            )
+            .is_empty()
+        );
+        // Only the plugin list counts; other module strings and quotes are ignored.
+        let raw = "# \"github.com/c@v9\" \"quote\ncaddy.plugins\n  =\n  [ \"github.com/a@v1\" ];\nx = \"github.com/b@v2\";";
+        assert_eq!(
+            extract_plugins(raw, Path::new("x.nix")),
+            [plugin("x.nix", "github.com/a", "v1")]
+        );
     }
 
     #[test]
@@ -456,7 +511,8 @@ mod tests {
 
     #[test]
     fn sets_plugins_hash() {
-        let out = set_plugins_hash(SAMPLE_TLS, "sha256-NEWHASH=");
+        let (out, replaced) = set_plugins_hash(SAMPLE_TLS, "sha256-NEWHASH=");
+        assert_eq!(replaced, 1);
         assert_eq!(
             out,
             SAMPLE_TLS.replace(
@@ -466,12 +522,13 @@ mod tests {
         );
         assert_eq!(
             set_plugins_hash("no hash here", "sha256-X="),
-            "no hash here"
+            ("no hash here".to_string(), 0)
         );
         assert_eq!(
-            set_plugins_hash(r#"caddy.pluginsHash = "";"#, "sha256-X="),
-            r#"caddy.pluginsHash = "sha256-X=";"#
+            set_plugins_hash("caddy.pluginsHash=\n  \"\";", "sha256-X="),
+            ("caddy.pluginsHash=\n  \"sha256-X=\";".to_string(), 1)
         );
+        assert_eq!(set_plugins_hash("caddy.pluginsHash = h;", "sha256-X=").1, 0);
     }
 
     #[test]
@@ -508,6 +565,12 @@ mod tests {
             vendor_expr(Path::new("/f"), "s", &plugins, Some("sha256-X="))
                 .ends_with("\"sha256-X=\")")
         );
+        let expr = vendor_expr(Path::new("/my dir/a\"${b}"), "s", &plugins, None);
+        assert!(
+            expr.contains(r#"builtins.getFlake "/my dir/a\"\${b}";"#),
+            "{expr}"
+        );
+        assert_eq!(escape_module("github.com/Azure/x"), "github.com/!azure/x");
     }
 
     #[test]
@@ -584,6 +647,14 @@ mod tests {
             fs::read_to_string(dir.path().join("caddy.nix"))
                 .unwrap()
                 .contains(r#"caddy.pluginsHash = "sha256-NEW=""#)
+        );
+        // A computed hash cannot be rewritten; fail instead of leaving it stale.
+        let computed = "caddy.plugins = [\"github.com/a@v1\"];\ncaddy.pluginsHash = h;\n";
+        fs::write(dir.path().join("caddy.nix"), computed).unwrap();
+        assert!(refresh(dir.path(), &mut Fake, true, false).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("caddy.nix")).unwrap(),
+            computed
         );
     }
 }
