@@ -160,8 +160,28 @@
           message = "canix-toolbelt Caddy registry: site `${siteName}` proxy routes require existing non-TCP endpoints";
         }
         {
-          assertion = !active || builtins.length (lib.unique (map (dial: {inherit (dial) transport tlsServerName;}) dials)) <= 1;
-          message = "canix-toolbelt Caddy registry: site `${siteName}` proxy endpoints must share transport and tlsServerName as dialed from `${hostname}`";
+          # proxyHandler sends the site hostname as SNI when tlsServerName is unset.
+          assertion =
+            !active
+            || builtins.length (lib.unique (map (dial: {
+                inherit (dial) transport;
+                sni =
+                  if dial.transport == "https"
+                  then
+                    if dial.tlsServerName == null
+                    then site.hostname
+                    else dial.tlsServerName
+                  else null;
+              })
+              dials))
+            <= 1;
+          message = "canix-toolbelt Caddy registry: site `${siteName}` proxy endpoints must share transport and TLS server name as dialed from `${hostname}`";
+        }
+        {
+          # Endpoints behind one relay share its dial address, and the relay
+          # routes by hostname only, so such a fallback could never be reached.
+          assertion = !active || builtins.length (lib.unique (map (dial: "${dial.targetHost}:${toString dial.port}") dials)) == builtins.length dials;
+          message = "canix-toolbelt Caddy registry: site `${siteName}` proxy endpoints must resolve to distinct dial addresses from `${hostname}`";
         }
       ])
     site.routes) (builtins.attrNames serviceCfg.httpSites);

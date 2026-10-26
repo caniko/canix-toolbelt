@@ -594,6 +594,43 @@ in
         message = "fallbacks dialed with a different transport must fail evaluation";
       }
       {
+        name = "fallback-default-sni-matches-explicit-hostname";
+        assertion = let
+          cfg = evalFor "edge1" {
+            services.endpoints = {
+              failover-lan.transport = "https";
+              failover-lan-tls = {
+                targetHost = "hub";
+                port = 9421;
+                transport = "https";
+                bind = "lan";
+                tlsServerName = "failover.example.test";
+              };
+            };
+            services.httpSites.failover.routes = failoverRoutes {
+              endpoint = "failover-lan";
+              fallbackEndpoints = ["failover-lan-tls"];
+            };
+          };
+        in
+          builtins.all (a: a.assertion || !lib.hasPrefix "canix-toolbelt Caddy registry: site `failover` proxy endpoints must share" a.message) cfg.config.assertions;
+        message = "an unset tlsServerName must compare as the site hostname it sends";
+      }
+      {
+        name = "fallback-sharing-a-relay-rejected";
+        assertion = invalid {
+          services.endpoints.failover-twin = {
+            targetHost = "backend";
+            port = 9401;
+            transport = "http";
+            bind = "loopback";
+            remoteVia = "failover-relay";
+          };
+          services.httpSites.failover.routes = failoverRoutes {fallbackEndpoints = ["failover-twin"];};
+        } "canix-toolbelt Caddy registry: site `failover` proxy endpoints must resolve to distinct dial addresses";
+        message = "a fallback behind the primary's relay is unreachable and must fail evaluation";
+      }
+      {
         name = "valid-topology-assertions-pass";
         assertion = builtins.all (a: a.assertion) (edge1.config.assertions ++ edge2.config.assertions ++ backend.config.assertions ++ hub.config.assertions);
         message = "the fixture topology must satisfy every registry assertion";

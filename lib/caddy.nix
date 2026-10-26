@@ -30,6 +30,10 @@
       }
       // lib.optionalAttrs (fallbacks != []) {
         # Strict ordered failover: always prefer the first healthy upstream.
+        # A refused or failed connection retries the next upstream within the
+        # same request. Caddy does not retry completed responses: a listed
+        # unhealthy status is returned once and marks the upstream down for
+        # fail_duration, so later requests fail over.
         load_balancing = {
           selection_policy.policy = "first";
           try_duration = "5s";
