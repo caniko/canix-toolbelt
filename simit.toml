@@ -78,6 +78,7 @@ nix_builds = [
   ".#checks.x86_64-linux.project-tree-eval",
   ".#checks.x86_64-linux.activation-contracts-eval",
   ".#checks.x86_64-linux.activation-manifest-eval",
+  ".#checks.x86_64-linux.home-manager-backup-repair",
   ".#checks.x86_64-linux.gpu-backends-eval",
   ".#checks.x86_64-linux.gpu-media-eval",
   ".#checks.x86_64-linux.gpu-render-eval",
@@ -221,6 +222,7 @@ services = [
 platform = [
   ".#checks.x86_64-linux.activation-contracts-eval",
   ".#checks.x86_64-linux.activation-manifest-eval",
+  ".#checks.x86_64-linux.home-manager-backup-repair",
   ".#checks.x86_64-linux.gpu-backends-eval",
   ".#checks.x86_64-linux.gpu-media-eval",
   ".#checks.x86_64-linux.gpu-render-eval",
