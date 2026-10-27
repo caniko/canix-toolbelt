@@ -35,6 +35,7 @@
   betterdesk-server = ./services/betterdesk-server.nix;
   attic-projects-registry = ./services/attic-projects-registry.nix;
   atticd-preset = ./services/atticd-preset.nix;
+  build-memory-probe = ./services/build-memory-probe.nix;
   build-train = import ./services/build-train.nix {inherit fleetixBuildTrain;};
   caddy-base = ./services/caddy-base.nix;
   caddy-service-registry = ./services/caddy-service-registry.nix;

@@ -47,6 +47,7 @@ nix_builds = [
   ".#checks.x86_64-linux.dev-agent-isolation-scope",
   ".#checks.x86_64-linux.dev-oom-guard-pause-eval",
   ".#checks.x86_64-linux.dev-oom-guard-protection",
+  ".#checks.x86_64-linux.build-memory-probe",
   ".#checks.x86_64-linux.chromium-gpu-eval",
   ".#checks.x86_64-linux.vpn-netns-eval",
   ".#checks.x86_64-linux.vpn-netns-runtime",
@@ -184,6 +185,7 @@ agents = [
   ".#checks.x86_64-linux.dev-agent-isolation-scope",
   ".#checks.x86_64-linux.dev-oom-guard-pause-eval",
   ".#checks.x86_64-linux.dev-oom-guard-protection",
+  ".#checks.x86_64-linux.build-memory-probe",
   ".#checks.x86_64-linux.chromium-gpu-eval",
 ]
 network = [
