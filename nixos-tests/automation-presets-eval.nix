@@ -20,6 +20,7 @@
           port = 5690;
           encryptionKeyFile = "/run/agenix/n8n-key";
           runnersAuthTokenFile = "/run/agenix/n8n-runners";
+          environment.N8N_LISTEN_ADDRESS = "0.0.0.0"; # must not widen the listener
         };
       }
     ];

@@ -41,5 +41,21 @@ in
     kill "$pid"; wait "$pid" || true
     jq -e --arg started "$started" '.status == "interrupted" and .ts_start == $started' \
       "$reports"/interrupted-episodes-*.jsonl
+
+    # A memory.max hit alone (memory.current stays idle) starts an episode.
+    ${probe} & pid=$!
+    sleep 1.2 # distinct start second, so a distinct episode id
+    printf 'high 1\nmax 3\noom_kill 0\n' > "$cg/memory.events"
+    wait_for test -e "$reports/episodes-$(date -u +%Y-%m).jsonl"
+    kill "$pid"; wait "$pid" || true
+    jq -e '.max_hits == 3 and has("episode_id")' "$reports"/episodes-*.jsonl
+    done_id=$(jq -r .episode_id "$reports"/episodes-*.jsonl)
+
+    # A checkpoint of an already-published episode is dropped, not re-recorded.
+    jq -nc --arg id "$done_id" '{status: "running", episode_id: $id}' > "$snapshot"
+    ${probe} & pid=$!
+    wait_for test ! -e "$snapshot"
+    kill "$pid"; wait "$pid" || true
+    if grep -qF "$done_id" "$reports"/interrupted-episodes-*.jsonl; then exit 1; fi
     touch "$out"
   ''

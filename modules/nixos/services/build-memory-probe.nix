@@ -104,6 +104,13 @@ in {
     }
 
     (lib.mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = cfg.idleThresholdBytes < cfg.busyThresholdBytes;
+          message = "canix-toolbelt.services.buildMemoryProbe.idleThresholdBytes must be below busyThresholdBytes";
+        }
+      ];
+
       systemd.tmpfiles.rules = ["d ${cfg.reportDir} 0755 root root -"];
 
       systemd.services.build-memory-probe = {

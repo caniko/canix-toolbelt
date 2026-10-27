@@ -50,11 +50,16 @@ checkpoint_ticks=0
 # Preserve an unfinished episode before a new process overwrites its
 # checkpoint. The record cannot attribute why the prior sampler stopped.
 if [ -f "$report_dir/active-episode.json" ]; then
-  interrupted="$report_dir/interrupted-episodes-$(date -u +%Y-%m).jsonl"
-  jq -c --arg recorded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '. + {status: "interrupted", recorded_at: $recorded_at}' \
-    "$report_dir/active-episode.json" >>"$interrupted"
-  sync -d "$interrupted"
+  # A crash between publishing the completed record and removing the
+  # checkpoint leaves a finished episode behind: do not re-record it.
+  stale_id=$(jq -r '.episode_id // empty' "$report_dir/active-episode.json")
+  if [ -z "$stale_id" ] || ! grep -qsF "\"episode_id\":\"$stale_id\"" "$report_dir"/episodes-*.jsonl; then
+    interrupted="$report_dir/interrupted-episodes-$(date -u +%Y-%m).jsonl"
+    jq -c --arg recorded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '. + {status: "interrupted", recorded_at: $recorded_at}' \
+      "$report_dir/active-episode.json" >>"$interrupted"
+    sync -d "$interrupted"
+  fi
   rm "$report_dir/active-episode.json"
   sync -d "$report_dir"
 fi
@@ -95,17 +100,20 @@ base_oom=0
 base_psi_some=0
 base_psi_full=0
 previous_high=$(read_event high)
+previous_max=$(read_event max)
 previous_oom=$(read_event oom_kill)
 previous_psi_full=$(read_psi full)
 
 while true; do
   cur=$(read_int "$cg/memory.current")
   current_high=$(read_event high)
+  current_max=$(read_event max)
   current_oom=$(read_event oom_kill)
   current_psi_full=$(read_psi full)
 
   if [ "$in_episode" -eq 0 ]; then
     if [ "$cur" -ge "$busy" ] || [ "$current_high" -gt "$previous_high" ] ||
+      [ "$current_max" -gt "$previous_max" ] ||
       [ "$current_oom" -gt "$previous_oom" ] ||
       [ "$current_psi_full" -gt "$previous_psi_full" ]; then
       in_episode=1
@@ -113,7 +121,8 @@ while true; do
       start_epoch=$(date -u +%s)
       start_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
       base_high=$previous_high
-      base_max=$(read_event max)
+      base_max=$previous_max
+      episode_id="$boot_id-$start_epoch"
       base_oom=$previous_oom
       base_psi_some=$(read_psi some)
       base_psi_full=$previous_psi_full
@@ -155,6 +164,7 @@ while true; do
 
       jq -nc \
         --arg host "$host" \
+        --arg episode_id "$episode_id" \
         --arg boot_id "$boot_id" \
         --arg cgroup_inode "$cgroup_inode" \
         --arg cgroup "$cg" \
@@ -174,6 +184,7 @@ while true; do
         '($memory_max | try tonumber catch null) as $mmaxn
          | {
              host: $host,
+             episode_id: $episode_id,
              boot_id: $boot_id,
              cgroup_inode: $cgroup_inode,
              cgroup: $cgroup,
@@ -214,7 +225,7 @@ while true; do
     if [ "$checkpoint_ticks" -eq 0 ]; then
       snapshot="$report_dir/active-episode.json"
       jq -nc --arg boot_id "$boot_id" --arg cgroup_inode "$cgroup_inode" \
-        --arg host "$host" --arg cgroup "$cg" --arg ts_start "$start_iso" \
+        --arg host "$host" --arg episode_id "$episode_id" --arg cgroup "$cg" --arg ts_start "$start_iso" \
         --arg ts_observed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --argjson peak_bytes "$sampled_peak" \
         --argjson swap_peak_bytes "$sampled_swap_peak" \
@@ -222,7 +233,7 @@ while true; do
         --arg memory_max "$(read_token "$cg/memory.max" unknown)" \
         --argjson oom_kills "$((current_oom - base_oom))" \
         --argjson psi_full_us "$((current_psi_full - base_psi_full))" \
-        '{status: "running", boot_id: $boot_id, cgroup_inode: $cgroup_inode,
+        '{status: "running", episode_id: $episode_id, boot_id: $boot_id, cgroup_inode: $cgroup_inode,
           host: $host, cgroup: $cgroup, ts_start: $ts_start, ts_observed: $ts_observed,
           peak_bytes: $peak_bytes, swap_peak_bytes: $swap_peak_bytes,
           memory_high: $memory_high, memory_max: $memory_max,
@@ -237,6 +248,7 @@ while true; do
   fi
 
   previous_high=$current_high
+  previous_max=$current_max
   previous_oom=$current_oom
   previous_psi_full=$current_psi_full
 

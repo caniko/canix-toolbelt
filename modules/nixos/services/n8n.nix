@@ -82,7 +82,11 @@ in {
           DB_POSTGRESDB_DATABASE = "n8n";
           DB_POSTGRESDB_USER = "n8n";
         }
-        // cfg.environment;
+        // cfg.environment
+        // {
+          # Preset-owned: the TLS proxy is the only intended ingress.
+          N8N_LISTEN_ADDRESS = "127.0.0.1";
+        };
     };
 
     systemd.services.n8n = {
