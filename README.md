@@ -364,6 +364,17 @@ acceleration. Consumers own package sources and runtime device selection.
               globs = ["*.nix"];
               message = "root/ must not import home/ paths";
             }
+            {
+              # `exclude` allowlists source-root-relative files; `pcre2`
+              # enables lookarounds such as skipping comment lines.
+              name = "no-deep-relative-paths";
+              pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+              pcre2 = true;
+              paths = ["root" "lib"];
+              globs = ["*.nix"];
+              exclude = ["lib/default.nix"];
+              message = "use the path facade instead of ../../";
+            }
           ];
         };
       };

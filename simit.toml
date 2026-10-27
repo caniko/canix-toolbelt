@@ -75,6 +75,7 @@ nix_builds = [
   ".#checks.x86_64-linux.rauthy-preset-eval",
   ".#checks.x86_64-linux.service-topology-v2-eval",
   ".#checks.x86_64-linux.site-helpers-eval",
+  ".#checks.x86_64-linux.structure-check",
   ".#checks.x86_64-linux.project-tree-eval",
   ".#checks.x86_64-linux.activation-contracts-eval",
   ".#checks.x86_64-linux.activation-manifest-eval",
@@ -216,6 +217,7 @@ services = [
   ".#checks.x86_64-linux.rauthy-preset-eval",
   ".#checks.x86_64-linux.service-topology-v2-eval",
   ".#checks.x86_64-linux.site-helpers-eval",
+  ".#checks.x86_64-linux.structure-check",
   ".#checks.x86_64-linux.project-tree-eval",
 ]
 platform = [

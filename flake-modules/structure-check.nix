@@ -17,6 +17,16 @@
 #           globs = ["*.nix"];
 #           message = "root/ must not import home/ paths";
 #         }
+#         {
+#           # Allowlist files with `exclude`; `pcre2` enables lookarounds.
+#           name = "no-deep-relative-paths";
+#           pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+#           pcre2 = true;
+#           paths = ["root" "lib"];
+#           globs = ["*.nix"];
+#           exclude = ["lib/default.nix"];
+#           message = "use the path facade instead of ../../";
+#         }
 #       ];
 #     };
 #   };
@@ -54,11 +64,11 @@
       );
     };
     mkRule = r: let
-      globArgs = lib.concatMapStringsSep " " (g: "-g ${lib.escapeShellArg g}") r.globs;
+      globArgs = lib.concatMapStringsSep " " (g: "-g ${lib.escapeShellArg g}") (r.globs ++ map (path: "!/${path}") r.exclude);
       pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg r.paths;
     in ''
       echo ">> ${r.name}"
-      if rg -n ${lib.escapeShellArg r.pattern} ${pathArgs} ${globArgs}; then
+      if rg -n ${lib.optionalString r.pcre2 "-P "}-e ${lib.escapeShellArg r.pattern} ${pathArgs} ${globArgs}; then
         echo ${lib.escapeShellArg r.message} >&2
         exit 1
       fi
@@ -92,6 +102,17 @@
             globs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
+            };
+            exclude = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              example = ["lib/default.nix"];
+              description = "Source-root-relative files or directories allowed to match (an allowlist).";
+            };
+            pcre2 = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Use PCRE2 syntax, e.g. lookarounds to skip comment lines.";
             };
             message = lib.mkOption {type = lib.types.str;};
           };
