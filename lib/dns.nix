@@ -45,6 +45,74 @@
     then "false"
     else builtins.concatStringsSep " || " (map (n: "is(${n})") proxiedNames);
 
+  # Drift between DDNS-owned addresses and octoDNS zone excludes. `zones` has
+  # the `canix-toolbelt.dns.zones` shape (zone name -> { exclude = [{name,
+  # type}]; manageRecordTypes ? null; }); the domain lists are cloudflare-ddns
+  # `ip4Domains`/`ip6Domains`. Names compare case-insensitively.
+  # `missingExcludes`: DDNS records octoDNS would delete on the next apply.
+  # `orphanExcludes`: A/AAAA excludes no DDNS record in that zone accounts for.
+  # Both empty = clean.
+  ddnsExcludeDrift = {
+    lib,
+    zones,
+    ip4Domains ? [],
+    ip6Domains ? [],
+  }: let
+    lc = lib.toLower;
+    zoneNames = builtins.attrNames zones;
+    # Most specific (longest) zone owning the FQDN, or null.
+    zoneFor = fqdn:
+      lib.foldl' (best: zone:
+        if (lc fqdn == lc zone || lib.hasSuffix ".${lc zone}" (lc fqdn)) && (best == null || builtins.stringLength zone > builtins.stringLength best)
+        then zone
+        else best)
+      null
+      zoneNames;
+    relName = fqdn: zone:
+      if lc fqdn == lc zone
+      then "@"
+      else lib.removeSuffix ".${lc zone}" (lc fqdn);
+    key = zone: name: type: "${lc zone}|${lc name}|${type}";
+    records = map (r: r // {zone = zoneFor r.fqdn;}) (
+      map (fqdn: {
+        inherit fqdn;
+        type = "A";
+      })
+      ip4Domains
+      ++ map (fqdn: {
+        inherit fqdn;
+        type = "AAAA";
+      })
+      ip6Domains
+    );
+    excludes = lib.concatMap (zoneName: map (e: e // {inherit zoneName;}) (zones.${zoneName}.exclude or [])) zoneNames;
+    excludeKeys = map (e: key e.zoneName e.name e.type) excludes;
+    recordKeys = map (r: key r.zone (relName r.fqdn r.zone) r.type) (lib.filter (r: r.zone != null) records);
+    manages = zone: type: let
+      types = zones.${zone}.manageRecordTypes or null;
+    in
+      types == null || lib.elem type types;
+  in {
+    missingExcludes = lib.concatMap (record: let
+      inherit (record) fqdn type zone;
+    in
+      if zone == null
+      then [
+        {
+          inherit fqdn type;
+          reason = "no managed zone owns this FQDN";
+        }
+      ]
+      else
+        lib.optional (manages zone type && !lib.elem (key zone (relName fqdn zone) type) excludeKeys) {
+          inherit fqdn type zone;
+          reason = "missing ${type} exclude";
+        })
+    records;
+
+    orphanExcludes = lib.filter (e: (e.type == "A" || e.type == "AAAA") && !lib.elem (key e.zoneName e.name e.type) recordKeys) excludes;
+  };
+
   # Generate proxied/non-proxied CNAMEs to the zone apex for a list of subdomain names.
   # Used to compress the "name -> zone-apex" boilerplate in zone records.
   apexCname = {
