@@ -4,7 +4,7 @@
   osConfig ? null,
   ...
 }: let
-  inherit (lib) mkIf mkOption types;
+  inherit (lib) mkIf mkMerge mkOption types;
   safety = import ../../lib/agent-safety.nix {inherit lib;};
   cfg = config.programs.agentSafety;
 
@@ -153,9 +153,51 @@ in {
       default = {};
       description = "Optional OS containment profile configuration.";
     };
+
+    codex = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Render the Bash policy as Codex execpolicy rules.";
+      };
+      executableDirs = mkOption {
+        type = types.listOf types.str;
+        default = ["${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"];
+        defaultText = lib.literalExpression ''["''${config.home.profileDirectory}/bin" "/run/current-system/sw/bin" "/run/wrappers/bin"]'';
+        description = "Directories whose binaries may match an allowed bare name; other absolute paths fall through to Codex's approval policy.";
+      };
+      home = mkOption {
+        type = types.str;
+        default = config.home.sessionVariables.CODEX_HOME or "${config.home.homeDirectory}/.codex";
+        defaultText = lib.literalExpression ''config.home.sessionVariables.CODEX_HOME or "''${config.home.homeDirectory}/.codex"'';
+        description = "Codex home whose `rules/` directory receives the policy; must be inside the home directory.";
+      };
+    };
   };
 
-  config = mkIf (cfg.enable && config.programs.opencode.enable) {
-    programs.opencode.settings.permission = permission;
-  };
+  config = mkMerge [
+    (mkIf (cfg.enable && config.programs.opencode.enable) {
+      programs.opencode.settings.permission = permission;
+    })
+    # A separate file keeps Codex's own `default.rules` writable.
+    (mkIf (cfg.enable && cfg.codex.enable) {
+      # Rules cannot express a catch-all: Codex sends unmatched commands
+      # through its sandboxed approval policy, which stands in for `ask`.
+      # `permission.bash."*"` also catches an explicit `deny = ["*"]`.
+      assertions = [
+        {
+          assertion = permission.bash."*" == "ask";
+          message = "programs.agentSafety.codex requires a catch-all `ask`; Codex rules cannot express `${permission.bash."*"}`.";
+        }
+        {
+          assertion = lib.hasPrefix "${config.home.homeDirectory}/" cfg.codex.home;
+          message = "programs.agentSafety.codex.home must be inside the home directory.";
+        }
+      ];
+      home.file."${lib.removePrefix "${config.home.homeDirectory}/" cfg.codex.home}/rules/agent-safety.rules".text = safety.renderCodexRules {
+        rules = permission.bash;
+        inherit (cfg.codex) executableDirs;
+      };
+    })
+  ];
 }
