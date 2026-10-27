@@ -11,6 +11,8 @@
         then ["."]
         else rule.paths;
       globs = rule.globs or [];
+      exclude = rule.exclude or [];
+      pcre2 = rule.pcre2 or false;
     })
   rules;
   sourceRoot =
@@ -35,11 +37,11 @@
     fileset = lib.fileset.unions (scanPaths ++ lib.concatMap ancestorIgnores scanPaths);
   };
   mkRule = rule: let
-    globArgs = lib.concatMapStringsSep " " (glob: "-g ${lib.escapeShellArg glob}") rule.globs;
+    globArgs = lib.concatMapStringsSep " " (glob: "-g ${lib.escapeShellArg glob}") (rule.globs ++ map (path: "!/${path}") rule.exclude);
     pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg rule.paths;
   in ''
     echo ${lib.escapeShellArg ">> ${rule.name}"}
-    if rg -n --no-require-git ${globArgs} -- ${lib.escapeShellArg rule.pattern} ${pathArgs}; then
+    if rg -n --no-require-git ${lib.optionalString rule.pcre2 "-P "}${globArgs} -- ${lib.escapeShellArg rule.pattern} ${pathArgs}; then
       echo ${lib.escapeShellArg rule.message} >&2
       exit 1
     else

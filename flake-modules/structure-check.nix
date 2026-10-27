@@ -17,6 +17,16 @@
 #           globs = ["*.nix"];
 #           message = "root/ must not import home/ paths";
 #         }
+#         {
+#           # Allowlist files with `exclude`; `pcre2` enables lookarounds.
+#           name = "no-deep-relative-paths";
+#           pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+#           pcre2 = true;
+#           paths = ["root" "lib"];
+#           globs = ["*.nix"];
+#           exclude = ["lib/default.nix"];
+#           message = "use the path facade instead of ../../";
+#         }
 #       ];
 #     };
 #   };
@@ -62,6 +72,17 @@
             globs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
+            };
+            exclude = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              example = ["lib/default.nix"];
+              description = "Source-root-relative files or directories allowed to match (an allowlist).";
+            };
+            pcre2 = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Use PCRE2 syntax, e.g. lookarounds to skip comment lines.";
             };
             message = lib.mkOption {type = lib.types.str;};
           };
