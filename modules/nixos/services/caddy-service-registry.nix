@@ -39,6 +39,14 @@
       else serviceCfg.endpoints.${source.remoteVia} or null
     else source;
 
+  # The address resolveEndpoint dials for an already-selected endpoint.
+  dialAddress = dial: let
+    address =
+      if dial.bind == "loopback"
+      then "127.0.0.1"
+      else (config.canix-toolbelt.hosts.${dial.targetHost} or {}).lanIp or dial.targetHost;
+  in "${address}:${toString dial.port}";
+
   proxyEndpointNames = route: [route.action.endpoint] ++ route.action.fallbackEndpoints;
 
   renderRoute = site: route:
@@ -180,7 +188,7 @@
         {
           # Endpoints behind one relay share its dial address, and the relay
           # routes by hostname only, so such a fallback could never be reached.
-          assertion = !active || builtins.length (lib.unique (map (dial: "${dial.targetHost}:${toString dial.port}") dials)) == builtins.length dials;
+          assertion = !active || builtins.length (lib.unique (map dialAddress dials)) == builtins.length dials;
           message = "canix-toolbelt Caddy registry: site `${siteName}` proxy endpoints must resolve to distinct dial addresses from `${hostname}`";
         }
       ])

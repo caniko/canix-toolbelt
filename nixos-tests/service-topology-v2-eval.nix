@@ -617,6 +617,26 @@ in
         message = "an unset tlsServerName must compare as the site hostname it sends";
       }
       {
+        name = "fallback-same-port-different-address-accepted";
+        assertion = let
+          cfg = evalFor "backend" {
+            services.endpoints.failover-local-lan = {
+              targetHost = "backend";
+              port = 9400;
+              transport = "http";
+              bind = "lan";
+            };
+            services.httpSites.failover = {
+              ingress = "solo";
+              routes = failoverRoutes {fallbackEndpoints = ["failover-local-lan"];};
+            };
+            deployment.ingressGroups.solo.hosts = ["backend"];
+          };
+        in
+          builtins.all (a: a.assertion || !lib.hasPrefix "canix-toolbelt Caddy registry: site `failover` proxy endpoints must resolve to distinct" a.message) cfg.config.assertions;
+        message = "loopback and LAN endpoints sharing a port dial different addresses and must be accepted";
+      }
+      {
         name = "fallback-sharing-a-relay-rejected";
         assertion = invalid {
           services.endpoints.failover-twin = {
