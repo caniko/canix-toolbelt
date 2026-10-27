@@ -135,6 +135,8 @@ in {
       "nix-store -r *"
       "nix-shell *"
       "nix-env *"
+      # Archiving into the local store is routine; `--to` uploads to a remote.
+      "nix flake archive *--to*"
     ]
     ++ lib.optionals storeAddAsk [
       "nix store add *"
@@ -147,6 +149,7 @@ in {
     # These suffix rules sort after the corresponding allow. Conservatively
     # reject even quoted/repeated settings instead of interpreting shell argv.
     ++ wrapped queryWrappers (map (prefix: "${prefix}*allow-import-from-derivation*") evaluationPrefixes)
+    ++ wrapped queryWrappers ["nix eval --no-allow-import-from-derivation *--write-to*"]
     ++ wrapped queryWrappers [
       "nix build --dry-run --no-allow-import-from-derivation *--no-dry-run*"
       "nix flake check --no-build --no-allow-import-from-derivation *--build*"
@@ -195,6 +198,19 @@ in {
         "--load-db"
         "--register-validity"
         "--serve"
+      ])
+    storeQueryPrefixes)
+    # `-f`/`-u` are the short --force-realise/--use-output spellings, also
+    # inside short-flag clusters such as `-Rf`.
+    # ponytail: clusters of up to three letters; longer ones need a real argv check.
+    ++ wrapped queryWrappers (lib.concatMap (prefix:
+      lib.concatMap (flag: ["${prefix}*${flag} *" "${prefix}*${flag}"]) [
+        "-f"
+        "-?f"
+        "-??f"
+        "-u"
+        "-?u"
+        "-??u"
       ])
     storeQueryPrefixes);
 }
