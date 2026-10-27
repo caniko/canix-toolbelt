@@ -274,6 +274,7 @@
             build-memory-probe = import ./nixos-tests/build-memory-probe.nix {inherit pkgs;};
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
+            host-profile-eval = import ./nixos-tests/host-profile-eval.nix {inherit pkgs;};
             wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
             wg-home-shared-eval = import ./nixos-tests/wg-home-shared-eval.nix {inherit pkgs;};
             ssh-aliases-eval = import ./nixos-tests/ssh-aliases-eval.nix {inherit pkgs;};
