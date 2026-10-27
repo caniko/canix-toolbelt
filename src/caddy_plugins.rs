@@ -103,9 +103,66 @@ impl Nix for NixCommand {
     }
 }
 
+/// `source` with Nix comments blanked to spaces at the same byte offsets;
+/// string literals are kept.
+fn mask_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = bytes.to_vec();
+    let blank = |range: Range<usize>, out: &mut Vec<u8>| {
+        for byte in &mut out[range] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        if rest[0] == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+        } else if rest.starts_with(b"''") {
+            i += 2;
+            while i < bytes.len() {
+                if bytes[i..].starts_with(b"''") {
+                    if matches!(bytes.get(i + 2), Some(b'$' | b'\'' | b'\\')) {
+                        i += 3;
+                        continue;
+                    }
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+        } else if rest[0] == b'#' {
+            let end = rest
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(bytes.len(), |n| i + n);
+            blank(i..end, &mut out);
+            i = end;
+        } else if rest.starts_with(b"/*") {
+            let end = rest[2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(bytes.len(), |n| i + 2 + n + 2);
+            blank(i..end, &mut out);
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    // Whole characters are blanked, so the result stays valid UTF-8.
+    String::from_utf8(out).expect("comment masking preserves UTF-8")
+}
+
 /// Byte ranges of the values delimited by `open`/`close` in `name = <open>...<close>`
-/// assignments, tolerating any whitespace around `=`.
+/// assignments outside comments, tolerating any whitespace around `=`.
 fn assignment_values(source: &str, name: &str, open: char, close: char) -> Vec<Range<usize>> {
+    let source = &mask_comments(source);
     source
         .match_indices(name)
         .filter_map(|(start, _)| {
@@ -120,6 +177,7 @@ fn assignment_values(source: &str, name: &str, open: char, close: char) -> Vec<R
 
 /// Extract `"github.com/...@version"` literals from `caddy.plugins = [ ... ]` lists.
 pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
+    let source = &mask_comments(source);
     assignment_values(source, PLUGINS_MARKER, '[', ']')
         .into_iter()
         .flat_map(|range| {
@@ -502,6 +560,16 @@ mod tests {
         assert_eq!(
             extract_plugins(raw, Path::new("x.nix")),
             [plugin("x.nix", "github.com/a", "v1")]
+        );
+        // Commented plugins and declarations do not count; `#` in strings is kept.
+        let raw = "# caddy.plugins = [\"github.com/z@v0\"];\n/* caddy.plugins = [] */\ncaddy.plugins = [\n  # \"github.com/old@v0\"\n  \"github.com/a@v1#x\" /* \"github.com/b@v2\" */\n];";
+        assert_eq!(
+            extract_plugins(raw, Path::new("x.nix")),
+            [plugin("x.nix", "github.com/a", "v1#x")]
+        );
+        assert_eq!(
+            set_plugins_hash("# caddy.pluginsHash = \"old\"; é\n", "sha256-X=").1,
+            0
         );
     }
 
