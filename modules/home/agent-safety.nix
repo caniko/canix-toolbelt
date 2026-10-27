@@ -2,6 +2,7 @@
   config,
   lib,
   osConfig ? null,
+  pkgs,
   ...
 }: let
   inherit (lib) mkIf mkMerge mkOption types;
@@ -90,6 +91,10 @@
 
   registeredPrograms = cfg.programs // integratedPrograms;
 
+  # Claude and Codex have no per-path policy; allowed roots become their writable directories.
+  allowedRoots = map (lib.removeSuffix "/**") (lib.attrNames (lib.filterAttrs (_: a: a == "allow") cfg.externalDirectories));
+  roots = lib.escapeShellArg (builtins.toJSON allowedRoots);
+
   permission = {
     edit = "allow";
     glob = "allow";
@@ -139,7 +144,20 @@ in {
     externalDirectories = mkOption {
       type = types.attrsOf (types.enum ["allow" "ask" "deny"]);
       default = {};
-      description = "OpenCode external-directory access policy.";
+      description = "OpenCode external-directory access policy. Entries set to `allow` also feed Claude `permissions.additionalDirectories` and Codex `sandbox_workspace_write.writable_roots` when `harnessDirectories` is enabled.";
+    };
+
+    harnessDirectories = {
+      claude = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Merge allowed `externalDirectories` into the mutable `~/.claude/settings.json` at activation (add-missing only).";
+      };
+      codex = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Merge allowed `externalDirectories` into the mutable `codex.home/config.toml` at activation (add-missing only).";
+      };
     };
 
     guard = mkOption {
@@ -178,6 +196,37 @@ in {
   config = mkMerge [
     (mkIf (cfg.enable && config.programs.opencode.enable) {
       programs.opencode.settings.permission = permission;
+    })
+    # Claude and Codex rewrite their own settings, so merge only missing roots
+    # into existing, non-symlink files and never fail activation.
+    (mkIf (cfg.enable && allowedRoots != [] && (cfg.harnessDirectories.claude || cfg.harnessDirectories.codex)) {
+      home.activation.agentSafetyHarnessDirectories = lib.hm.dag.entryAfter ["writeBoundary"] ''
+        merge_roots() {
+          target="$1"; shift
+          if [ -f "$target" ] && [ ! -L "$target" ]; then
+            tmp="$(mktemp "$target.tmp.XXXXXX")"
+            if "$@" "$target" > "$tmp"; then
+              if cmp -s "$tmp" "$target"; then
+                rm -f "$tmp"
+              else
+                chmod --reference="$target" "$tmp"
+                mv "$tmp" "$target"
+              fi
+            else
+              rm -f "$tmp"
+              echo "canix: could not merge agent-safety directories into $target" >&2
+            fi
+          fi
+        }
+        ${lib.optionalString cfg.harnessDirectories.claude ''
+          merge_roots "$HOME/.claude/settings.json" ${lib.getExe pkgs.jq} --argjson roots ${roots} \
+            '.permissions.additionalDirectories = ((.permissions.additionalDirectories // []) | . + ($roots - .))'
+        ''}
+        ${lib.optionalString cfg.harnessDirectories.codex ''
+          ROOTS=${roots} merge_roots ${lib.escapeShellArg "${cfg.codex.home}/config.toml"} ${lib.getExe pkgs.yq-go} -p toml -o toml \
+            '.sandbox_workspace_write.writable_roots = ((.sandbox_workspace_write.writable_roots // []) | . + (env(ROOTS) - .))'
+        ''}
+      '';
     })
     # A separate file keeps Codex's own `default.rules` writable.
     (mkIf (cfg.enable && cfg.codex.enable) {
