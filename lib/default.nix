@@ -7,6 +7,7 @@ in
   {
     agenixPaths = import ./agenixPaths.nix;
     agentSafety = import ./agent-safety.nix {inherit lib;};
+    agentSafetyNixPolicy = import ./agent-safety-nix.nix {inherit lib;};
     activation = import ./activation.nix {inherit lib;};
     browserConnection = import ./browserConnection.nix {inherit lib;};
     caddy = import ./caddy.nix {inherit lib;};
@@ -23,6 +24,8 @@ in
     homeActivation = import ./homeActivation.nix {inherit lib;};
     hostSelection = import ./hostSelection.nix {inherit lib;};
     mkPkgs = import ./mkPkgs.nix;
+    mkEvalCheck = import ./mkEvalCheck.nix;
+    mkStructureCheck = import ./mkStructureCheck.nix {inherit lib;};
     mpvGpu = import ./mpvGpu.nix;
     networkmanager = import ./networkmanager.nix {inherit lib;};
     nexus = import ./nexus.nix {inherit lib;};

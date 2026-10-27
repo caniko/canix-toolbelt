@@ -196,6 +196,7 @@
 
         checks =
           {
+            check-helpers = import ./nixos-tests/check-helpers.nix {inherit inputs pkgs;};
             execution-protocol = import ./nixos-tests/execution-protocol.nix {inherit pkgs;};
             build-train-eval = import ./nixos-tests/build-train-eval.nix {inherit pkgs inputs;};
             direct-network-eval = import ./nixos-tests/direct-network-eval.nix {inherit pkgs inputs;};
@@ -248,9 +249,11 @@
             dns-publication-eval = import ./nixos-tests/dns-publication-eval.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
+            home-manager-backup-repair = import ./nixos-tests/home-manager-backup-repair.nix {inherit pkgs;};
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};
             agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
+            agent-safety-nix-policy-eval = import ./nixos-tests/agent-safety-nix-policy-eval.nix {inherit pkgs;};
             browser-connection-eval = import ./nixos-tests/browser-connection-eval.nix {inherit pkgs;};
             browser-connection-smoke = import ./nixos-tests/browser-connection-smoke.nix {inherit pkgs;};
             browser-connection-runtime =
@@ -268,15 +271,19 @@
             dev-agent-isolation-scope = import ./nixos-tests/dev-agent-isolation-scope.nix {inherit pkgs;};
             dev-oom-guard-pause-eval = import ./nixos-tests/dev-oom-guard-pause-eval.nix {inherit pkgs;};
             dev-oom-guard-protection = import ./nixos-tests/dev-oom-guard-protection.nix {inherit pkgs;};
+            build-memory-probe = import ./nixos-tests/build-memory-probe.nix {inherit pkgs;};
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
+            host-profile-eval = import ./nixos-tests/host-profile-eval.nix {inherit pkgs;};
             wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
             wg-home-shared-eval = import ./nixos-tests/wg-home-shared-eval.nix {inherit pkgs;};
             ssh-aliases-eval = import ./nixos-tests/ssh-aliases-eval.nix {inherit pkgs;};
             service-topology-v2-eval = import ./nixos-tests/service-topology-v2-eval.nix {inherit inputs pkgs;};
+            automation-presets-eval = import ./nixos-tests/automation-presets-eval.nix {inherit pkgs;};
             kanidm-preset-eval = import ./nixos-tests/kanidm-preset-eval.nix {inherit pkgs;};
             rauthy-preset-eval = import ./nixos-tests/rauthy-preset-eval.nix {inherit pkgs;};
             site-helpers-eval = import ./nixos-tests/site-helpers-eval.nix {inherit pkgs;};
+            structure-check = import ./nixos-tests/structure-check.nix {inherit inputs pkgs;};
             vpn-netns-eval = import ./nixos-tests/vpn-netns-eval.nix {inherit pkgs;};
             vpn-netns-runtime = import ./nixos-tests/vpn-netns-runtime.nix {inherit pkgs;};
           }

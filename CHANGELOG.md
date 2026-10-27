@@ -5,6 +5,20 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-26
+
+### Added
+
+- `caddy_plugins` (feature `caddy-plugins`, enabled by `cli`): discover
+  `caddy.plugins` declarations in a flake, bump them to their latest Go proxy
+  versions and refresh `caddy.pluginsHash` through the `caddy-helpers` flake
+  module's `caddyPluginsVendorFor`. Realization goes through the `Nix` trait so
+  consumers keep their own evaluation leases and GC roots; publication of the
+  returned vendor store path stays with the caller.
+- `canix-toolbelt caddy-plugins [--root DIR] [--hash-only] [--dry-run] [-- PUBLISH...]`
+  runs the refresh with the `nix` CLI and passes the realized vendor path to an
+  optional publish command, for example `-- attic push CACHE`.
+
 ### Changed
 
 - Regenerate CI with Simit 432cde7. Grouped Nix builds restore the pinned
@@ -296,7 +310,8 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 - Registry Fleetix `0.2` integration, allowing downstream consumers to share
   one supported Fleetix series with the runtime loader.
 
-[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/caniko/canix-toolbelt/compare/0.5.1...HEAD
+[0.5.1]: https://github.com/caniko/canix-toolbelt/compare/0.5.0...0.5.1
 [0.3.0]: https://github.com/caniko/canix-toolbelt/compare/0.2.1...0.3.0
 [0.2.1]: https://github.com/caniko/canix-toolbelt/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/caniko/canix-toolbelt/compare/0.1.1...0.2.0

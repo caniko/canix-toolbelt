@@ -9,6 +9,8 @@ pub mod qualification;
 
 #[cfg(all(unix, feature = "build-train"))]
 pub mod build_train;
+#[cfg(feature = "caddy-plugins")]
+pub mod caddy_plugins;
 #[cfg(all(target_os = "linux", feature = "direct-network"))]
 pub mod direct_network;
 #[cfg(unix)]

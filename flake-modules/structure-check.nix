@@ -17,6 +17,16 @@
 #           globs = ["*.nix"];
 #           message = "root/ must not import home/ paths";
 #         }
+#         {
+#           # Allowlist files with `exclude`; `pcre2` enables lookarounds.
+#           name = "no-deep-relative-paths";
+#           pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+#           pcre2 = true;
+#           paths = ["root" "lib"];
+#           globs = ["*.nix"];
+#           exclude = ["lib/default.nix"];
+#           message = "use the path facade instead of ../../";
+#         }
 #       ];
 #     };
 #   };
@@ -31,38 +41,7 @@
     ...
   }: let
     cfg = config.canix-toolbelt.structure-check;
-    sourceRoot =
-      if builtins.isPath cfg.src
-      then cfg.src
-      # fileset requires a path value; its resulting source restores the store
-      # dependency after normalising a context-carrying flake outPath string.
-      else /. + builtins.unsafeDiscardStringContext (toString cfg.src);
-    # Copy the scanned subtrees independently of the containing flake. An
-    # unrelated change elsewhere in a consumer must not invalidate this check.
-    source = lib.fileset.toSource {
-      root = sourceRoot;
-      fileset = lib.fileset.unions (
-        # ripgrep also reads ignore files above the selected scan directories.
-        [(lib.fileset.fileFilter (file: builtins.elem file.name [".gitignore" ".ignore" ".rgignore"]) sourceRoot)]
-        ++ lib.concatMap (rule:
-          map (path: sourceRoot + "/${path}") (
-            if rule.paths == []
-            then ["."]
-            else rule.paths
-          ))
-        cfg.rules
-      );
-    };
-    mkRule = r: let
-      globArgs = lib.concatMapStringsSep " " (g: "-g ${lib.escapeShellArg g}") r.globs;
-      pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg r.paths;
-    in ''
-      echo ">> ${r.name}"
-      if rg -n ${lib.escapeShellArg r.pattern} ${pathArgs} ${globArgs}; then
-        echo ${lib.escapeShellArg r.message} >&2
-        exit 1
-      fi
-    '';
+    mkStructureCheck = import ../lib/mkStructureCheck.nix {inherit lib;};
   in {
     options.canix-toolbelt.structure-check = {
       enable = lib.mkEnableOption "boundary-ownership check";
@@ -88,10 +67,22 @@
             paths = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = ["."];
+              description = "Directories within src to scan. File paths are rejected; select files with globs under their parent directory.";
             };
             globs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [];
+            };
+            exclude = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+              example = ["lib/default.nix"];
+              description = "Source-root-relative files or directories allowed to match (an allowlist).";
+            };
+            pcre2 = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Use PCRE2 syntax, e.g. lookarounds to skip comment lines.";
             };
             message = lib.mkOption {type = lib.types.str;};
           };
@@ -100,14 +91,9 @@
     };
 
     config = lib.mkIf cfg.enable {
-      checks.${cfg.name} =
-        pkgs.runCommand cfg.name {
-          nativeBuildInputs = [pkgs.ripgrep];
-        } ''
-          cd ${source}
-          ${lib.concatMapStringsSep "\n" mkRule cfg.rules}
-          touch "$out"
-        '';
+      checks.${cfg.name} = mkStructureCheck {inherit pkgs;} {
+        inherit (cfg) name src rules;
+      };
     };
   });
 }

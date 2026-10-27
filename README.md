@@ -29,6 +29,27 @@ Two output families:
 
 ## Usage
 
+### Evaluation and source checks
+
+`lib.mkEvalCheck { inherit pkgs; }` constructs a check from named
+`assertions` (`name`, `assertion`, `message`), with optional `runtimeScript`,
+`nativeBuildInputs`, and `resultMessage`. Failed assertions reject evaluation;
+successful checks retain `assertions.json` and `result` in their output.
+
+`flakeModules.structure-check` runs consumer-owned source rules. A match fails
+with the rule's message; invalid patterns and scanner errors also fail the check.
+Use each rule's `paths` and `globs` to scope scans and declare exceptions.
+`paths` must name directories within `src`; file paths are rejected because
+ripgrep would bypass glob and ignore filtering for explicit files. To select
+one file, use its parent directory in `paths` and its name in `globs`.
+Scans honor copied ignore files without requiring Git metadata. Only selected
+subtrees and their ancestor ignore files enter the check's source closure;
+ignore files in unrelated subtrees do not invalidate a scoped check.
+Glob precedence follows ripgrep: include globs can re-include ignored files.
+For multiple independently named source checks, call
+`lib.mkStructureCheck { inherit pkgs; } { name = "..."; src = ./.; rules = [...]; }`.
+The flake module delegates to this same constructor.
+
 ### Hosted evidence custody
 
 The Simit-generated `producer-custody.yaml` observes completed, original
@@ -363,6 +384,17 @@ acceleration. Consumers own package sources and runtime device selection.
               paths = ["root"];
               globs = ["*.nix"];
               message = "root/ must not import home/ paths";
+            }
+            {
+              # `exclude` allowlists source-root-relative files; `pcre2`
+              # enables lookarounds such as skipping comment lines.
+              name = "no-deep-relative-paths";
+              pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+              pcre2 = true;
+              paths = ["root" "lib"];
+              globs = ["*.nix"];
+              exclude = ["lib/default.nix"];
+              message = "use the path facade instead of ../../";
             }
           ];
         };

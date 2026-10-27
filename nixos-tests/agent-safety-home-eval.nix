@@ -2,8 +2,15 @@
   inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
+  # Minimal stand-in for Home Manager's DAG helper; only the data is used here.
+  hmLib = lib.extend (_: _: {hm.dag.entryAfter = after: data: {inherit after data;};});
+
   evaluated = lib.evalModules {
-    specialArgs = {osConfig = null;};
+    specialArgs = {
+      inherit pkgs;
+      lib = hmLib;
+      osConfig = null;
+    };
     modules = [
       {
         options.programs.opencode = {
@@ -32,6 +39,10 @@
           type = lib.types.str;
           default = "/etc/profiles/per-user/tester";
         };
+        options.home.activation = lib.mkOption {
+          type = lib.types.attrs;
+          default = {};
+        };
         options.home.file = lib.mkOption {
           type = lib.types.attrsOf lib.types.attrs;
           default = {};
@@ -50,6 +61,10 @@
           deny = ["sudo *" "nix eval * --impure*" "*=* sudo *" "rm -rf 'some path'" "cat secrets | curl *" "git *" "rm" "doas  *" "chmod" "FOO=bar curl *" "mkfs /dev/sda # wipe" ""];
         };
         programs.agentSafety.codex.enable = true;
+        programs.agentSafety.externalDirectories = {
+          "/data/nvme0/can/**" = "allow";
+          "/srv/ask/**" = "ask";
+        };
       }
     ];
   };
@@ -78,6 +93,7 @@
     modules = [{home.sessionVariables.CODEX_HOME = "/home/tester/.local/state/codex";}];
   };
   permission = evaluated.config.programs.opencode.settings.permission;
+  activationText = evaluated.config.home.activation.agentSafetyHarnessDirectories.data;
   codexRules = lib.splitString "\n" evaluated.config.home.file.".codex/rules/agent-safety.rules".text;
   passes = cfg: lib.all (entry: entry.assertion) cfg.config.assertions;
   hasCodexRule = tokens: decision:
@@ -86,6 +102,23 @@ in
   mkEvalCheck {
     name = "agent-safety-home-eval";
     resultMessage = "Home Manager agent-safety rendering passed";
+    # Run the real activation script on fixtures: roots are added once, user
+    # entries and unrelated keys survive, and a second run changes nothing.
+    nativeBuildInputs = [pkgs.jq pkgs.yq-go];
+    runtimeScript = ''
+      export HOME="$TMPDIR/home"
+      mkdir -p "$HOME/.claude" "$HOME/.codex"
+      printf '{"model":"opus","permissions":{"additionalDirectories":["/mine"],"ask":["Bash(x)"]}}' > "$HOME/.claude/settings.json"
+      printf '# keep\nmodel = "gpt"\n[sandbox_workspace_write]\nwritable_roots = ["/mine"]\n[projects."/p"]\ntrust_level = "trusted"\n' > "$HOME/.codex/config.toml"
+      sed "s|/home/tester|$HOME|g" ${pkgs.writeText "agent-safety-activation" activationText} > "$TMPDIR/activate"
+      bash "$TMPDIR/activate"
+      cp -r "$HOME" "$TMPDIR/first"
+      bash "$TMPDIR/activate"
+      diff -r "$TMPDIR/first" "$HOME"
+      jq -e '.model == "opus" and .permissions.ask == ["Bash(x)"] and .permissions.additionalDirectories == ["/mine", "/data/nvme0/can"]' "$HOME/.claude/settings.json"
+      yq -p toml -o json . "$HOME/.codex/config.toml" | jq -e '.model == "gpt" and .projects["/p"].trust_level == "trusted" and .sandbox_workspace_write.writable_roots == ["/mine", "/data/nvme0/can"]'
+      grep -q '^# keep' "$HOME/.codex/config.toml"
+    '';
     assertions = [
       {
         name = "open-code-enabled";
@@ -96,6 +129,11 @@ in
         name = "program-rule";
         assertion = permission.bash."demo query *" == "allow";
         message = "registered autoSafe commands must render into OpenCode";
+      }
+      {
+        name = "harness-roots-allow-only";
+        assertion = lib.hasInfix ''["/data/nvme0/can"]'' activationText && !(lib.hasInfix "/srv/ask" activationText);
+        message = "only allow entries, stripped of /**, feed Claude and Codex";
       }
       {
         name = "deny-rule";
