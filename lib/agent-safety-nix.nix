@@ -138,6 +138,12 @@ in {
       # Archiving into the local store is routine; `--to` uploads to a remote.
       "nix flake archive *--to*"
     ]
+    # Arbitrary expressions/files/functions can read any local path (e.g.
+    # `builtins.readFile ~/.ssh/id_ed25519`); disabling IFD does not stop that,
+    # so the otherwise allowed evaluation prefixes prompt for them.
+    ++ wrapped queryWrappers (lib.concatMap (prefix:
+      lib.concatMap (flag: ["${prefix}*${flag} *" "${prefix}*${flag}"]) ["--expr" "--apply" "--file" "-f" "-E"])
+    evaluationPrefixes)
     ++ lib.optionals storeAddAsk [
       "nix store add *"
       "nix store add-file *"

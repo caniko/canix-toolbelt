@@ -5,6 +5,7 @@
     modules = [
       ../modules/nixos/services/windmill.nix
       ../modules/nixos/services/n8n.nix
+      ../modules/nixos/services/build-memory-probe.nix
       {
         # n8n is unfree (Sustainable Use License); consumers opt in.
         nixpkgs.config.allowUnfreePredicate = p: pkgs.lib.getName p == "n8n";
@@ -13,6 +14,12 @@
           baseUrl = "https://windmill.example.com";
           port = 8011;
           workers = 3;
+        };
+        nix.settings.build-cgroup-memory-max = 1024;
+        canix-toolbelt.services.buildMemoryProbe = {
+          enable = true;
+          busyThresholdBytes = 100;
+          idleThresholdBytes = 200; # invalid: must trip the assertion
         };
         canix-toolbelt.services.n8n = {
           enable = true;
@@ -26,11 +33,22 @@
     ];
   };
   units = eval.config.systemd.services;
+  inherit (pkgs) lib;
   n8n = units.n8n.environment;
 in
   mkEvalCheck {
     name = "automation-presets-eval";
     assertions = [
+      {
+        name = "build-memory-probe-validates-delegated-child";
+        assertion = lib.hasInfix "/nix-builders" eval.config.canix-toolbelt.activation.contracts.buildMemoryProbe.requirements.cgroup.validation;
+        message = "contract validation must check the nix-builders child when the probe samples it";
+      }
+      {
+        name = "build-memory-probe-idle-below-busy";
+        assertion = lib.any (a: !a.assertion && lib.hasInfix "idleThresholdBytes" a.message) eval.config.assertions;
+        message = "idle >= busy thresholds must fail evaluation";
+      }
       {
         name = "windmill-loopback";
         assertion = units.windmill-server.environment.SERVER_BIND_ADDR == "127.0.0.1" && units.windmill-server.environment.PORT == "8011";

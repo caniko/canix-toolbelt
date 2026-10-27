@@ -196,12 +196,19 @@ pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
         .collect()
 }
 
-/// Replace complete `"module@old"` literals with `"module@new"`.
+/// Replace complete `"module@old"` literals with `"module@new"`, only inside
+/// `caddy.plugins = [ ... ]` lists.
 pub fn bump_version(source: &str, module: &str, old: &str, new: &str) -> String {
-    source.replace(
-        &format!("\"{module}@{old}\""),
-        &format!("\"{module}@{new}\""),
-    )
+    let (from, to) = (format!("\"{module}@{old}\""), format!("\"{module}@{new}\""));
+    let mut out = String::with_capacity(source.len());
+    let mut copied = 0;
+    for range in assignment_values(source, PLUGINS_MARKER, '[', ']') {
+        out.push_str(&source[copied..range.start]);
+        out.push_str(&source[range.clone()].replace(&from, &to));
+        copied = range.end;
+    }
+    out.push_str(&source[copied..]);
+    out
 }
 
 /// Replace every `caddy.pluginsHash = "..."` value with `hash`; also returns
@@ -589,8 +596,19 @@ mod tests {
             SAMPLE_MULTI
         );
         assert_eq!(
-            bump_version(r#""m@v1" "m@v1+incompatible""#, "m", "v1", "v2"),
-            r#""m@v2" "m@v1+incompatible""#
+            bump_version(
+                r#"caddy.plugins = [ "m@v1" "m@v1+incompatible" ];"#,
+                "m",
+                "v1",
+                "v2"
+            ),
+            r#"caddy.plugins = [ "m@v2" "m@v1+incompatible" ];"#
+        );
+        // The same literal outside the plugin list is unrelated configuration.
+        let other = r#"deps = [ "m@v1" ]; caddy.plugins = [ "m@v1" ];"#;
+        assert_eq!(
+            bump_version(other, "m", "v1", "v2"),
+            r#"deps = [ "m@v1" ]; caddy.plugins = [ "m@v2" ];"#
         );
     }
 

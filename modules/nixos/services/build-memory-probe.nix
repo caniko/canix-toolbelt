@@ -16,6 +16,9 @@
   memoryFiles = ["memory.current" "memory.events" "memory.pressure" "memory.high" "memory.max"];
   readable = dir: lib.concatMapStringsSep " && " (file: "test -r ${dir}/${file}") memoryFiles;
 
+  # The probe samples Nix's delegated child cgroup in this mode (see unit env).
+  aggregateBuilders = (config.nix.settings.build-cgroup-memory-max or 0) > 0;
+
   activationContract = activation.mkContract {
     name = "canix-toolbelt.services.buildMemoryProbe";
     enabled = cfg.enable;
@@ -30,7 +33,7 @@
         then readable cfg.cgroup
         else ''
           cg="$(${pkgs.systemd}/bin/systemctl show nix-daemon.service --property=ControlGroup --value)"
-          test -n "$cg" && ${readable "\"/sys/fs/cgroup$cg\""}
+          test -n "$cg" && ${readable "\"/sys/fs/cgroup$cg${lib.optionalString aggregateBuilders "/nix-builders"}\""}
         '';
     };
     artifacts = [
@@ -127,7 +130,7 @@ in {
           BUILD_MEMORY_PROBE_IDLE_DEBOUNCE_TICKS = toString cfg.idleDebounceTicks;
           BUILD_MEMORY_PROBE_HOST = config.networking.hostName;
           BUILD_MEMORY_PROBE_AGGREGATE_BUILDERS =
-            if (config.nix.settings.build-cgroup-memory-max or 0) > 0
+            if aggregateBuilders
             then "1"
             else "0";
         };
