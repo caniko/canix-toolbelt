@@ -5,25 +5,29 @@
   pkgs,
 }: let
   check = exclude:
-    (inputs.flake-parts.lib.mkFlake {inputs = {inherit (inputs) nixpkgs;};} {
-      systems = [pkgs.stdenv.hostPlatform.system];
-      imports = [../flake-modules/structure-check.nix];
-      perSystem.canix-toolbelt.structure-check = {
-        enable = true;
-        src = ./fixtures/structure-check;
-        rules = [
-          {
-            name = "no-deep-relative-paths";
-            pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
-            pcre2 = true;
-            paths = ["root" "lib"];
-            globs = ["*.nix"];
-            inherit exclude;
-            message = "use the path facade instead of ../../";
-          }
-        ];
-      };
-    })
+    (inputs.flake-parts.lib.mkFlake {
+        # A minimal stand-in; the fixture flake has no inputs or outputs.
+        inputs.self.inputs = {};
+      } {
+        systems = [pkgs.stdenv.hostPlatform.system];
+        imports = [../flake-modules/structure-check.nix];
+        perSystem._module.args.pkgs = pkgs;
+        perSystem.canix-toolbelt.structure-check = {
+          enable = true;
+          src = ./fixtures/structure-check;
+          rules = [
+            {
+              name = "no-deep-relative-paths";
+              pattern = "^(?!\\s*#).*\\.\\./\\.\\./";
+              pcre2 = true;
+              paths = ["root" "lib"];
+              globs = ["*.nix"];
+              inherit exclude;
+              message = "use the path facade instead of ../../";
+            }
+          ];
+        };
+      })
     .checks
     .${
       pkgs.stdenv.hostPlatform.system
