@@ -252,6 +252,7 @@
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};
             agent-safety-eval = import ./nixos-tests/agent-safety-eval.nix {inherit pkgs;};
             agent-safety-home-eval = import ./nixos-tests/agent-safety-home-eval.nix {inherit pkgs;};
+            agent-safety-nix-policy-eval = import ./nixos-tests/agent-safety-nix-policy-eval.nix {inherit pkgs;};
             browser-connection-eval = import ./nixos-tests/browser-connection-eval.nix {inherit pkgs;};
             browser-connection-smoke = import ./nixos-tests/browser-connection-smoke.nix {inherit pkgs;};
             browser-connection-runtime =
