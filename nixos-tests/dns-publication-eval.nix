@@ -70,6 +70,15 @@
     ];
   };
   limited = eval {canix-toolbelt.dns.zones."example.test".manageRecordTypes = ["A" "CNAME"];};
+  # A managed lan site must not reach public DNS through either intent path.
+  lan = eval {
+    canix-toolbelt.services.httpSites.lanui = {
+      hostname = "lanui.example.test";
+      access = "lan";
+      dnsPublication = "managed";
+      publicationTarget = null;
+    };
+  };
   failed = cfg: builtins.any (assertion: !assertion.assertion) cfg.assertions;
 in
   mkEvalCheck {
@@ -84,6 +93,11 @@ in
         name = "apex-without-cname";
         assertion = apex.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.test"."".a.data == "192.0.2.10";
         message = "apex publication must emit addresses instead of a self CNAME";
+      }
+      {
+        name = "lan-site-private";
+        assertion = !(lan.canix-toolbelt.dns.dnsConfig.extraConfig.zones."example.test" ? lanui);
+        message = "lan sites must not publish managed CNAMEs";
       }
       {
         name = "single-writer";

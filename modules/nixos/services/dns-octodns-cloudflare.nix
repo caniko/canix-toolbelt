@@ -267,9 +267,15 @@
     inherit (intent) proxied comment;
   };
 
+  # Private (vpn/lan) sites never get a public CNAME, even from an older
+  # Fleetix helper that predates the lan scope.
+  privateAccess = ["vpn" "lan"];
   managedDnsCnameIntents =
     if fleetixLib.services ? managedDnsCnameIntents
-    then fleetixLib.services.managedDnsCnameIntents {topology = topologyForDnsIntents;}
+    then
+      builtins.filter (intent:
+        !(builtins.elem (topologyForDnsIntents.services.httpSites.${intent.name}.access or null) privateAccess))
+      (fleetixLib.services.managedDnsCnameIntents {topology = topologyForDnsIntents;})
     else
       concatMap (name: let
         site = topologyForDnsIntents.services.httpSites.${name};
@@ -278,7 +284,7 @@
           fqdn = site.hostname;
         };
       in
-        if site.dnsPublication != "managed" || site.access == "vpn" || zone == null
+        if site.dnsPublication != "managed" || builtins.elem site.access privateAccess || zone == null
         then []
         else [
           {

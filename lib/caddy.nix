@@ -15,8 +15,10 @@
       not = map (name: {query.${name} = ["*"];}) match.absentQueryParams;
     };
 
+  # Fallbacks share the primary endpoint's transport and TLS server name.
   proxyHandler = {
     endpoint,
+    fallbacks ? [],
     hostname,
   }:
     if endpoint.transport == "tcp"
@@ -24,7 +26,24 @@
     else
       {
         handler = "reverse_proxy";
-        upstreams = [{dial = "${endpoint.address}:${toString endpoint.port}";}];
+        upstreams = map (upstream: {dial = "${upstream.address}:${toString upstream.port}";}) ([endpoint] ++ fallbacks);
+      }
+      // lib.optionalAttrs (fallbacks != []) {
+        # Strict ordered failover: always prefer the first healthy upstream.
+        # A refused or failed connection retries the next upstream within the
+        # same request. Caddy does not retry completed responses: a listed
+        # unhealthy status is returned once and marks the upstream down for
+        # fail_duration, so later requests fail over.
+        load_balancing = {
+          selection_policy.policy = "first";
+          try_duration = "5s";
+          try_interval = "250ms";
+        };
+        health_checks.passive = {
+          fail_duration = "30s";
+          max_fails = 1;
+          unhealthy_status = [502 503 504];
+        };
       }
       // lib.optionalAttrs (endpoint.transport == "https") {
         transport = {
@@ -45,6 +64,7 @@
   actionHandlers = {
     action,
     endpoint ? null,
+    fallbacks ? [],
     hostname,
     staticRoots,
   }:
@@ -55,7 +75,7 @@
         strip_path_prefix = action.stripPrefix;
       }
       ++ [
-        (proxyHandler {inherit endpoint hostname;})
+        (proxyHandler {inherit endpoint fallbacks hostname;})
       ]
     else if action.type == "files"
     then let
@@ -98,6 +118,7 @@ in rec {
     hostname,
     route,
     endpoint ? null,
+    fallbacks ? [],
     staticRoots ? {},
   }: {
     match = [(requestMatch hostname route.match)];
@@ -113,7 +134,7 @@ in rec {
       }
       ++ actionHandlers {
         inherit (route) action;
-        inherit endpoint hostname staticRoots;
+        inherit endpoint fallbacks hostname staticRoots;
       };
   };
 

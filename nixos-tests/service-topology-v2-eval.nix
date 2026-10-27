@@ -89,6 +89,25 @@
           transport = "http";
           bind = "vpn";
         };
+        failover-primary = {
+          targetHost = "backend";
+          port = 9400;
+          transport = "http";
+          bind = "loopback";
+          remoteVia = "failover-relay";
+        };
+        failover-relay = {
+          targetHost = "backend";
+          port = 9410;
+          transport = "http";
+          bind = "lan";
+        };
+        failover-lan = {
+          targetHost = "hub";
+          port = 9420;
+          transport = "http";
+          bind = "lan";
+        };
       };
       httpSites = {
         app = {
@@ -236,6 +255,44 @@
             }
           ];
         };
+        failover = {
+          hostname = "failover.example.test";
+          ingress = "public";
+          access = "cloudflare";
+          dnsPublication = "none";
+          routes = [
+            {
+              match = {
+                paths = [];
+                absentQueryParams = [];
+              };
+              action = {
+                type = "proxy";
+                endpoint = "failover-primary";
+                fallbackEndpoints = ["failover-lan"];
+              };
+            }
+          ];
+        };
+        lan = {
+          hostname = "lan.example.test";
+          ingress = "lan";
+          access = "lan";
+          dnsPublication = "none";
+          routes = [
+            {
+              match = {
+                paths = [];
+                absentQueryParams = [];
+              };
+              action = {
+                type = "respond";
+                status = 200;
+                body = "lan";
+              };
+            }
+          ];
+        };
       };
     };
     deployment.ingressGroups = {
@@ -250,6 +307,10 @@
       vpn = {
         scope = "vpn";
         hosts = ["hub"];
+      };
+      lan = {
+        scope = "lan";
+        hosts = ["edge2"];
       };
     };
   };
@@ -321,7 +382,7 @@
     };
   };
 
-  evalFor = hostName:
+  evalFor = hostName: overrides:
     lib.evalModules {
       specialArgs = {inherit inputs pkgs;};
       modules = [
@@ -334,7 +395,7 @@
           networking.hostName = hostName;
           canix-toolbelt.fleetix = {
             enable = true;
-            inherit topology;
+            topology = lib.recursiveUpdate topology overrides;
           };
           canix-toolbelt.services.caddy = {
             enable = true;
@@ -342,6 +403,7 @@
               public = ["192.0.2.240:443"];
               solo = ["192.0.2.241:443"];
               vpn = ["198.51.100.1:443"];
+              lan = ["192.0.2.12:443"];
             };
             cloudflareCidrs = ["203.0.113.0/24"];
             staticRoots.docs = ../lib;
@@ -365,10 +427,26 @@
       ];
     };
 
-  edge1 = evalFor "edge1";
-  edge2 = evalFor "edge2";
-  backend = evalFor "backend";
-  hub = evalFor "hub";
+  edge1 = evalFor "edge1" {};
+  edge2 = evalFor "edge2" {};
+  backend = evalFor "backend" {};
+  hub = evalFor "hub" {};
+  invalid = overrides: message:
+    builtins.any (a: !a.assertion && lib.hasPrefix message a.message) (evalFor "edge1" overrides).config.assertions;
+  failoverRoutes = overrides: [
+    {
+      match = {
+        paths = [];
+        absentQueryParams = [];
+      };
+      action =
+        {
+          type = "proxy";
+          endpoint = "failover-primary";
+        }
+        // overrides;
+    }
+  ];
   edge1Servers = edge1.config.canix-toolbelt.services.caddy.servers;
   publicRoutes = edge1Servers.public.routes;
   routeHosts = routes: lib.concatMap (route: (builtins.head route.match).host or []) routes;
@@ -380,6 +458,7 @@
   handler = name: route: lib.findFirst (item: item.handler or "" == name) null route.handle;
   relayRoute = builtins.head backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.routes;
   dnsAddresses = hub.config.services.dnsmasq.settings.address;
+  failoverProxy = handler "reverse_proxy" (lib.findFirst (route: (builtins.head route.match).host == ["failover.example.test"]) null publicRoutes);
 in
   mkEvalCheck {
     name = "service-topology-v2-eval";
@@ -473,6 +552,108 @@ in
         name = "relay-firewall-source-scope";
         assertion = lib.hasInfix ''iifname "lan0"'' backend.config.networking.firewall.extraInputRules && lib.hasInfix "ip saddr { 192.0.2.11, 192.0.2.12, 192.0.2.240 }" backend.config.networking.firewall.extraInputRules && lib.hasInfix "tcp dport 9100 accept" backend.config.networking.firewall.extraInputRules;
         message = "relay firewall access must be interface- and ingress-source-scoped, including failover VIPs";
+      }
+      {
+        name = "single-endpoint-proxy-unchanged";
+        assertion = builtins.toJSON (handler "reverse_proxy" (builtins.elemAt edge1Servers.solo.routes 1)) == ''{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8000"}]}'' && !(handler "reverse_proxy" exactRoute ? load_balancing) && !(handler "reverse_proxy" exactRoute ? health_checks);
+        message = "single-endpoint proxy routes must render exactly as before, without failover policy";
+      }
+      {
+        name = "ordered-failover-upstreams";
+        assertion = failoverProxy.upstreams == [{dial = "192.0.2.30:9410";} {dial = "192.0.2.40:9420";}] && failoverProxy.load_balancing.selection_policy.policy == "first" && failoverProxy.health_checks.passive.max_fails == 1 && !(failoverProxy ? transport);
+        message = "fallback endpoints must render as ordered upstreams with strict first-available failover";
+      }
+      {
+        name = "failover-primary-relay-and-fallback-lan-port";
+        assertion = backend.config.canix-toolbelt.services.caddy.servers.relay-failover-relay.listen == ["192.0.2.30:9410"] && lib.hasInfix "tcp dport 9410 accept" backend.config.networking.firewall.extraInputRules && hub.config.networking.firewall.interfaces.lan0.allowedTCPPorts == [9420];
+        message = "a remote loopback primary needs its relay and a LAN fallback its LAN port";
+      }
+      {
+        name = "lan-ingress-no-cidr-gate";
+        assertion = edge2.config.canix-toolbelt.services.caddy.servers.lan.cidrAllowlist == [] && edge2.config.canix-toolbelt.services.caddy.servers.lan.cidrExemptHosts == [] && routeHosts edge2.config.canix-toolbelt.services.caddy.servers.lan.routes == ["lan.example.test"] && !(builtins.hasAttr "lan" edge1Servers);
+        message = "LAN ingress groups must render on their hosts without a Cloudflare CIDR gate";
+      }
+      {
+        name = "vpn-dns-skips-lan-sites";
+        assertion = !(builtins.any (lib.hasPrefix "/lan.example.test/") dnsAddresses);
+        message = "VPN DNS must not publish LAN-only sites";
+      }
+      {
+        name = "lan-site-on-public-group-rejected";
+        assertion = invalid {services.httpSites.lan.ingress = "public";} "canix-toolbelt Caddy registry: site `lan` must reference an ingress group whose scope matches";
+        message = "a LAN site on a public ingress group must fail evaluation";
+      }
+      {
+        name = "duplicate-fallback-rejected";
+        assertion = invalid {services.httpSites.failover.routes = failoverRoutes {fallbackEndpoints = ["failover-lan" "failover-lan"];};} "canix-toolbelt service-registry: site `failover` fallbackEndpoints must be unique" && invalid {services.httpSites.failover.routes = failoverRoutes {fallbackEndpoints = ["failover-primary"];};} "canix-toolbelt service-registry: site `failover` fallbackEndpoints must be unique";
+        message = "duplicate fallbacks and fallbacks equal to the primary must fail evaluation";
+      }
+      {
+        name = "fallback-transport-mismatch-rejected";
+        assertion = invalid {services.endpoints.failover-lan.transport = "h2c";} "canix-toolbelt Caddy registry: site `failover` proxy endpoints must share transport";
+        message = "fallbacks dialed with a different transport must fail evaluation";
+      }
+      {
+        name = "fallback-default-sni-matches-explicit-hostname";
+        assertion = let
+          cfg = evalFor "edge1" {
+            services.endpoints = {
+              failover-lan.transport = "https";
+              failover-lan-tls = {
+                targetHost = "hub";
+                port = 9421;
+                transport = "https";
+                bind = "lan";
+                tlsServerName = "failover.example.test";
+              };
+            };
+            services.httpSites.failover.routes = failoverRoutes {
+              endpoint = "failover-lan";
+              fallbackEndpoints = ["failover-lan-tls"];
+            };
+          };
+        in
+          builtins.all (a: a.assertion || !lib.hasPrefix "canix-toolbelt Caddy registry: site `failover` proxy endpoints must share" a.message) cfg.config.assertions;
+        message = "an unset tlsServerName must compare as the site hostname it sends";
+      }
+      {
+        name = "fallback-same-port-different-address-accepted";
+        assertion = let
+          cfg = evalFor "backend" {
+            services.endpoints.failover-local-lan = {
+              targetHost = "backend";
+              port = 9400;
+              transport = "http";
+              bind = "lan";
+            };
+            services.httpSites.failover = {
+              ingress = "solo";
+              routes = failoverRoutes {fallbackEndpoints = ["failover-local-lan"];};
+            };
+            deployment.ingressGroups.solo.hosts = ["backend"];
+          };
+        in
+          builtins.all (a: a.assertion || !lib.hasPrefix "canix-toolbelt Caddy registry: site `failover` proxy endpoints must resolve to distinct" a.message) cfg.config.assertions;
+        message = "loopback and LAN endpoints sharing a port dial different addresses and must be accepted";
+      }
+      {
+        name = "fallback-sharing-a-relay-rejected";
+        assertion = invalid {
+          services.endpoints.failover-twin = {
+            targetHost = "backend";
+            port = 9401;
+            transport = "http";
+            bind = "loopback";
+            remoteVia = "failover-relay";
+          };
+          services.httpSites.failover.routes = failoverRoutes {fallbackEndpoints = ["failover-twin"];};
+        } "canix-toolbelt Caddy registry: site `failover` proxy endpoints must resolve to distinct dial addresses";
+        message = "a fallback behind the primary's relay is unreachable and must fail evaluation";
+      }
+      {
+        name = "valid-topology-assertions-pass";
+        assertion = builtins.all (a: a.assertion) (edge1.config.assertions ++ edge2.config.assertions ++ backend.config.assertions ++ hub.config.assertions);
+        message = "the fixture topology must satisfy every registry assertion";
       }
     ];
   }
