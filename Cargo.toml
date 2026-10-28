@@ -1,6 +1,6 @@
 [package]
 name = "canix-toolbelt"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Reusable runtime-manifest library and CLI for Canix-style architectures"
@@ -65,7 +65,7 @@ name = "orchestration_shadow"
 required-features = ["orchestration"]
 
 [dependencies]
-fleetix = { version = "0.7.0", default-features = false }
+fleetix = { version = "0.8.0", default-features = false }
 pklx = { version = "0.2.0", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 miette = "7"

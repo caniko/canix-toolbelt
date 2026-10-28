@@ -5,7 +5,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-10-26
+## [0.6.0] - 2026-10-28
 
 ### Added
 
@@ -21,6 +21,7 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- **Breaking:** depend on fleetix 0.8.0 (re-exported fleetix types change; see fleetix 0.8.0's changelog: `IngressScope::Lan`, `HttpAccess::Lan`, `HttpAction::Proxy::fallback_endpoints`).
 - Regenerate CI with Simit 432cde7. Grouped Nix builds restore the pinned
   Simit engine from the Actions cache instead of compiling it in every group
   job. Tag-time publication no longer re-runs a full `nix flake check`, which
