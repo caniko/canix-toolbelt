@@ -138,6 +138,7 @@ in
     type = "postgres";
     path = "postgres://gatus@/gatus?host=/run/postgresql";
   };
+  assert !(lib.all (a: a.assertion) (evaluate (lib.recursiveUpdate module {services.gatusInstances.public.storage.type = "postgres";})).assertions);
   assert (evaluate (lib.recursiveUpdate module {services.gatusInstances.public.storage.type = "memory";})).services.gatusInstances.public.settings.storage == {type = "memory";};
   assert lib.all (a: a.assertion) external.assertions;
   assert !(lib.all (a: a.assertion) externalOnly.assertions);
