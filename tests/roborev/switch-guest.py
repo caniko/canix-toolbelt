@@ -76,6 +76,23 @@ def main():
         assert config.resolve() != first_target
         assert tomllib.loads(config.read_text())["max_workers"] == 3
         assert hashlib.sha256(mutable.read_bytes()).hexdigest() == state_digest
+        # An earlier activation of a generation may link its file and then fail,
+        # leaving the profile on the previous generation. The re-run must pass.
+        rel = config.relative_to(home)
+        activate(0)
+        config.unlink()
+        config.symlink_to(Path(projection["generations"][1]["output"]) / "home-files" / rel)
+        activate(1)
+        assert tomllib.loads(config.read_text())["max_workers"] == 3
+        # Links to anything other than the old or new generation's file stay refused.
+        foreign = scratch / "foreign.toml"
+        foreign.write_text("max_workers = 9\n")
+        config.unlink()
+        config.symlink_to(foreign)
+        activate(1, expected=1)
+        assert config.resolve() == foreign.resolve()
+        config.unlink()
+        activate(1)
         # This pinned Nix client creates the XDG-state user profile. A fresh
         # fixture has no legacy ~/.nix-profile compatibility link.
         selected_binary = home / ".local/state/nix/profile/bin/roborev"
