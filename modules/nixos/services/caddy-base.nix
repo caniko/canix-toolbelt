@@ -82,6 +82,13 @@ in {
       description = "Cloudflare edge CIDRs allowed to reach cloudflare-access sites.";
     };
 
+    accessLog.skipUserAgents = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      example = ["Gatus/*"];
+      description = "User-Agent patterns (Caddy header matcher, leading/trailing `*` wildcards) whose requests are not access-logged on any server.";
+    };
+
     staticRoots = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = {};
@@ -166,7 +173,16 @@ in {
       hostnames);
 
     routesWithGate = server:
-      lib.optionals (server.cidrAllowlist != []) (
+      lib.optional (cfg.accessLog.skipUserAgents != []) {
+        match = [{header."User-Agent" = cfg.accessLog.skipUserAgents;}];
+        handle = [
+          {
+            handler = "vars";
+            log_skip = true;
+          }
+        ];
+      }
+      ++ lib.optionals (server.cidrAllowlist != []) (
         lib.optional (server.cidrExemptHosts != []) {
           group = "cidr-allowlist";
           match = [{host = lib.unique server.cidrExemptHosts;}];

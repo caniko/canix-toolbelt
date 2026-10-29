@@ -71,6 +71,18 @@
         default = "gatus-${name}";
         description = "Unique directory name under /var/lib for SQLite history.";
       };
+      storage = {
+        type = mkOption {
+          type = types.enum ["sqlite" "postgres" "memory"];
+          default = "sqlite";
+          description = "Gatus storage backend; memory keeps no history and writes nothing to disk.";
+        };
+        path = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "SQLite file path (null means /var/lib/<stateDirectory>/gatus.db), or the required PostgreSQL connection string for postgres; ignored for memory. The rendered config is world-readable in the Nix store, so keep credentials out of it: write `\${VAR}` and supply VAR through environmentFile (Gatus expands environment variables).";
+        };
+      };
       title = mkOption {
         type = types.str;
         description = "Dashboard title.";
@@ -145,10 +157,14 @@
               address = "127.0.0.1";
               inherit (instance) port;
             };
-            storage = {
-              type = "sqlite";
-              path = "/var/lib/${instance.stateDirectory}/gatus.db";
-            };
+            storage =
+              {inherit (instance.storage) type;}
+              // lib.optionalAttrs (instance.storage.type != "memory") {
+                path =
+                  if instance.storage.path != null
+                  then instance.storage.path
+                  else "/var/lib/${instance.stateDirectory}/gatus.db";
+              };
             ui =
               {
                 inherit (instance) title header;
@@ -203,6 +219,10 @@ in {
         {
           assertion = lib.all (i: i.endpoints != []) instances;
           message = "Gatus v5 requires at least one network endpoint per enabled instance, including instances with external checks.";
+        }
+        {
+          assertion = lib.all (i: i.storage.type != "postgres" || i.storage.path != null) instances;
+          message = "gatusInstances storage.type = \"postgres\" requires storage.path (the connection string).";
         }
         {
           assertion = builtins.length (lib.unique (map (i: i.port) instances)) == builtins.length instances;
