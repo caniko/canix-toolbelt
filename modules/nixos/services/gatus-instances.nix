@@ -71,6 +71,19 @@
         default = "gatus-${name}";
         description = "Unique directory name under /var/lib for SQLite history.";
       };
+      storage = {
+        type = mkOption {
+          type = types.enum ["sqlite" "postgres" "memory"];
+          default = "sqlite";
+          description = "Gatus storage backend; memory keeps no history and writes nothing to disk.";
+        };
+        path = mkOption {
+          type = types.str;
+          default = "/var/lib/${instance.stateDirectory}/gatus.db";
+          defaultText = lib.literalExpression ''"/var/lib/''${stateDirectory}/gatus.db"'';
+          description = "SQLite file path, or the PostgreSQL connection string for postgres; ignored for memory.";
+        };
+      };
       title = mkOption {
         type = types.str;
         description = "Dashboard title.";
@@ -145,10 +158,9 @@
               address = "127.0.0.1";
               inherit (instance) port;
             };
-            storage = {
-              type = "sqlite";
-              path = "/var/lib/${instance.stateDirectory}/gatus.db";
-            };
+            storage =
+              {inherit (instance.storage) type;}
+              // lib.optionalAttrs (instance.storage.type != "memory") {inherit (instance.storage) path;};
             ui =
               {
                 inherit (instance) title header;

@@ -21,6 +21,17 @@
   edge = evaluate [];
   server = edge.config.canix-toolbelt.services.caddy.servers.public-edge;
   proxy = builtins.elemAt (builtins.head server.routes).handle 1;
+  skipRoute = {
+    match = [{header."User-Agent" = ["Gatus/*"];}];
+    handle = [
+      {
+        handler = "vars";
+        log_skip = true;
+      }
+    ];
+  };
+  serverRoutes = e: (builtins.fromJSON e.config.services.caddy.configFile.text).apps.http.servers.public-edge.routes;
+  skipping = evaluate [{canix-toolbelt.services.caddy.accessLog.skipUserAgents = ["Gatus/*"];}];
   disabled = import "${pkgs.path}/nixos/lib/eval-config.nix" {
     system = pkgs.stdenv.hostPlatform.system;
     modules = [../modules/nixos/services/public-edge.nix];
@@ -48,6 +59,15 @@ in
           && proxy.upstreams == [{dial = "10.77.0.2:443";}]
           && builtins.elem 443 edge.config.networking.firewall.interfaces.ens3.allowedUDPPorts;
         message = "HTTP/3 ingress needs UDP 443 and independently verified origin TLS/protocols";
+      }
+      {
+        name = "access-log-skip-user-agents";
+        assertion =
+          builtins.head (serverRoutes skipping)
+          == skipRoute
+          && builtins.tail (serverRoutes skipping) == serverRoutes edge
+          && !builtins.any (r: r == skipRoute) (serverRoutes edge);
+        message = "Skipped User-Agents add one leading non-terminal log_skip route and nothing otherwise";
       }
       {
         name = "peer-only-routes";

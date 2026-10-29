@@ -123,6 +123,22 @@ in
   assert (builtins.head cfg.services.gatusInstances.private.settings.endpoints).url == "http://127.0.0.1:8092/health";
   assert (builtins.head cfg.services.gatusInstances.public.settings.endpoints).ui.hide-errors;
   assert cfg.services.gatusInstances.public.settings.storage.path != cfg.services.gatusInstances.private.settings.storage.path;
+  assert cfg.services.gatusInstances.public.settings.storage
+  == {
+    type = "sqlite";
+    path = "/var/lib/gatus-public/gatus.db";
+  };
+  assert (evaluate (lib.recursiveUpdate module {
+    services.gatusInstances.public.storage = {
+      type = "postgres";
+      path = "postgres://gatus@/gatus?host=/run/postgresql";
+    };
+  })).services.gatusInstances.public.settings.storage
+  == {
+    type = "postgres";
+    path = "postgres://gatus@/gatus?host=/run/postgresql";
+  };
+  assert (evaluate (lib.recursiveUpdate module {services.gatusInstances.public.storage.type = "memory";})).services.gatusInstances.public.settings.storage == {type = "memory";};
   assert lib.all (a: a.assertion) external.assertions;
   assert !(lib.all (a: a.assertion) externalOnly.assertions);
   assert (builtins.head external.services.gatusInstances.private.settings.external-endpoints).token == "\${GATUS_EXTERNAL_TOKEN}";

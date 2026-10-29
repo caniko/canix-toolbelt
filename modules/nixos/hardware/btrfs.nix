@@ -1,6 +1,6 @@
-_: {
+{lib, ...}: {
   services.btrfs.autoScrub = {
     enable = true;
-    interval = "weekly";
+    interval = lib.mkDefault "weekly";
   };
 }

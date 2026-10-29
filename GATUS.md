@@ -2,7 +2,7 @@
 
 The following NixOS modules compose with Fleetix's service-profile library:
 
-- `gatus-instances`: isolated loopback dashboards, SQLite state, presentation,
+- `gatus-instances`: isolated loopback dashboards, SQLite state (or PostgreSQL/memory via `storage.type`), presentation,
   domain selectors, and profile/assignment coverage assertions.
 - `gatus-health-publisher`: a host-local timer and hardened service invoking a
   consumer-provided Fleetix-based publisher frontend. The command receives
