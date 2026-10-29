@@ -1690,13 +1690,14 @@ dependencies = [
 
 [[package]]
 name = "nix-manager-core"
-version = "0.4.3"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f18e4a0a04e9edeca8d65d8df2176e45d1b96991dc7508238e85ba7bef7ba7d"
+checksum = "6e26169d49aa4b164cb003f9fcdc11573685aa86bdaf45188c7877935250380d"
 dependencies = [
  "age",
  "age-core",
  "anyhow",
+ "base64 0.21.7",
  "chrono",
  "console",
  "dialoguer",
@@ -1706,6 +1707,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "url",
 ]
