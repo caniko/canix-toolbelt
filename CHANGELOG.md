@@ -5,6 +5,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-29
+
+### Changed
+
+- Consume nix-manager-core 0.4.6, which accepts Nix 2.34 v4 derivation JSON
+  (fixed-output outputs without `path`) so build-train plans no longer fail.
+
 ## [0.6.0] - 2026-10-28
 
 ### Added
