@@ -5,6 +5,13 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-31
+
+### Changed
+
+- Consume fleetix 0.9.0, so consumers can enable its optional `forge`
+  repository inventory without carrying a second fleetix release.
+
 ## [0.6.1] - 2026-10-29
 
 ### Changed
