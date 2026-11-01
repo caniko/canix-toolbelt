@@ -244,6 +244,21 @@
           routes = [
             {
               match = {
+                paths = [
+                  {
+                    type = "exact";
+                    value = "/cache";
+                  }
+                ];
+                absentQueryParams = [];
+              };
+              action = {
+                type = "proxy";
+                endpoint = "private-cache";
+              };
+            }
+            {
+              match = {
                 paths = [];
                 absentQueryParams = [];
               };
@@ -492,6 +507,11 @@ in
         name = "public-access-gate";
         assertion = edge1Servers.public.cidrAllowlist == ["203.0.113.0/24"] && edge1Servers.public.cidrExemptHosts == ["direct.example.test"] && hub.config.canix-toolbelt.services.caddy.servers.vpn.cidrAllowlist == [];
         message = "public Cloudflare sites need an edge gate, direct hosts an exemption, and VPN no Cloudflare gate";
+      }
+      {
+        name = "vpn-dial";
+        assertion = (handler "reverse_proxy" (builtins.head hub.config.canix-toolbelt.services.caddy.servers.vpn.routes)).upstreams == [{dial = "198.51.100.1:9300";}];
+        message = "VPN-bound endpoints must dial their target's wg-home address";
       }
       {
         name = "remote-via-dial";

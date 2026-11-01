@@ -19,6 +19,11 @@
     address =
       if selected.bind == "loopback"
       then "127.0.0.1"
+      else if selected.bind == "vpn"
+      then
+        if (target.wgHomeIp or null) != null
+        then target.wgHomeIp
+        else throw "canix-toolbelt Caddy registry: VPN endpoint `${selectedName}` target `${selected.targetHost}` has no wgHomeIp"
       else target.lanIp or (throw "canix-toolbelt Caddy registry: LAN endpoint `${selectedName}` target `${selected.targetHost}` has no lanIp");
   in
     selected
@@ -41,10 +46,13 @@
 
   # The address resolveEndpoint dials for an already-selected endpoint.
   dialAddress = dial: let
+    target = config.canix-toolbelt.hosts.${dial.targetHost} or {};
     address =
       if dial.bind == "loopback"
       then "127.0.0.1"
-      else (config.canix-toolbelt.hosts.${dial.targetHost} or {}).lanIp or dial.targetHost;
+      else if dial.bind == "vpn" && (target.wgHomeIp or null) != null
+      then target.wgHomeIp
+      else target.lanIp or dial.targetHost;
   in "${address}:${toString dial.port}";
 
   proxyEndpointNames = route: [route.action.endpoint] ++ route.action.fallbackEndpoints;
