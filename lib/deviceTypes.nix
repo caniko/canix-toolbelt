@@ -1,1 +1,1 @@
-["server" "desktop" "laptop"]
+["server" "desktop" "laptop" "worker"]
