@@ -9725,16 +9725,16 @@
       "locked": {
         "lastModified": 1772780728,
         "narHash": "sha256-fCm4sOeTDf3kBtYMmU4OHsviI/oF8rMbPkUMcQf6lw4=",
-        "owner": "viperML",
-        "repo": "wrapper-manager",
+        "ref": "refs/heads/master",
         "rev": "51ad0422b925d830bf4af36979fed51209f79c0a",
-        "type": "github"
+        "revCount": 87,
+        "type": "git",
+        "url": "https://codeberg.org/viperML/wrapper-manager"
       },
       "original": {
-        "owner": "viperML",
-        "repo": "wrapper-manager",
         "rev": "51ad0422b925d830bf4af36979fed51209f79c0a",
-        "type": "github"
+        "type": "git",
+        "url": "https://codeberg.org/viperML/wrapper-manager"
       }
     }
   },

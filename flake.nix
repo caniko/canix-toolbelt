@@ -55,8 +55,9 @@
     # Home-manager module helpers (canix-toolbelt.homeModules.chromium-gpu)
     # build their wrappers with wrapper-manager. Pinned to match consumers;
     # wrapper-manager has no nixpkgs input of its own (it takes `pkgs` at the
-    # call site), so there is nothing to `follows`.
-    wrapper-manager.url = "github:viperML/wrapper-manager/51ad0422b925d830bf4af36979fed51209f79c0a";
+    # call site), so there is nothing to `follows`. The GitHub repository is
+    # gone; Codeberg is upstream's home and carries the same revision.
+    wrapper-manager.url = "git+https://codeberg.org/viperML/wrapper-manager?rev=51ad0422b925d830bf4af36979fed51209f79c0a";
     plinth = {
       url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
     };
@@ -241,6 +242,7 @@
             gpu-routes-eval = import ./nixos-tests/gpu-routes-eval.nix {inherit inputs pkgs;};
             direct-link-eval = import ./nixos-tests/direct-link-eval.nix {inherit pkgs;};
             gpu-backends-eval = import ./nixos-tests/gpu-backends-eval.nix {inherit inputs pkgs;};
+            gpu-steam-quirk-eval = import ./nixos-tests/gpu-steam-quirk-eval.nix {inherit inputs pkgs;};
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
