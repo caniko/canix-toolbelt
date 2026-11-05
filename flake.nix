@@ -187,6 +187,7 @@
           domain = "canix-toolbelt.tartanoglu.com";
           configPath = ./website/plinth-project.toml;
         };
+        protonWow64 = pkgs.callPackage ./nix/proton-wow64.nix {};
       in {
         # The Claude subscription output explicitly depends on this proprietary
         # executable. Keep its permission pure and limited to that package.
@@ -307,8 +308,8 @@
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
-        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {};
-        packages.proton-wow64 = pkgs.callPackage ./nix/proton-wow64.nix {};
+        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {proton = protonWow64;};
+        packages.proton-wow64 = protonWow64;
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.opencode-with-claude = pkgs.callPackage ./nix/opencode-with-claude {};

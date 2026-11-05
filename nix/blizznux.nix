@@ -12,6 +12,7 @@
   libsoup_3,
   librsvg,
   pango,
+  vulkan-loader,
   webkitgtk_4_1,
   # BlizzNux pins and downloads its own Proton at runtime. Use a Nix-provided
   # compatibility tool instead, so the version is reproducible and nothing is
@@ -39,16 +40,24 @@ rustPlatform.buildRustPackage rec {
   buildInputs = [cairo gdk-pixbuf glib gtk3 libsoup_3 librsvg pango webkitgtk_4_1];
 
   # `blizznux-run` installs and launches Battle.net through umu-launcher, and
-  # would fetch its own Proton into the user's data directory. A symlink under
-  # $out keeps the wrapper's existing path handling (find_proton, doctor) while
-  # resolving to the Nix-provided tool, so the Proton download never happens.
-  # umu-launcher stays a first-use download (see the package description).
-  postInstall = ''
+  # would fetch its own Proton into the user's data directory. The patch runs
+  # Proton directly (umu's Steam Runtime container cannot see the /nix/store
+  # this Wine lives in) and points it at a symlink under $out, so neither Wine
+  # nor umu is downloaded at runtime.
+  #
+  # `proton` is either a compatibility-tool package (proton-wow64) or one with a
+  # separate `steamcompattool` output (proton-ge-bin).
+  postInstall = let
+    protonTool =
+      proton.steamcompattool or proton;
+  in ''
+    patch -p1 < ${./blizznux-run.patch}
     install -d $out/share/blizznux/proton
-    ln -s ${proton.steamcompattool} $out/share/blizznux/proton/${proton.version}
+    ln -s ${protonTool} $out/share/blizznux/proton/${proton.name}
     substituteInPlace bin/blizznux-run \
       --replace-fail 'PROTON_DIR=$DATA_DIR/proton' "PROTON_DIR=$out/share/blizznux/proton" \
-      --replace-fail 'PROTON_NAME=proton-$PROTON_VERSION-x86_64' "PROTON_NAME=${proton.version}"
+      --replace-fail 'PROTON_NAME=proton-$PROTON_VERSION-x86_64' "PROTON_NAME=${proton.name}" \
+      --replace-fail '@vulkanLib@' "${vulkan-loader}/lib"
 
     install -Dm755 bin/blizznux-run $out/bin/blizznux-run
     install -Dm644 share/applications/com.blizznux.launcher.desktop $out/share/applications/com.blizznux.launcher.desktop
