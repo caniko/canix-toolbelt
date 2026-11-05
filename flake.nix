@@ -307,6 +307,7 @@
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
+        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {};
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.opencode-with-claude = pkgs.callPackage ./nix/opencode-with-claude {};
