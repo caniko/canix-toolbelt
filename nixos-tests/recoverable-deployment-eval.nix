@@ -68,7 +68,7 @@
   runName = "recoverable-deployment-atlas";
   recoverName = "recoverable-deployment-atlas-recover";
   deployment = enabled.services.recoverable-deployment.deployments.atlas;
-  policy = builtins.fromJSON (builtins.toJSON deployment.policy);
+  inherit (deployment) policy;
   run = enabled.systemd.services.${runName};
   recover = enabled.systemd.services.${recoverName};
   timer = enabled.systemd.timers.${recoverName};
@@ -137,7 +137,7 @@
     };
   homeEnabled = homeDeployment {};
   homeDeploymentConfig = homeEnabled.services.recoverable-deployment.deployments.atlas;
-  homePolicy = builtins.fromJSON (builtins.toJSON homeDeploymentConfig.policy);
+  homePolicy = homeDeploymentConfig.policy;
   homeRun = homeEnabled.systemd.user.services.${runName};
   homeRecover = homeEnabled.systemd.user.services.${recoverName};
   homeTimer = homeEnabled.systemd.user.timers.${recoverName};

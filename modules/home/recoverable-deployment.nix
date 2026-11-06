@@ -28,7 +28,7 @@
         healthIntervalSeconds
         ;
       backend = "home-manager";
-      profilePath = profilePath;
+      inherit profilePath;
       currentSystemPath = profilePath;
       nixStore = "${pkgs.nix}/bin/nix-store";
       nixEnv = "${pkgs.nix}/bin/nix-env";
