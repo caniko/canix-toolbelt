@@ -251,6 +251,7 @@
             dns-pages-zone-eval = import ./nixos-tests/dns-pages-zone-eval.nix {inherit inputs pkgs;};
             dns-publication-eval = import ./nixos-tests/dns-publication-eval.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
+            recoverable-deployment-eval = import ./nixos-tests/recoverable-deployment-eval.nix {inherit inputs pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
             home-manager-backup-repair = import ./nixos-tests/home-manager-backup-repair.nix {inherit pkgs;};
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};

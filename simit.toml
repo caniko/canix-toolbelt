@@ -82,6 +82,7 @@ nix_builds = [
   ".#checks.x86_64-linux.structure-check",
   ".#checks.x86_64-linux.project-tree-eval",
   ".#checks.x86_64-linux.activation-contracts-eval",
+  ".#checks.x86_64-linux.recoverable-deployment-eval",
   ".#checks.x86_64-linux.check-helpers",
   ".#checks.x86_64-linux.activation-manifest-eval",
   ".#checks.x86_64-linux.home-manager-backup-repair",
@@ -233,6 +234,7 @@ services = [
 ]
 platform = [
   ".#checks.x86_64-linux.activation-contracts-eval",
+  ".#checks.x86_64-linux.recoverable-deployment-eval",
   ".#checks.x86_64-linux.check-helpers",
   ".#checks.x86_64-linux.activation-manifest-eval",
   ".#checks.x86_64-linux.home-manager-backup-repair",
