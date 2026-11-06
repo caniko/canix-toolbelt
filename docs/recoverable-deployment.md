@@ -122,8 +122,11 @@ while a request exists. Queued requests are also considered at startup, gated by
 service remains available for an explicit start; requests are never generated
 in the Nix store.
 
-Only activation-lock contention (worker exit 75) schedules an automatic retry
-after 30 seconds. Denied, invalid, unsafe or restored requests do not loop.
+Only activation-lock contention (worker exit 75) schedules an automatic run
+retry after 30 seconds. Recovery units accept 75 as a deferred scan, so expected
+contention during activation does not mark a service failed; the periodic timer
+retries recovery. Deferral does not certify restoration. Other recovery failures
+still fail the unit. Denied, invalid, unsafe or restored requests do not loop.
 
 Recovery is installed independently of the deploying terminal. The run service
 has `OnFailure=recoverable-deployment-atlas-recover.service`, the recover

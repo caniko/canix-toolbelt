@@ -231,6 +231,7 @@ in
           && !(run.serviceConfig ? RuntimeDirectory)
           && !(run.serviceConfig ? ExecStopPost)
           && !(run.serviceConfig ? Restart)
+          && !(run.serviceConfig ? SuccessExitStatus)
           && run.serviceConfig.RestartForceExitStatus == [75]
           && run.serviceConfig.RestartSec == "30s";
         message = "The root run service must be a bounded oneshot with fixed policy/request arguments and no privilege or sandbox switch.";
@@ -242,6 +243,7 @@ in
           == "oneshot"
           && recover.serviceConfig.ExecStart == expectedRecover
           && recover.serviceConfig.KillMode == "control-group"
+          && recover.serviceConfig.SuccessExitStatus == [75]
           && recover.serviceConfig.TimeoutStartSec == expectedTimeout
           && !(recover.serviceConfig ? ExecStopPost)
           && !(recover.serviceConfig ? RuntimeDirectory)
@@ -340,10 +342,12 @@ in
           && homeRun.Service.RestartForceExitStatus == [75]
           && homeRun.Service.RestartSec == "30s"
           && !(homeRun.Service ? Restart)
+          && !(homeRun.Service ? SuccessExitStatus)
           && homeRun.Service.TimeoutStartSec == homeExpectedTimeout
           && !(homeRun.Service ? User)
           && !(homeRun.Service ? DynamicUser)
           && homeRecover.Install.WantedBy == ["default.target"]
+          && homeRecover.Service.SuccessExitStatus == [75]
           && homeTimer.Install.WantedBy == ["timers.target"]
           && homeTimer.Timer.OnBootSec == "30s"
           && homeTimer.Timer.OnUnitInactiveSec == "60s"

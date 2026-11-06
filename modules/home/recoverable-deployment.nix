@@ -68,20 +68,22 @@
       }
     ];
 
-  serviceConfig = deployment: arguments: {
-    Service = {
-      Type = "oneshot";
-      ExecStart = lib.escapeShellArgs arguments;
-      TimeoutStartSec = timeoutFor deployment;
-      TimeoutStopSec = 90;
-      KillMode = "control-group";
-      RestartForceExitStatus = [75];
-      RestartSec = "30s";
-      # Home Manager activation writes inside the user profile and state
-      # directories. Keep the ordinary user environment instead of sandboxing
-      # it away.
-      Environment = ["PATH=${lib.makeBinPath [pkgs.nix pkgs.coreutils pkgs.systemd]}"];
-    };
+  serviceConfig = recovery: deployment: arguments: {
+    Service =
+      {
+        Type = "oneshot";
+        ExecStart = lib.escapeShellArgs arguments;
+        TimeoutStartSec = timeoutFor deployment;
+        TimeoutStopSec = 90;
+        KillMode = "control-group";
+        RestartForceExitStatus = [75];
+        RestartSec = "30s";
+        # Home Manager activation writes inside the user profile and state
+        # directories. Keep the ordinary user environment instead of sandboxing
+        # it away.
+        Environment = ["PATH=${lib.makeBinPath [pkgs.nix pkgs.coreutils pkgs.systemd]}"];
+      }
+      // lib.optionalAttrs recovery {SuccessExitStatus = [75];};
   };
 in {
   options.services.recoverable-deployment.deployments = mkOption {
@@ -112,7 +114,7 @@ in {
               };
               Install.WantedBy = lib.optionals deployment.watchRequest ["default.target"];
             }
-            // serviceConfig deployment (shared.runArguments {
+            // serviceConfig false deployment (shared.runArguments {
               binary = shared.binary deployment.package;
               inherit (deployment) policyFile requestPath;
             })))
@@ -124,7 +126,7 @@ in {
               Unit.Description = "Recover unsettled deployment ${deployment.target}";
               Install.WantedBy = ["default.target"];
             }
-            // serviceConfig deployment (shared.recoverArguments {
+            // serviceConfig true deployment (shared.recoverArguments {
               binary = shared.binary deployment.package;
               inherit (deployment) policyFile;
             })))

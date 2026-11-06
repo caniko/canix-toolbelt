@@ -71,20 +71,27 @@
     deployment,
     description,
     arguments,
+    recovery ? false,
   }: {
     inherit description;
     # Root-owned activation needs the normal NixOS environment. Do not add
     # sandboxing that would block /etc, /run or profile writes.
     path = [config.nix.package pkgs.coreutils pkgs.systemd];
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = lib.escapeShellArgs arguments;
-      TimeoutStartSec = timeoutFor deployment;
-      TimeoutStopSec = 90;
-      KillMode = "control-group";
-      RestartForceExitStatus = [75];
-      RestartSec = "30s";
-    };
+    serviceConfig =
+      {
+        Type = "oneshot";
+        ExecStart = lib.escapeShellArgs arguments;
+        TimeoutStartSec = timeoutFor deployment;
+        TimeoutStopSec = 90;
+        KillMode = "control-group";
+        RestartForceExitStatus = [75];
+        RestartSec = "30s";
+      }
+      // lib.optionalAttrs recovery {
+        # An activation holding the shared lock is expected during a scan, not
+        # a failed service that should make switch-to-configuration fail.
+        SuccessExitStatus = [75];
+      };
   };
 in {
   options.services.recoverable-deployment.deployments = mkOption {
@@ -153,6 +160,7 @@ in {
         in
           lib.nameValuePair recoverName ((serviceFor {
               inherit deployment;
+              recovery = true;
               description = "Recover unsettled deployment ${deployment.target}";
               arguments = shared.recoverArguments {
                 binary = shared.binary deployment.package;
