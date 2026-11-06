@@ -109,6 +109,21 @@
   activeAssertions = assertions:
     lib.filter (entry: !entry.assertion && lib.hasPrefix "Recoverable deployment 'atlas'" entry.message) assertions;
 
+  submissionFixture = overrides:
+    evaluateNixos {
+      users.users.fixture.isNormalUser = true;
+      services.recoverable-deployment.deployments.atlas =
+        (builtins.removeAttrs nixosBase ["requestPath"])
+        // {requestUsers = ["fixture"];}
+        // overrides;
+    };
+  submission = submissionFixture {};
+  submissionConfig = submission.services.recoverable-deployment.deployments.atlas;
+  submissionGroup = "fleetix-${builtins.substring 0 24 (builtins.hashString "sha256" "atlas")}";
+  noSubmissionWatch = submissionFixture {watchRequest = false;};
+  unsafeSubmissionPath = submissionFixture {requestPath = "/etc/request.json";};
+  unknownSubmitter = submissionFixture {requestUsers = ["undeclared-user"];};
+
   evaluateHome = overrides:
     (inputs.home-manager.lib.homeManagerConfiguration {
       inherit pkgs;
@@ -148,13 +163,9 @@
   };
   homeWatchOff = homeDeployment {watchRequest = false;};
   homeOutside = homeDeployment {stateRoot = "/var/lib/fleetix/deployment/atlas";};
-  homeMissing = homeDeployment {
-    package = null;
-    admissionCommand = [];
-    healthCommand = [];
-  };
-  homeActiveAssertions = assertions:
-    lib.filter (entry: !entry.assertion && lib.hasPrefix "Recoverable deployment" entry.message) assertions;
+  homeMissing = homeDeployment {package = null;};
+  homeNoAdmission = homeDeployment {admissionCommand = [];};
+  homeNoHealth = homeDeployment {healthCommand = [];};
 in
   mkEvalCheck {
     name = "recoverable-deployment-eval";
@@ -354,16 +365,39 @@ in
           && homePath.Install.WantedBy == ["paths.target"]
           && !(homeWatchOff.systemd.user.paths ? ${runName})
           && homeWatchOff.systemd.user.services ? ${runName}
-          && lib.any (entry: !entry.assertion && lib.hasInfix "inside the Home Manager" entry.message) (homeActiveAssertions homeOutside.assertions)
-          && lib.any (entry: !entry.assertion && lib.hasInfix "explicit package" entry.message) (homeActiveAssertions homeMissing.assertions)
-          && lib.any (entry: !entry.assertion && lib.hasInfix "admission command" entry.message) (homeActiveAssertions homeMissing.assertions)
-          && lib.any (entry: !entry.assertion && lib.hasInfix "health command" entry.message) (homeActiveAssertions homeMissing.assertions);
+          # Home Manager rejects invalid configurations before exposing config.
+          && !(builtins.tryEval homeOutside.assertions).success
+          && !(builtins.tryEval homeMissing.assertions).success
+          && !(builtins.tryEval homeNoAdmission.assertions).success
+          && !(builtins.tryEval homeNoHealth.assertions).success;
         message = "The user path watch is optional and every writable user path stays inside home.";
       }
       {
         name = "all-enabled-assertions";
         assertion = lib.all (entry: entry.assertion) enabled.assertions && lib.all (entry: entry.assertion) homeEnabled.assertions;
         message = "Enabled NixOS and Home Manager fixtures must satisfy every generated assertion.";
+      }
+      {
+        name = "no-sudo-submission";
+        assertion =
+          submissionConfig.requestPath
+          == "/var/lib/fleetix-requests/atlas/request.json"
+          && submission.users.groups.${submissionGroup}.members == ["fixture"]
+          && lib.elem "d /var/lib/fleetix-requests/atlas 2770 root ${submissionGroup} - -" submission.systemd.tmpfiles.rules
+          && submission.systemd.paths.${runName}.pathConfig.PathChanged == submissionConfig.requestPath
+          && submissionConfig.policy == policy
+          && submission.security.sudo.extraRules == pristine.security.sudo.extraRules
+          && submission.security.polkit.extraConfig == pristine.security.polkit.extraConfig
+          && lib.all (entry: entry.assertion) submission.assertions;
+        message = "Named users may nominate requests through a dedicated inbox, never bypassing the fixed policy or receiving sudo/polkit authority.";
+      }
+      {
+        name = "submission-boundary";
+        assertion =
+          lib.any (entry: lib.hasInfix "request watch" entry.message) (activeAssertions noSubmissionWatch.assertions)
+          && lib.any (entry: lib.hasInfix "managed request inbox" entry.message) (activeAssertions unsafeSubmissionPath.assertions)
+          && lib.any (entry: lib.hasInfix "declared users" entry.message) (activeAssertions unknownSubmitter.assertions);
+        message = "No-sudo submission requires its managed watcher/inbox and explicitly declared users.";
       }
     ];
   }

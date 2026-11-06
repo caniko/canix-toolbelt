@@ -9,6 +9,9 @@
   cfg = config.services.recoverable-deployment;
   active = lib.filterAttrs (_: deployment: deployment.enable) cfg.deployments;
   watched = lib.filterAttrs (_: deployment: deployment.watchRequest) active;
+  submitted = lib.filterAttrs (_: deployment: deployment.requestUsers != []) active;
+  inbox = name: "/var/lib/fleetix-requests/${name}";
+  requestGroup = name: "fleetix-${builtins.substring 0 24 (builtins.hashString "sha256" name)}";
 
   profilePath = "/nix/var/nix/profiles/system";
   currentSystemPath = "/run/current-system";
@@ -36,13 +39,30 @@
     name,
     config,
     ...
-  }:
-    shared.mkDeploymentOptions {
-      inherit name config pkgs;
-      defaultStateRoot = "/var/lib/fleetix/deployment/${name}";
-      defaultLockPath = "/run/lock/fleetix-deployment.lock";
-      inherit policyFor;
+  }: {
+    imports = [
+      (shared.mkDeploymentOptions {
+        inherit name config pkgs;
+        defaultStateRoot = "/var/lib/fleetix/deployment/${name}";
+        defaultLockPath = "/run/lock/fleetix-deployment.lock";
+        inherit policyFor;
+      })
+    ];
+    options.requestUsers = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = ''
+        Declared users allowed to submit activation requests without sudo.
+        They receive write access only to this deployment's managed request
+        inbox. The fixed worker still requires admission and health checks.
+      '';
     };
+    config.requestPath = lib.mkDefault (
+      if config.requestUsers == []
+      then ""
+      else "${inbox name}/request.json"
+    );
+  };
 
   timeoutFor = deployment:
     shared.timeoutStartSeconds deployment.commandTimeoutSeconds deployment.healthTimeoutSeconds;
@@ -79,9 +99,34 @@ in {
 
   config = lib.mkMerge [
     {
-      assertions = lib.concatLists (lib.mapAttrsToList (name: deployment: shared.assertions {inherit name deployment;}) active);
+      assertions = lib.concatLists (lib.mapAttrsToList (name: deployment:
+        shared.assertions {inherit name deployment;}
+        ++ lib.optionals (deployment.requestUsers != []) [
+          {
+            assertion = deployment.watchRequest;
+            message = "Recoverable deployment '${name}' needs its request watch for no-sudo activation.";
+          }
+          {
+            assertion = deployment.requestPath == "${inbox name}/request.json";
+            message = "Recoverable deployment '${name}' must use its managed request inbox for no-sudo activation.";
+          }
+          {
+            assertion = lib.all (user: builtins.hasAttr user config.users.users) deployment.requestUsers;
+            message = "Recoverable deployment '${name}' requestUsers must name declared users.";
+          }
+        ])
+      active);
     }
     {
+      # Nomination authority is filesystem-scoped, not a sudo/polkit rule.
+      # Keep this inbox outside the worker's private journal hierarchy.
+      users.groups = lib.mapAttrs' (name: deployment:
+        lib.nameValuePair (requestGroup name) {members = lib.unique deployment.requestUsers;})
+      submitted;
+      systemd.tmpfiles.rules =
+        lib.optional (submitted != {}) "d /var/lib/fleetix-requests 0755 root root - -"
+        ++ lib.mapAttrsToList (name: _: "d ${inbox name} 2770 root ${requestGroup name} - -") submitted;
+
       systemd.services =
         lib.mapAttrs' (name: deployment: let
           runName = shared.runServiceName name;

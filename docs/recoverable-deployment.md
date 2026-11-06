@@ -140,6 +140,41 @@ existing directories or replacing shared anchors. Provision custom lock
 parents through their owning configuration. Never remove an anchor to resolve
 contention; every deployment frontend on the host must share the same anchor.
 
+## Activation without sudo
+
+For NixOS, explicitly name existing users on the same deployment policy:
+
+```nix
+services.recoverable-deployment.deployments.atlas.requestUsers = ["can"];
+```
+
+With `requestUsers` set, omit a custom `requestPath`: the module provisions
+`/var/lib/fleetix-requests/atlas/request.json` in a root-owned, group-writable
+inbox for exactly those users. It requires the fixed request watcher. Group
+membership changes take effect in a new login session.
+
+An authorized user publishes a complete versioned Fleetix request atomically;
+the watcher starts the root worker automatically. For an already prepared
+`request.json`, these Nu-compatible commands need no sudo:
+
+```nu
+let inbox = "/var/lib/fleetix-requests/atlas"
+let pending = (^mktemp $"($inbox)/request.XXXXXXXX")
+^install -m 0600 request.json $pending
+^mv -T $pending $"($inbox)/request.json"
+```
+
+This grants **nomination**, not approval. The same installed admission command
+must approve the exact candidate and captured generations; the same health,
+retention and recovery rules apply. Users cannot change the policy, worker argv
+or private journal. Outsiders cannot write the inbox. No sudo/polkit rule or
+general `systemctl` activation permission is added. An empty `requestUsers`
+list grants nothing and preserves administrator-provisioned request paths.
+
+Home Manager already runs as its owner without sudo: publish the same request
+to its configured home-directory inbox and let its user path unit start the
+fixed-policy user worker.
+
 ## Home Manager
 
 ```nix
