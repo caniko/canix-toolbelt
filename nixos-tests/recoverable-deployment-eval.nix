@@ -72,6 +72,7 @@
   run = enabled.systemd.services.${runName};
   recover = enabled.systemd.services.${recoverName};
   timer = enabled.systemd.timers.${recoverName};
+  startupTimer = enabled.systemd.timers.${runName};
   pathUnit = enabled.systemd.paths.${runName};
   expectedTimeout = lib.max 7200 (16 * deployment.commandTimeoutSeconds + 3 * deployment.healthTimeoutSeconds + 180);
   expectedRun = lib.escapeShellArgs [
@@ -177,6 +178,7 @@ in
           !(disabled.systemd.services ? ${runName})
           && !(disabled.systemd.services ? ${recoverName})
           && !(disabled.systemd.timers ? ${recoverName})
+          && !(disabled.systemd.timers ? ${runName})
           && !(disabled.systemd.paths ? ${runName})
           && !(lib.any (rule: lib.hasInfix disabled.services.recoverable-deployment.deployments.atlas.stateRoot rule) disabled.systemd.tmpfiles.rules);
         message = "A deployment must add no units or state rules until explicitly enabled.";
@@ -221,6 +223,8 @@ in
           && run.serviceConfig.ExecStart == expectedRun
           && run.serviceConfig.KillMode == "control-group"
           && run.serviceConfig.TimeoutStartSec == expectedTimeout
+          && !run.restartIfChanged
+          && run.wantedBy == []
           && run.onFailure == ["${recoverName}.service"]
           && !(run.serviceConfig ? User)
           && !(run.serviceConfig ? DynamicUser)
@@ -245,9 +249,10 @@ in
           && recover.serviceConfig.KillMode == "control-group"
           && recover.serviceConfig.SuccessExitStatus == [75]
           && recover.serviceConfig.TimeoutStartSec == expectedTimeout
+          && !recover.restartIfChanged
           && !(recover.serviceConfig ? ExecStopPost)
           && !(recover.serviceConfig ? RuntimeDirectory)
-          && lib.elem "multi-user.target" recover.wantedBy
+          && recover.wantedBy == []
           && lib.elem "local-fs.target" recover.after
           && timer.wantedBy == ["timers.target"]
           && timer.timerConfig.OnBootSec == "30s"
@@ -277,7 +282,10 @@ in
           && pathUnit.pathConfig.Unit == "${runName}.service"
           && pathUnit.wantedBy == ["paths.target"]
           && run.unitConfig.ConditionPathExists == nixosBase.requestPath
-          && lib.elem "multi-user.target" run.wantedBy
+          && startupTimer.wantedBy == ["timers.target"]
+          && startupTimer.timerConfig.OnBootSec == "30s"
+          && startupTimer.timerConfig.Unit == "${runName}.service"
+          && !(watchOff.systemd.timers ? ${runName})
           && !(watchOff.systemd.paths ? ${runName})
           && watchOff.systemd.services ? ${runName};
         message = "The request path watch must be optional while leaving the run service available.";

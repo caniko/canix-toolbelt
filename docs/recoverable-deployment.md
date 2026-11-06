@@ -94,6 +94,9 @@ the whole activation process tree. The service keeps the ordinary root
 environment needed for NixOS activation and Home Manager writes; this module
 does not apply sandboxing that would block `/etc`, `/run`, `/nix` or profile
 writes.
+NixOS workers are not restarted when their installed unit changes: the current
+transaction finishes under its retained policy and the next invocation uses the
+new unit.
 
 `TimeoutStartSec` is
 
@@ -113,6 +116,7 @@ the recovery unit. The unit set for an enabled deployment named `atlas` is:
 - `recoverable-deployment-atlas-recover.service` — recover unsettled
   transactions;
 - `recoverable-deployment-atlas.path` — optional `PathChanged` watch;
+- `recoverable-deployment-atlas.timer` — optional queued-request boot trigger;
 - `recoverable-deployment-atlas-recover.timer` — bounded periodic recovery.
 
 The path unit is installed by default and can be disabled with
@@ -130,9 +134,11 @@ still fail the unit. Denied, invalid, unsafe or restored requests do not loop.
 
 Recovery is installed independently of the deploying terminal. The run service
 has `OnFailure=recoverable-deployment-atlas-recover.service`, the recover
-service is wanted by `multi-user.target` at boot, and the timer runs the same
-recover service after `OnBootSec=30s` and every `OnUnitInactiveSec=60s`. The
-timer exists because a boot or `OnFailure` attempt can lose activation-lock
+service is triggered at boot by its timer after `OnBootSec=30s` and every
+`OnUnitInactiveSec=60s`. Queued requests have a separate boot-only timer when
+`watchRequest` is enabled. Neither NixOS worker is wanted by `multi-user.target`:
+the switcher starts active targets and would wait on its own activation oneshot.
+The timer exists because a boot or `OnFailure` attempt can lose activation-lock
 contention; the next inactive interval retries the same fixed-policy worker.
 The recover worker scans only unsettled journals, treats completed transactions
 as no-ops and does not perform root mutations beyond retaining its own log. The

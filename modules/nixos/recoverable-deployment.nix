@@ -74,6 +74,8 @@
     recovery ? false,
   }: {
     inherit description;
+    # A worker must finish under its frozen policy, even if its unit changes.
+    restartIfChanged = false;
     # Root-owned activation needs the normal NixOS environment. Do not add
     # sandboxing that would block /etc, /run or profile writes.
     path = [config.nix.package pkgs.coreutils pkgs.systemd];
@@ -150,7 +152,6 @@ in {
             })
             // {
               onFailure = ["${recoverName}.service"];
-              wantedBy = lib.optionals deployment.watchRequest ["multi-user.target"];
               unitConfig.ConditionPathExists = deployment.requestPath;
             }
           ))
@@ -168,25 +169,39 @@ in {
               };
             })
             // {
-              wantedBy = ["multi-user.target"];
               after = ["local-fs.target"];
             }))
         active;
 
-      systemd.timers = lib.mapAttrs' (name: deployment: let
-        recoverName = shared.recoverServiceName name;
-      in
-        lib.nameValuePair recoverName {
-          description = "Periodic recovery scan for deployment ${deployment.target}";
-          wantedBy = ["timers.target"];
-          timerConfig = {
-            OnBootSec = "30s";
-            OnUnitInactiveSec = "60s";
-            AccuracySec = "1s";
-            Unit = "${recoverName}.service";
-          };
-        })
-      active;
+      # Do not put activation oneshots in multi-user.target.wants: the NixOS
+      # switcher starts active targets and would wait for its own worker.
+      systemd.timers =
+        (lib.mapAttrs' (name: deployment: let
+          recoverName = shared.recoverServiceName name;
+        in
+          lib.nameValuePair recoverName {
+            description = "Periodic recovery scan for deployment ${deployment.target}";
+            wantedBy = ["timers.target"];
+            timerConfig = {
+              OnBootSec = "30s";
+              OnUnitInactiveSec = "60s";
+              AccuracySec = "1s";
+              Unit = "${recoverName}.service";
+            };
+          })
+        active)
+        // lib.mapAttrs' (name: deployment: let
+          runName = shared.runServiceName name;
+        in
+          lib.nameValuePair runName {
+            description = "Process queued deployment request for ${deployment.target} at boot";
+            wantedBy = ["timers.target"];
+            timerConfig = {
+              OnBootSec = "30s";
+              Unit = "${runName}.service";
+            };
+          })
+        watched;
 
       systemd.paths = lib.mapAttrs' (name: deployment: let
         runName = shared.runServiceName name;
