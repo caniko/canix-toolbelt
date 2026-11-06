@@ -245,9 +245,7 @@ in
       {
         name = "state-and-lock";
         assertion =
-          !(lib.any (rule: lib.hasInfix deployment.stateRoot rule) enabled.systemd.tmpfiles.rules)
-          && !(lib.any (rule: lib.hasInfix "/run/lock/fleetix-deployment.lock" rule) enabled.systemd.tmpfiles.rules)
-          && !(lib.any (rule: lib.hasPrefix "f+ " rule || lib.hasPrefix "r " rule || lib.hasPrefix "R " rule) enabled.systemd.tmpfiles.rules);
+          enabled.systemd.tmpfiles.rules == pristine.systemd.tmpfiles.rules;
         message = "The owner-checking worker, not chmodding tmpfiles rules, must create private state and missing lock anchors.";
       }
       {
