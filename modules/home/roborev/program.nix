@@ -372,8 +372,21 @@ in {
         done
         roborev_config="$roborev_dir/config.toml"
         if [[ -e "$roborev_config" || -L "$roborev_config" ]]; then
-          roborev_old="''${oldGenPath:-}/home-files/"${escapeShellArg "${lib.removePrefix "${config.home.homeDirectory}/" cfg.dataDir}/config.toml"}
-          if [[ ! -L "$roborev_config" || ! -e "$roborev_old" || "$(${pkgs.coreutils}/bin/readlink -f "$roborev_config")" != "$(${pkgs.coreutils}/bin/readlink -f "$roborev_old")" ]]; then
+          roborev_rel=${escapeShellArg "${lib.removePrefix "${config.home.homeDirectory}/" cfg.dataDir}/config.toml"}
+          roborev_ok=0
+          if [[ -L "$roborev_config" ]]; then
+            roborev_actual="$(${pkgs.coreutils}/bin/readlink -f "$roborev_config")"
+            # The old generation owns the link normally. A prior activation of
+            # this generation may have linked it before failing later, leaving
+            # oldGenPath behind, so the new generation's file is also ours.
+            for roborev_gen in "''${oldGenPath:-}" "''${newGenPath:-}"; do
+              roborev_file="$roborev_gen/home-files/$roborev_rel"
+              if [[ -n "$roborev_gen" && -e "$roborev_file" && "$roborev_actual" == "$(${pkgs.coreutils}/bin/readlink -f "$roborev_file")" ]]; then
+                roborev_ok=1
+              fi
+            done
+          fi
+          if [[ "$roborev_ok" != 1 ]]; then
             echo "roborev: refusing unmanaged config.toml collision; preserve it before enabling the module" >&2
             exit 1
           fi
