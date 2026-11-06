@@ -107,7 +107,7 @@
   };
   timeoutRejected = builtins.tryEval (nixosDeployment {commandTimeoutSeconds = 3601;}).systemd.services.${runName}.serviceConfig.TimeoutStartSec;
   activeAssertions = assertions:
-    lib.filter (entry: lib.hasPrefix "Recoverable deployment 'atlas'" entry.message) assertions;
+    lib.filter (entry: !entry.assertion && lib.hasPrefix "Recoverable deployment 'atlas'" entry.message) assertions;
 
   evaluateHome = overrides:
     (inputs.home-manager.lib.homeManagerConfiguration {
@@ -154,7 +154,7 @@
     healthCommand = [];
   };
   homeActiveAssertions = assertions:
-    lib.filter (entry: lib.hasPrefix "Recoverable deployment" entry.message) assertions;
+    lib.filter (entry: !entry.assertion && lib.hasPrefix "Recoverable deployment" entry.message) assertions;
 in
   mkEvalCheck {
     name = "recoverable-deployment-eval";
@@ -287,9 +287,9 @@ in
         name = "timeout-bounds";
         assertion =
           expectedTimeout
-          >= 8 * deployment.commandTimeoutSeconds + 2 * deployment.healthTimeoutSeconds + 120
+          >= 16 * deployment.commandTimeoutSeconds + 3 * deployment.healthTimeoutSeconds + 180
           && expectedTimeout >= 7200
-          && customTimeouts.systemd.services.${runName}.serviceConfig.TimeoutStartSec == 36120
+          && customTimeouts.systemd.services.${runName}.serviceConfig.TimeoutStartSec == 68580
           && !timeoutRejected.success;
         message = "The service timeout must follow the configured worker budget and reject out-of-range timeouts.";
       }
