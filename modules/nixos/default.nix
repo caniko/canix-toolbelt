@@ -19,7 +19,6 @@
   fwupd = ./hardware/fwupd.nix;
   pipewire = ./hardware/pipewire.nix;
   btrfs-autoscrub = ./hardware/btrfs.nix;
-  disko-bcache-initrd = ./hardware/disko-bcache-initrd.nix;
 
   amd-sensors-boot = ./hardware/amd-sensors-boot.nix;
   boot-assessment = ./hardware/boot-assessment.nix;
