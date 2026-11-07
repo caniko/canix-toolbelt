@@ -26,7 +26,7 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=74f6eb09d2e010c6b75a8f8aab15b04e715bb10a";
+      url = "github:caniko/fleetix/031f4ac08de0524d93ff5aa9b1479e285bd8d528";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
