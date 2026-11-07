@@ -12,6 +12,7 @@
       "enable"
       "package"
       "user"
+      "serviceScope"
       "builder"
       "admissionContract"
       "runtimeDirectory"
