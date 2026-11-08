@@ -21,20 +21,32 @@
 }:
 rustPlatform.buildRustPackage rec {
   pname = "blizznux";
-  version = "0.2.40";
+  version = "0.2.42-unstable-2026-11-08";
 
+  # BlizzNux/launcher#47 (Labs: Wine WoW64 mode): its readiness check stops
+  # asking for 32-bit Vulkan drivers, which this WoW64-only Wine never loads.
+  # Back to a release tag once it ships in one.
   src = fetchFromGitHub {
     owner = "BlizzNux";
     repo = "launcher";
-    tag = "v${version}";
-    hash = "sha256-ryFx1rj1z5vIHTad9oR9S96Q1EbZIrKl00m1lLLRqJk=";
+    rev = "53eccbd6e734aadf6fe5c14aed71e2828dc67db0";
+    hash = "sha256-2NUG/j5kV4udqcr+GPNW+KsRFUXf7dUP+2YtNWjeAcU=";
   };
 
   # The UI is static (ui/), so the Tauri binary is the only build product; its
   # resource lookup falls back to `$out/bin/blizznux-run` next to the binary.
   cargoRoot = "src-tauri";
   buildAndTestSubdir = "src-tauri";
-  cargoHash = "sha256-xAquLmQCEpk9DUZ2vOCunVG1LgYknvyiELI9jgbmBqw=";
+  cargoHash = "sha256-Fr3wiw1fGw9JTSyjWJYU7skEnmbcuQUJ2yaMjkuLqDI=";
+
+  # blizznux-run.patch moves the default prefix to Proton's <data>/pfx. The
+  # launcher must default there too: settings saved before the first install
+  # (the Labs toggle, say) write an empty PREFIX, and it would then look for
+  # Battle.net in a <data>/prefix that never gets it.
+  postPatch = ''
+    substituteInPlace src-tauri/src/lib.rs \
+      --replace-fail '.join("blizznux").join("prefix")' '.join("blizznux").join("pfx")'
+  '';
 
   nativeBuildInputs = [pkg-config wrapGAppsHook4];
   buildInputs = [cairo gdk-pixbuf glib gtk3 libsoup_3 librsvg pango webkitgtk_4_1];

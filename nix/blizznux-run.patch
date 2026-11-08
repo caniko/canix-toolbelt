@@ -1,5 +1,5 @@
---- a/bin/blizznux-run	2026-11-05 23:19:46.412718481 +0000
-+++ b/bin/blizznux-run	2026-11-05 23:20:07.709969609 +0000
+--- a/bin/blizznux-run	2026-11-08 14:27:52.503690932 +0100
++++ b/bin/blizznux-run	2026-11-08 14:38:35.461608527 +0100
 @@ -13,6 +13,7 @@
  # Blizzard's own download endpoint. The installer is never redistributed by this project.
  INSTALLER_URL='https://www.battle.net/download/getInstallerForGame?os=win&gameProgram=BATTLENET_APP&version=Live'
@@ -8,7 +8,7 @@
  # The umu-launcher release every install runs, kept in the launcher's data folder. A umu-launcher of the
  # system is not used: every distribution has another version, or none. Change the version and the checksum
  # together, here and in the Flatpak manifest, which carries the same release.
-@@ -172,7 +173,7 @@
+@@ -216,7 +217,7 @@
  }
  
  ensure_prefix() {
@@ -17,7 +17,7 @@
  	mkdir -p "$PREFIX"
  	[[ -f $CONFIG ]] || save_config
  }
-@@ -203,15 +204,26 @@
+@@ -247,10 +248,21 @@
  	own_umu || { fetch_umu >&2; echo "$UMU_DIR/umu-run"; }   # callers read the path from stdout
  }
  
@@ -39,6 +39,9 @@
 +	# Proton's launcher probes libvulkan through ctypes before Wine starts.
 +	export LD_LIBRARY_PATH=@vulkanLib@''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
  	gpu_env
+ 	# Labs (experimental, opt-in). BLIZZNUX_LAB tells the launcher which were on for this session.
+ 	if [[ $LAB_WOW64 == 1 ]]; then
+@@ -260,7 +272,7 @@
  	local inhibit=()
  	command -v systemd-inhibit >/dev/null && inhibit=(systemd-inhibit --what=idle:sleep --why="Battle.net is running")
  	log "proton: $proton"; log "prefix: $PREFIX"
@@ -47,20 +50,20 @@
  }
  
  cmd_install() {
-@@ -222,7 +234,11 @@
+@@ -271,7 +283,11 @@
  	log "downloading the Battle.net installer from Blizzard"
  	curl -fL --retry 3 --progress-bar -o "$setup" "$INSTALLER_URL"
  	log "running the installer: sign in when it asks; Battle.net opens when it is done"
 -	run_umu "$setup"
 +	# Proton launches a Windows path from inside the prefix; a path outside it
 +	# would go through umu's shim, which this package does not use.
-+	cp -f "$setup" "$PREFIX/drive_c/blizznux-setup.exe"
++	install -Dm644 "$setup" "$PREFIX/drive_c/blizznux-setup.exe"
 +	run_umu 'C:\blizznux-setup.exe'
 +	rm -f "$PREFIX/drive_c/blizznux-setup.exe"
  	[[ -f $PREFIX/$LAUNCHER_REL ]] || die "the installer finished but Battle.net was not found; run 'blizznux-run install' again"
  	log "installed"
  }
-@@ -240,9 +256,9 @@
+@@ -289,9 +305,9 @@
  	ensure_prefix
  	[[ -f $PREFIX/$LAUNCHER_REL ]] || cmd_install
  	if [[ -n $GAME ]]; then
@@ -72,7 +75,7 @@
  	fi
  }
  
-@@ -258,13 +274,7 @@
+@@ -307,13 +323,7 @@
  
  cmd_doctor() {
  	ensure_prefix
