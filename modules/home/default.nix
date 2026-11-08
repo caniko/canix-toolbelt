@@ -18,7 +18,6 @@
   # the backend permission object.
   agent-safety = ./agent-safety.nix;
   project-tree = ./project-tree.nix;
-  roborev = ./roborev;
   browser-connection = ./browser-connection.nix;
   pinentry = ./pinentry.nix;
   opencode-environment = ./opencode-environment.nix;

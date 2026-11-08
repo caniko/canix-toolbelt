@@ -146,15 +146,6 @@ jobs:
           CARGO_HOME: "/tmp/.cargo"
           RUSTDOCFLAGS: "-D warnings"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
-      - name: Required gate roborev-worker
-        timeout-minutes: 30
-        working-directory: .simit-release-source
-        env:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          XDG_CACHE_HOME: "/tmp/.cache"
-          CARGO_HOME: "/tmp/.cargo"
-          RUSTDOCFLAGS: "-D warnings"
-        run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
   publish-canix-toolbelt:
     needs: [verify-canix-toolbelt]
     runs-on: ubuntu-24.04

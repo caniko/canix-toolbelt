@@ -13,9 +13,6 @@ use std::{
 const REQUEST_MARKER: &str = "<!-- toolbelt-review-request:v1 ";
 const DISPOSITION_MARKER: &str = "<!-- toolbelt-review-disposition:v1 ";
 
-pub(super) mod roborev;
-pub(super) mod roborev_producer;
-
 /// Native GitHub REST transport. Credentials never enter persisted receipts.
 #[derive(Clone)]
 pub struct GitHub {

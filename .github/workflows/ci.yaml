@@ -187,23 +187,3 @@ jobs:
 
       - name: Required gate supported-systems
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
-
-  gate-roborev-worker:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-
-      - name: Configure GitHub input transport
-        run: |
-          git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
-          git config --global --add url.https://github.com/.insteadOf git@github.com:
-
-      - name: Required gate roborev-worker
-        run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh

@@ -5,6 +5,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Removed
+
+- Remove the Roborev review provider, worker crate, Home Manager module, Nix
+  packages and checks, fixtures, scripts and documentation. The `review`
+  feature now exposes only the explicitly selected Greptile provider.
+
 ## [0.6.2] - 2026-10-31
 
 ### Changed

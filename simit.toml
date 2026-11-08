@@ -25,11 +25,6 @@ nix_builds = [
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#checks.x86_64-linux.execution-protocol",
-  ".#canix-toolbelt-roborev-worker",
-  ".#roborev",
-  ".#checks.x86_64-linux.roborev-module",
-  ".#checks.x86_64-linux.roborev-unit",
-  ".#checks.x86_64-linux.roborev-shell",
   ".#opencode-browser-adapter",
   ".#opencode-with-claude",
   ".#checks.x86_64-linux.opencode-claude-eval",
@@ -168,13 +163,6 @@ core = [
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#checks.x86_64-linux.execution-protocol",
 ]
-roborev = [
-  ".#canix-toolbelt-roborev-worker",
-  ".#roborev",
-  ".#checks.x86_64-linux.roborev-module",
-  ".#checks.x86_64-linux.roborev-unit",
-  ".#checks.x86_64-linux.roborev-shell",
-]
 agents = [
   ".#opencode-browser-adapter",
   ".#opencode-with-claude",
@@ -278,11 +266,11 @@ status_context = "simit/producer-custody"
 
 [ci.custody.producers.CI]
 workflow = ".github/workflows/ci.yaml"
-jobs = ["test", "gate-crate-release", "gate-operator-regressions", "gate-generated-parity", "gate-supported-systems", "gate-roborev-worker"]
+jobs = ["test", "gate-crate-release", "gate-operator-regressions", "gate-generated-parity", "gate-supported-systems"]
 
 [ci.custody.producers."Nix installable builds"]
 workflow = ".github/workflows/nix-builds.yaml"
-jobs = ["build (agents)", "build (core)", "build (network)", "build (pinentry)", "build (platform)", "build (roborev)", "build (services)"]
+jobs = ["build (agents)", "build (core)", "build (network)", "build (pinentry)", "build (platform)", "build (services)"]
 artifacts = ["nix-build-0", "nix-build-1", "nix-build-2", "nix-build-3", "nix-build-4", "nix-build-5", "nix-build-6"]
 
 [ci.pages]
@@ -307,9 +295,4 @@ timeout_minutes = 30
 [[ci.required_gates]]
 id = "supported-systems"
 run = "bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh"
-timeout_minutes = 30
-
-[[ci.required_gates]]
-id = "roborev-worker"
-run = "bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh"
 timeout_minutes = 30
