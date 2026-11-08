@@ -1,2 +1,0 @@
-# Unified Go patches retain context spaces before tabs and on blank lines.
-nix/roborev-opencode-cancellation.patch whitespace=-blank-at-eol,-space-before-tab
