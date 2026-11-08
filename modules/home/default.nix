@@ -11,13 +11,13 @@
   # Shared readiness contracts for Home Manager features with activation
   # hooks, runtime credentials, or mutable external state.
   activation-contracts = ./activation-contracts.nix;
+  recoverable-deployment = ./recoverable-deployment.nix;
 
   # Shared typed prompt policy and OpenCode renderer. Consumers add
   # `programs.<name>.autoSafe` declarations and this module compiles them into
   # the backend permission object.
   agent-safety = ./agent-safety.nix;
   project-tree = ./project-tree.nix;
-  roborev = ./roborev;
   browser-connection = ./browser-connection.nix;
   pinentry = ./pinentry.nix;
   opencode-environment = ./opencode-environment.nix;

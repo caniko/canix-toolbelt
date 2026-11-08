@@ -152,11 +152,6 @@ jobs:
         env:
           SIMIT_REQUIRED_GATE: "1"
         run: bash scripts/prepare-hosted-source.sh && bash scripts/qualify-source.sh
-      - name: Required gate roborev-worker
-        timeout-minutes: 30
-        env:
-          SIMIT_REQUIRED_GATE: "1"
-        run: bash scripts/prepare-hosted-source.sh && bash scripts/roborev-worker-hosted.sh
       - name: Test all features
         run: nix develop -c cargo test --all-features
 

@@ -20,8 +20,6 @@ not complete successfully`, because two Nix producers in
 failed. Its PR originals and PR custody passed. Neither was rerun, and the packet
 stays failed.
 
-- `build (.#roborev)`: cache.nixos.org returned HTTP 416 and broken pipes while
-  substituting `binutils-2.46`.
 - `build (.#checks.x86_64-linux.direct-network-transitions)`: after `wg-proton`
   was restored, the inbound IPv6 direct probe (`directpeer` source
   `2001:db8:20::20` to `[2001:db8:1::1]:4096`) timed out in `check_direct()`.

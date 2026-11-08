@@ -275,12 +275,6 @@ impl Policy {
         if !review.complete_findings {
             return Verdict::Blocked;
         }
-        if self.provider == "roborev"
-            && self.transport == "github-receipt-v1"
-            && review.reviewed_base.as_ref() != Some(&candidate.base)
-        {
-            return Verdict::Blocked;
-        }
         if !review.findings.is_empty() {
             return Verdict::Findings;
         }

@@ -5,6 +5,7 @@
   activation-contracts = ./activation-contracts.nix;
   activation-manifest = ./activation-manifest.nix;
   home-manager-backup-repair = ./home-manager-backup-repair.nix;
+  recoverable-deployment = ./recoverable-deployment.nix;
 
   # Generic host config profiles toggled via specialisations
   profiles = ./profiles.nix;

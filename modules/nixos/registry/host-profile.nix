@@ -28,7 +28,7 @@ in {
 
     deviceType = fact (types.enum (import ../../../lib/deviceTypes.nix)) hostData.deviceType "Device type from canix-toolbelt.hosts.";
     isServer = fact types.bool (cfg.deviceType == "server") "Whether this host is a server.";
-    isHeadless = fact types.bool (cfg.deviceType == "server") "True for hosts with no display. Disables browser-oriented and GUI features.";
+    isHeadless = fact types.bool (builtins.elem cfg.deviceType ["server" "worker"]) "True for hosts with no display (servers and workers). Disables browser-oriented and GUI features.";
     isAarch64 = fact types.bool (lib.hasPrefix "aarch64" config.nixpkgs.hostPlatform.system) "Whether this host runs on aarch64.";
     dataRoot = fact (types.nullOr types.str) hostData.dataRoot "Absolute path to this host's user-data filesystem root; null on hosts with no user data.";
     projectStateRoot = fact (types.nullOr types.str) hostData.projectStateRoot "Absolute path to mutable project state. An explicit host fact, never inferred from other roots.";

@@ -52,6 +52,7 @@
   stagedService = staged.systemd.services.fleetix-build-train.serviceConfig;
   stagedConnection = builtins.fromJSON staged.environment.etc."fleetix-train/connection.json".text;
   nextConnection = builtins.fromJSON staged.environment.etc."fleetix-train/next-connection.json".text;
+  user = evaluate {canix-toolbelt.services.buildTrain.serviceScope = "user";};
 in
   assert builtins.attrNames options.canix-toolbelt.services.buildTrain == builtins.attrNames options.fleetix.services.buildTrain;
   assert config.canix-toolbelt.services.buildTrain.workers == config.fleetix.services.buildTrain.workers;
@@ -84,4 +85,8 @@ in
   assert lib.elem pkgs.coreutils staged.system.extraDependencies;
   assert staged.environment.etc."fleetix-train/service.json".source == retainedConfig;
   assert builtins.any (entry: !entry.assertion && lib.hasInfix "two native queries" entry.message) invalid.assertions;
+  assert config.canix-toolbelt.services.buildTrain.serviceScope == "system";
+  assert user.fleetix.services.buildTrain.serviceScope == "user";
+  assert !(user.systemd.services ? fleetix-build-train);
+  assert user.systemd.user.services.fleetix-build-train.unitConfig.ConditionUser == "operator";
     pkgs.writeText "build-train-service-eval" "Private operator service, independent planning limits and retained activation policy verified\n"

@@ -26,7 +26,7 @@
       };
     };
     fleetix = {
-      url = "git+https://github.com/caniko/fleetix.git?ref=trunk&rev=74f6eb09d2e010c6b75a8f8aab15b04e715bb10a";
+      url = "github:caniko/fleetix/031f4ac08de0524d93ff5aa9b1479e285bd8d528";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Reuse the locked compiler tooling; Rust library dependencies remain Cargo-owned.
@@ -93,13 +93,6 @@
         ./flake-modules/dev-stack.nix
         ./flake-modules/rust.nix
         ./flake-modules/pinentry.nix
-        (import ./flake-modules/roborev.nix {
-          inherit (inputs) nixpkgs;
-          harborGo = inputs.harbor-go;
-          harborJs = inputs.harbor-js;
-          harborMeta = inputs.harbor-meta;
-          homeManager = inputs.home-manager;
-        })
       ];
 
       flake = {
@@ -159,17 +152,6 @@
           git-hooks = ./flake-modules/git-hooks.nix;
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
-          roborev = {inputs, ...}: {
-            imports = [
-              (import ./flake-modules/roborev.nix {
-                inherit (inputs) nixpkgs;
-                harborGo = inputs.harbor-go;
-                harborJs = inputs.harbor-js;
-                harborMeta = inputs.harbor-meta;
-                homeManager = inputs.home-manager;
-              })
-            ];
-          };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
           topology = ./flake-modules/topology.nix;
@@ -187,6 +169,7 @@
           domain = "canix-toolbelt.tartanoglu.com";
           configPath = ./website/plinth-project.toml;
         };
+        protonWow64 = pkgs.callPackage ./nix/proton-wow64.nix {};
       in {
         # The Claude subscription output explicitly depends on this proprietary
         # executable. Keep its permission pure and limited to that package.
@@ -250,6 +233,7 @@
             dns-pages-zone-eval = import ./nixos-tests/dns-pages-zone-eval.nix {inherit inputs pkgs;};
             dns-publication-eval = import ./nixos-tests/dns-publication-eval.nix {inherit inputs pkgs;};
             activation-contracts-eval = import ./nixos-tests/activation-contracts-eval.nix {inherit pkgs;};
+            recoverable-deployment-eval = import ./nixos-tests/recoverable-deployment-eval.nix {inherit inputs pkgs;};
             activation-manifest-eval = import ./nixos-tests/activation-manifest-eval.nix {inherit pkgs;};
             home-manager-backup-repair = import ./nixos-tests/home-manager-backup-repair.nix {inherit pkgs;};
             resumable-operator-eval = import ./nixos-tests/resumable-operator-eval.nix {inherit pkgs;};
@@ -307,6 +291,8 @@
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
+        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {proton = protonWow64;};
+        packages.proton-wow64 = protonWow64;
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
         packages.opencode-with-claude = pkgs.callPackage ./nix/opencode-with-claude {};
@@ -319,7 +305,6 @@
           inherit pkgs;
           buildTrain = true;
         };
-        packages.canix-toolbelt-roborev-worker = import ./nix/roborev-worker.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
@@ -371,12 +356,6 @@
         devShells.docs = config.devShells.default;
         # Shared verification providers must not install hooks into the checkout.
         devShells.verification = config.devShells.default.overrideAttrs (_: {shellHook = "";});
-        devShells.roborev-worker = pkgs.mkShell {
-          inputsFrom = [config.devShells.default];
-          packages = [pkgs.git pkgs.bubblewrap pkgs.python3];
-          RUSTFLAGS = "";
-          CARGO_ENCODED_RUSTFLAGS = "";
-        };
         formatter = config.treefmt.build.wrapper;
       };
     };

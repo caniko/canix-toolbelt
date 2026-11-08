@@ -1,0 +1,91 @@
+--- a/bin/blizznux-run	2026-11-08 14:27:52.503690932 +0100
++++ b/bin/blizznux-run	2026-11-08 14:38:35.461608527 +0100
+@@ -13,6 +13,7 @@
+ # Blizzard's own download endpoint. The installer is never redistributed by this project.
+ INSTALLER_URL='https://www.battle.net/download/getInstallerForGame?os=win&gameProgram=BATTLENET_APP&version=Live'
+ LAUNCHER_REL='drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe'
++LAUNCHER_WIN='C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe'
+ # The umu-launcher release every install runs, kept in the launcher's data folder. A umu-launcher of the
+ # system is not used: every distribution has another version, or none. Change the version and the checksum
+ # together, here and in the Flatpak manifest, which carries the same release.
+@@ -216,7 +217,7 @@
+ }
+ 
+ ensure_prefix() {
+-	[[ -n $PREFIX ]] || PREFIX=$DATA_DIR/prefix
++	[[ -n $PREFIX ]] || PREFIX=$DATA_DIR/pfx
+ 	mkdir -p "$PREFIX"
+ 	[[ -f $CONFIG ]] || save_config
+ }
+@@ -247,10 +248,21 @@
+ 	own_umu || { fetch_umu >&2; echo "$UMU_DIR/umu-run"; }   # callers read the path from stdout
+ }
+ 
++# Proton runs directly. umu-launcher would wrap it in the Steam Runtime
++# container, which cannot see the /nix/store this Wine is built in; the WoW64
++# Wine needs no 32-bit host libraries, so the container adds nothing here.
+ run_umu() {
+-	local umu; umu=$(find_umu)
+ 	local proton; proton=$(find_proton)
+-	export WINEPREFIX=$PREFIX PROTONPATH=$proton GAMEID=${GAMEID:-umu-default} STORE=none PROTON_VERB=waitforexitandrun
++	# Proton owns <data>/pfx; follow a hand-edited PREFIX there.
++	if [[ $(basename "$PREFIX") != pfx ]]; then
++		PREFIX=$(dirname "$PREFIX")/pfx
++		save_config
++	fi
++	export WINEPREFIX=$PREFIX STEAM_COMPAT_DATA_PATH=$(dirname "$PREFIX") STORE=none
++	export STEAM_COMPAT_CLIENT_INSTALL_PATH=$DATA_DIR/steam
++	mkdir -p "$STEAM_COMPAT_DATA_PATH" "$STEAM_COMPAT_CLIENT_INSTALL_PATH"
++	# Proton's launcher probes libvulkan through ctypes before Wine starts.
++	export LD_LIBRARY_PATH=@vulkanLib@''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+ 	gpu_env
+ 	# Labs (experimental, opt-in). BLIZZNUX_LAB tells the launcher which were on for this session.
+ 	if [[ $LAB_WOW64 == 1 ]]; then
+@@ -260,7 +272,7 @@
+ 	local inhibit=()
+ 	command -v systemd-inhibit >/dev/null && inhibit=(systemd-inhibit --what=idle:sleep --why="Battle.net is running")
+ 	log "proton: $proton"; log "prefix: $PREFIX"
+-	"${inhibit[@]}" "$umu" "$@"
++	"${inhibit[@]}" "$proton/proton" run "$@"
+ }
+ 
+ cmd_install() {
+@@ -271,7 +283,11 @@
+ 	log "downloading the Battle.net installer from Blizzard"
+ 	curl -fL --retry 3 --progress-bar -o "$setup" "$INSTALLER_URL"
+ 	log "running the installer: sign in when it asks; Battle.net opens when it is done"
+-	run_umu "$setup"
++	# Proton launches a Windows path from inside the prefix; a path outside it
++	# would go through umu's shim, which this package does not use.
++	install -Dm644 "$setup" "$PREFIX/drive_c/blizznux-setup.exe"
++	run_umu 'C:\blizznux-setup.exe'
++	rm -f "$PREFIX/drive_c/blizznux-setup.exe"
+ 	[[ -f $PREFIX/$LAUNCHER_REL ]] || die "the installer finished but Battle.net was not found; run 'blizznux-run install' again"
+ 	log "installed"
+ }
+@@ -289,9 +305,9 @@
+ 	ensure_prefix
+ 	[[ -f $PREFIX/$LAUNCHER_REL ]] || cmd_install
+ 	if [[ -n $GAME ]]; then
+-		run_umu "$PREFIX/$LAUNCHER_REL" --exec="launch $GAME"
++		run_umu "$LAUNCHER_WIN" --exec="launch $GAME"
+ 	else
+-		run_umu "$PREFIX/$LAUNCHER_REL"
++		run_umu "$LAUNCHER_WIN"
+ 	fi
+ }
+ 
+@@ -307,13 +323,7 @@
+ 
+ cmd_doctor() {
+ 	ensure_prefix
+-	local umu; umu=$(own_umu || true)
+ 	echo "blizznux-run $VERSION"
+-	if [[ -n $umu ]]; then
+-		echo "umu-run:   $umu $("$umu" --version 2>/dev/null | head -1)"
+-	else
+-		echo "umu-run:   $UMU_VERSION (downloaded on first use)"
+-	fi
+ 	if [[ -x $PROTON_DIR/$PROTON_NAME/proton ]]; then
+ 		echo "proton:    $PROTON_DIR/$PROTON_NAME"
+ 	else
