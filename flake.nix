@@ -93,13 +93,6 @@
         ./flake-modules/dev-stack.nix
         ./flake-modules/rust.nix
         ./flake-modules/pinentry.nix
-        (import ./flake-modules/roborev.nix {
-          inherit (inputs) nixpkgs;
-          harborGo = inputs.harbor-go;
-          harborJs = inputs.harbor-js;
-          harborMeta = inputs.harbor-meta;
-          homeManager = inputs.home-manager;
-        })
       ];
 
       flake = {
@@ -159,17 +152,6 @@
           git-hooks = ./flake-modules/git-hooks.nix;
           host-selection = ./flake-modules/host-selection.nix;
           ops-shell = ./flake-modules/ops-shell.nix;
-          roborev = {inputs, ...}: {
-            imports = [
-              (import ./flake-modules/roborev.nix {
-                inherit (inputs) nixpkgs;
-                harborGo = inputs.harbor-go;
-                harborJs = inputs.harbor-js;
-                harborMeta = inputs.harbor-meta;
-                homeManager = inputs.home-manager;
-              })
-            ];
-          };
           shebang-audit = ./flake-modules/shebang-audit.nix;
           structure-check = ./flake-modules/structure-check.nix;
           topology = ./flake-modules/topology.nix;
@@ -323,7 +305,6 @@
           inherit pkgs;
           buildTrain = true;
         };
-        packages.canix-toolbelt-roborev-worker = import ./nix/roborev-worker.nix {inherit pkgs;};
         packages.site = website;
         packages.crush = let
           # Transitive dep charm.land/fantasy requires go >= 1.26.4.
@@ -375,12 +356,6 @@
         devShells.docs = config.devShells.default;
         # Shared verification providers must not install hooks into the checkout.
         devShells.verification = config.devShells.default.overrideAttrs (_: {shellHook = "";});
-        devShells.roborev-worker = pkgs.mkShell {
-          inputsFrom = [config.devShells.default];
-          packages = [pkgs.git pkgs.bubblewrap pkgs.python3];
-          RUSTFLAGS = "";
-          CARGO_ENCODED_RUSTFLAGS = "";
-        };
         formatter = config.treefmt.build.wrapper;
       };
     };

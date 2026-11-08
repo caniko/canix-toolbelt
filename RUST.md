@@ -189,23 +189,6 @@ Successful runs exit 0, exhausted stages exit 20, interrupted runs exit 143, and
 inspection, persistence or recovery errors exit unsuccessfully. Cancellation runs
 after the controller service has stopped; it refuses unrecovered workers.
 
-## Roborev
-
-The `review` feature exposes canonical Roborev receipts, `RoborevUnix` daemon
-transport, `dispatch_roborev_once` and authenticated GitHub publication. Callers
-provide trusted policy, request-exclusive checkout verification and persistent
-state roots. Dispatch records UNKNOWN before enqueue; ambiguous jobs are
-reconciled from their original identities and never replayed. A qualifying
-receipt requires persisted complete findings and the actual full target-tip to
-head comparison, including its provider job/review identities.
-
-Version 0.3 adds optional `provider_job_id`, `provider_review_id` and
-`reviewed_base` fields to `Review`; downstream struct literals must initialize
-them. `GitHub::publish_check` now takes the explicit dedicated-App policy.
-Legacy serialized records still decode; incomplete historical journals cannot
-authorize a new dispatch. The independent Linux worker and reusable Nix
-interfaces are documented in the repository's `docs/roborev.md`.
-
 ## Caddy plugin refresh
 
 The `caddy-plugins` feature refreshes a flake's `caddy.plugins` versions and
