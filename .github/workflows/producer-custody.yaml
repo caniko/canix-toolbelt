@@ -28,7 +28,7 @@ jobs:
         shell: python
         env:
           SIMIT_CUSTODY_PHASE: identity
-          SIMIT_CUSTODY_CONFIG: '{"repository":"caniko/canix-toolbelt","producer_attempt":1,"status_context":"simit/producer-custody","producers":{"CI":{"workflow":".github/workflows/ci.yaml","jobs":["test","gate-crate-release","gate-operator-regressions","gate-generated-parity","gate-supported-systems"],"artifacts":[]},"Nix installable builds":{"workflow":".github/workflows/nix-builds.yaml","jobs":["build (agents)","build (core)","build (network)","build (pinentry)","build (platform)","build (services)"],"artifacts":["nix-build-0","nix-build-1","nix-build-2","nix-build-3","nix-build-4","nix-build-5","nix-build-6"]}}}'
+          SIMIT_CUSTODY_CONFIG: '{"repository":"caniko/canix-toolbelt","producer_attempt":1,"status_context":"simit/producer-custody","producers":{"CI":{"workflow":".github/workflows/ci.yaml","jobs":["test","gate-crate-release","gate-operator-regressions","gate-generated-parity","gate-supported-systems"],"artifacts":[]},"Nix installable builds":{"workflow":".github/workflows/nix-builds.yaml","jobs":["build (agents)","build (core)","build (network)","build (pinentry)","build (platform)","build (services)"],"artifacts":["nix-build-0","nix-build-1","nix-build-2","nix-build-3","nix-build-4","nix-build-5"]}}}'
         run: |
           """Observe completed originals. Never execute or extract producer-controlled data."""
           import base64
@@ -732,7 +732,7 @@ jobs:
     env:
       GH_HOST: github.com
       GH_TOKEN: ${{ github.token }}
-      SIMIT_CUSTODY_CONFIG: '{"repository":"caniko/canix-toolbelt","producer_attempt":1,"status_context":"simit/producer-custody","producers":{"CI":{"workflow":".github/workflows/ci.yaml","jobs":["test","gate-crate-release","gate-operator-regressions","gate-generated-parity","gate-supported-systems"],"artifacts":[]},"Nix installable builds":{"workflow":".github/workflows/nix-builds.yaml","jobs":["build (agents)","build (core)","build (network)","build (pinentry)","build (platform)","build (services)"],"artifacts":["nix-build-0","nix-build-1","nix-build-2","nix-build-3","nix-build-4","nix-build-5","nix-build-6"]}}}'
+      SIMIT_CUSTODY_CONFIG: '{"repository":"caniko/canix-toolbelt","producer_attempt":1,"status_context":"simit/producer-custody","producers":{"CI":{"workflow":".github/workflows/ci.yaml","jobs":["test","gate-crate-release","gate-operator-regressions","gate-generated-parity","gate-supported-systems"],"artifacts":[]},"Nix installable builds":{"workflow":".github/workflows/nix-builds.yaml","jobs":["build (agents)","build (core)","build (network)","build (pinentry)","build (platform)","build (services)"],"artifacts":["nix-build-0","nix-build-1","nix-build-2","nix-build-3","nix-build-4","nix-build-5"]}}}'
     steps:
       - name: Capture completed original producers
         if: always()

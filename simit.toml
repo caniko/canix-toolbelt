@@ -271,7 +271,7 @@ jobs = ["test", "gate-crate-release", "gate-operator-regressions", "gate-generat
 [ci.custody.producers."Nix installable builds"]
 workflow = ".github/workflows/nix-builds.yaml"
 jobs = ["build (agents)", "build (core)", "build (network)", "build (pinentry)", "build (platform)", "build (services)"]
-artifacts = ["nix-build-0", "nix-build-1", "nix-build-2", "nix-build-3", "nix-build-4", "nix-build-5", "nix-build-6"]
+artifacts = ["nix-build-0", "nix-build-1", "nix-build-2", "nix-build-3", "nix-build-4", "nix-build-5"]
 
 [ci.pages]
 repo = "caniko/canix-toolbelt"

@@ -2,8 +2,8 @@
 
 ## Hosted original-producer custody
 
-`[ci.custody]` in `simit.toml` enrolls the six CI jobs and the seven grouped
-Nix build jobs (`build (<group>)`, artifacts `nix-build-<index>`). Simit's
+`[ci.custody]` in `simit.toml` enrolls the CI gate jobs and the grouped Nix
+build jobs (`build (<group>)`, artifacts `nix-build-<index>`). Simit's
 generated `producer-custody.yaml` runs on `workflow_run` completion from the
 default branch, captures each original attempt-1 producer and reports
 `simit/producer-custody/<event>/<target-sha256>` on the source head. It replaced
