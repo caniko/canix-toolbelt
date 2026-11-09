@@ -51,7 +51,9 @@ in {
         enable = true;
         package = lib.hiPrio packages.gpg;
       };
-      programs.nushell.extraConfig = lib.mkIf (config.programs.nushell.enable && config.services.gpg-agent.enableNushellIntegration) (lib.mkAfter ''
+      # Not tied to enableNushellIntegration: its unguarded `$env.GPG_TTY = (tty)`
+      # aborts non-interactive `nu -ilc`, so homes may turn it off and keep this.
+      programs.nushell.extraConfig = lib.mkIf config.programs.nushell.enable (lib.mkAfter ''
         let pinentry_context = {||
           $env.PINENTRY_USER_DATA = (^${context} | str trim)
         }
