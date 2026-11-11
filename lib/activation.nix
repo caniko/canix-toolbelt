@@ -84,5 +84,14 @@ in {
       failures;
   };
 
+  # What a consumer merges into its config for a `mkContract` result: its
+  # assertions and its declaration under
+  # `canix-toolbelt.activation.contracts.<key>`. The `mkContract` result
+  # itself stays unchanged, so callers that strip its metadata keep working.
+  contractModule = key: contract: {
+    inherit (contract) assertions;
+    canix-toolbelt.activation.contracts.${key} = lib.removeAttrs contract ["name" "assertions" "status" "declaredStatus"];
+  };
+
   inherit mkManifest;
 }

@@ -44,6 +44,30 @@
     ];
   };
 
+  helperActivation = import ../lib/activation.nix {inherit lib;};
+  helperContract = helperActivation.mkContract {
+    name = "fixture.demo";
+    requirements.source.summary = "demo input is absent";
+  };
+  helper = lib.evalModules {
+    modules = [
+      optionStubs
+      ../modules/nixos/activation-contracts.nix
+      (helperActivation.contractModule "demo" helperContract)
+    ];
+  };
+  # Callers that predate contractModule strip the metadata themselves.
+  legacy = lib.evalModules {
+    modules = [
+      optionStubs
+      ../modules/nixos/activation-contracts.nix
+      {
+        inherit (helperContract) assertions;
+        canix-toolbelt.activation.contracts.demo = lib.removeAttrs helperContract ["name" "assertions" "status" "declaredStatus"];
+      }
+    ];
+  };
+
   ready = lib.evalModules {
     modules = [
       optionStubs
@@ -95,6 +119,19 @@ in
         name = "ready-status";
         assertion = ready.config.canix-toolbelt.activation.contracts.demo.status == "ready";
         message = "satisfied requirements must make the contract ready";
+      }
+      {
+        name = "helper-module";
+        assertion =
+          helper.config.canix-toolbelt.activation.contracts.demo.status
+          == "blocked"
+          && builtins.length helper.config.assertions == 2;
+        message = "contractModule must declare the contract and carry its assertions";
+      }
+      {
+        name = "legacy-caller";
+        assertion = legacy.config.canix-toolbelt.activation.contracts.demo.status == "blocked";
+        message = "a caller that strips mkContract's metadata itself must still evaluate";
       }
       {
         name = "sensitive-artifact";
