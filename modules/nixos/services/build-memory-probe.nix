@@ -101,10 +101,7 @@ in {
   };
 
   config = lib.mkMerge [
-    {
-      inherit (activationContract) assertions;
-      canix-toolbelt.activation.contracts.buildMemoryProbe = lib.removeAttrs activationContract ["name" "assertions" "status" "declaredStatus"];
-    }
+    (activation.contractModule "buildMemoryProbe" activationContract)
 
     (lib.mkIf cfg.enable {
       assertions = [
