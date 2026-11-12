@@ -1,49 +1,80 @@
 [site]
 title = "canix-toolbelt"
-description = "Reusable, host-agnostic Nix building blocks extracted from caniko/canix for modules, flake composition, and reusable site plumbing."
+description = "The low-churn parts of caniko/canix as flake imports: composable NixOS modules, flake-parts helpers and site plumbing that carry no host or secret assumptions."
 base_url = "/"
-footer_note = "Generated from repository metadata by the plinth-project FOSS sweep."
 
 [[nav]]
 label = "Overview"
 href = "#overview"
 
 [[nav]]
+label = "Install"
+href = "#install"
+
+[[nav]]
 label = "Source"
-href = "git@github.com:caniko/canix-toolbelt.git"
+href = "https://github.com/caniko/canix-toolbelt"
 
 [[footer_links]]
 label = "Source"
-href = "git@github.com:caniko/canix-toolbelt.git"
+href = "https://github.com/caniko/canix-toolbelt"
 
 [[pages]]
 slug = "index"
 title = "canix-toolbelt"
-description = "Reusable, host-agnostic Nix building blocks extracted from caniko/canix for modules, flake composition, and reusable site plumbing."
+description = "The low-churn parts of caniko/canix as flake imports: composable NixOS modules, flake-parts helpers and site plumbing that carry no host or secret assumptions."
 
 [[pages.sections]]
 type = "hero"
 title = "canix-toolbelt"
-tagline = "Host-agnostic Nix building blocks"
-subtitle = "Composable modules, flake-parts helpers, and reusable Codeberg Pages site plumbing."
+tagline = "Reusable Nix modules without host coupling."
+subtitle = "The low-churn parts of caniko/canix as flake imports: composable NixOS modules, flake-parts helpers and site plumbing that carry no host or secret assumptions."
 
 [[pages.sections.ctas]]
 label = "View source"
-href = "git@github.com:caniko/canix-toolbelt.git"
+href = "https://github.com/caniko/canix-toolbelt"
 primary = true
+
+[[pages.sections.ctas]]
+label = "Add the input"
+href = "#install"
 
 [[pages.sections]]
 type = "feature_grid"
 id = "overview"
 
 [[pages.sections.features]]
-title = "NixOS modules"
-description = "Composable CPU, GPU, EFI, PipeWire, watchdog, and hardware-base modules without host or secret coupling."
+title = "Composable NixOS modules"
+description = "CPU microcode, GPU vendor stacks, EFI and btrfs defaults, PipeWire, fwupd, boot assessment and a hardware watchdog, each small enough to import on its own instead of as a bundle."
 
 [[pages.sections.features]]
-title = "Flake modules"
-description = "Reusable flake-parts modules for treefmt, git hooks, host-output selection, and structure checks."
+title = "Flake-parts modules with checks"
+description = "Modules for treefmt-nix, git hooks and host-output selection, plus a ripgrep-based structure check whose rules, paths and globs stay owned by the consuming repository."
 
 [[pages.sections.features]]
-title = "Site helpers"
-description = "Helpers for Zola sites, mdBook docs, combined static trees, and Codeberg Pages deployment apps."
+title = "Cloud-host configurator"
+description = "cloud-host composes a complete small guest with Disko and NetworkManager: UEFI or BIOS, a fixed Btrfs subvolume layout with separate state and identity, weekly scrub and daily root snapshots."
+
+[[pages.sections.features]]
+title = "Site plumbing"
+description = "mkSite helpers publish Zola sites, mdBook docs, combined static trees and Codeberg Pages deploy apps, so a repository does not carry its own copy of that wiring."
+
+[[pages.sections]]
+type = "install"
+id = "install"
+heading = "Install"
+intro = "Add the flake input and import the modules you need; the consuming flake keeps its own host metadata, secrets and policy. The optional CLI ships as a crate feature for review and merge work."
+guide_href = "https://github.com/caniko/canix-toolbelt"
+
+[[pages.sections.primary_routes]]
+label = "Flake input"
+audience = "Any flake that builds NixOS hosts"
+command = 'canix-toolbelt.url = "git+ssh://git@github.com/caniko/canix-toolbelt.git";'
+href = "https://github.com/caniko/canix-toolbelt#module-composition"
+recommended = true
+
+[[pages.sections.secondary_routes]]
+label = "Review and merge CLI"
+audience = "A Rust toolchain, from crates.io"
+command = "cargo install canix-toolbelt --features cli"
+href = "https://github.com/caniko/canix-toolbelt/blob/trunk/RUST.md"
