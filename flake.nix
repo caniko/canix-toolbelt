@@ -291,7 +291,7 @@
           }
           // import ./nixos-tests/nexus-profiles.nix {inherit pkgs;};
 
-        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {proton = protonWow64;};
+        packages.blizznux = pkgs.callPackage ./nix/blizznux.nix {};
         packages.proton-wow64 = protonWow64;
         packages.website = website;
         packages.opencode-browser-adapter = ((import ./lib/browserConnection.nix {inherit (pkgs) lib;}).mkAdapter {inherit pkgs;}).package;
