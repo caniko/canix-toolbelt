@@ -768,9 +768,9 @@ dependencies = [
 
 [[package]]
 name = "fleetix"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8956da6412834b847d7bb62e92a2b8c2413e20f40583e7f14b3b1945a8fdfc81"
+checksum = "59419c442593072c6f43f31e8c120c67b97085fc74fc7b23daeb3eb80f616d5b"
 dependencies = [
  "clap",
  "fs2",
