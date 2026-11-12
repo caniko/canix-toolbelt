@@ -5,6 +5,14 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Consume fleetix 0.10.1. The build train now roots request outputs only once
+  they exist, so `nix-collect-garbage` no longer reports tens of thousands of
+  invalid roots per retained request. The re-exported `build_train::rollover`
+  now takes `Option<&str>` for the fence token, and `TrainCommand::Rollover`'s
+  `token` is optional.
+
 ### Removed
 
 - Remove the Roborev review provider, worker crate, Home Manager module, Nix
