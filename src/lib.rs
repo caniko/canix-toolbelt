@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 
 pub mod execution_protocol;
+pub mod fork;
 
 #[cfg(feature = "qualification")]
 pub mod qualification;

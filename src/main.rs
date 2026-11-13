@@ -44,6 +44,9 @@ enum Command {
         #[arg(last = true)]
         publish: Vec<String>,
     },
+    /// Report fork divergence from the upstream project
+    #[command(subcommand)]
+    Fork(ForkCommand),
     /// Run or cancel a durable systemd stage controller
     #[cfg(unix)]
     #[command(subcommand)]
@@ -76,6 +79,34 @@ enum RuntimeCommand {
         /// Consumer-owned runtime manifest
         #[arg(long)]
         path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForkCommand {
+    /// Report behind/ahead counts for every fork under a root directory
+    Status {
+        /// Directory holding fork checkouts
+        #[arg(long)]
+        root: PathBuf,
+        /// Fetch the upstream remote before measuring
+        #[arg(long)]
+        fetch: bool,
+        /// Print JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fetch and fast-forward forks that carry no local commits
+    Update {
+        /// Directory holding fork checkouts
+        #[arg(long)]
+        root: PathBuf,
+        /// Restrict to these fork directory names; all forks when absent
+        #[arg(long = "fork")]
+        fork: Vec<String>,
+        /// Print JSON instead of a table
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -146,6 +177,26 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let mut stdout = std::io::stdout().lock();
             serde_json::to_writer_pretty(&mut stdout, &report)?;
             writeln!(stdout)?;
+        }
+        Command::Fork(ForkCommand::Status { root, fetch, json }) => {
+            let rows = canix_toolbelt::fork::survey(&root, fetch)?;
+            let mut stdout = std::io::stdout().lock();
+            if json {
+                serde_json::to_writer_pretty(&mut stdout, &rows)?;
+                writeln!(stdout)?;
+            } else {
+                writeln!(stdout, "{}", canix_toolbelt::fork::table(&rows))?;
+            }
+        }
+        Command::Fork(ForkCommand::Update { root, fork, json }) => {
+            let rows = canix_toolbelt::fork::update_all(&root, &fork)?;
+            let mut stdout = std::io::stdout().lock();
+            if json {
+                serde_json::to_writer_pretty(&mut stdout, &rows)?;
+                writeln!(stdout)?;
+            } else {
+                writeln!(stdout, "{}", canix_toolbelt::fork::update_table(&rows))?;
+            }
         }
         #[cfg(unix)]
         Command::Operator(command) => {
