@@ -193,8 +193,7 @@ pub fn inspect(dir: &Path, fetch: bool) -> ForkStatus {
     }
 }
 
-/// Enumerate and inspect every fork directory under `root`, sorted by name.
-pub fn survey(root: &Path, fetch: bool) -> Result<Vec<ForkStatus>, String> {
+fn fork_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
     let entries =
         std::fs::read_dir(root).map_err(|error| format!("{}: {error}", root.display()))?;
     let mut directories = entries
@@ -203,9 +202,98 @@ pub fn survey(root: &Path, fetch: bool) -> Result<Vec<ForkStatus>, String> {
         .map(|entry| entry.path())
         .collect::<Vec<PathBuf>>();
     directories.sort();
-    Ok(directories
+    Ok(directories)
+}
+
+/// Enumerate and inspect every fork directory under `root`, sorted by name.
+pub fn survey(root: &Path, fetch: bool) -> Result<Vec<ForkStatus>, String> {
+    Ok(fork_directories(root)?
         .into_iter()
         .map(|directory| inspect(&directory, fetch))
+        .collect())
+}
+
+/// Action taken by [`update`]: the branch moved, it was already current, or it
+/// was left alone. The reason for a skip is carried in
+/// [`ForkUpdate::detail`].
+pub const UPDATED: &str = "updated";
+/// Already at the upstream ref.
+pub const UP_TO_DATE: &str = "up-to-date";
+/// Left unchanged; `detail` says why.
+pub const SKIPPED: &str = "skipped";
+
+/// Result of one fast-forward attempt.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkUpdate {
+    /// Directory name of the fork.
+    pub name: String,
+    /// One of [`UPDATED`], [`UP_TO_DATE`], [`SKIPPED`].
+    pub action: &'static str,
+    /// Branch name, commit count, or the reason the fork was skipped.
+    pub detail: Option<String>,
+}
+
+fn worktree_is_clean(dir: &Path) -> Result<bool, String> {
+    Ok(git(dir, &["status", "--porcelain"])?.is_empty())
+}
+
+/// Fast-forward one fork onto its fetched upstream ref.
+///
+/// Local commits, a dirty worktree and a detached HEAD are never touched: a
+/// fork carrying its own work is skipped rather than merged, so automation
+/// cannot rewrite a branch it does not own.
+pub fn update(dir: &Path) -> ForkUpdate {
+    let status = inspect(dir, true);
+    let name = status.name.clone();
+    let skip = |detail: String| ForkUpdate {
+        name: name.clone(),
+        action: SKIPPED,
+        detail: Some(detail),
+    };
+    if let Some(problem) = status.problem.clone() {
+        return skip(problem);
+    }
+    let Some(branch) = status.branch.clone() else {
+        return skip("detached HEAD".to_owned());
+    };
+    let (Some(behind), Some(ahead)) = (status.behind, status.ahead) else {
+        return skip("unreadable divergence".to_owned());
+    };
+    if ahead > 0 {
+        return skip(format!("{ahead} local commits"));
+    }
+    if behind == 0 {
+        return ForkUpdate {
+            name,
+            action: UP_TO_DATE,
+            detail: Some(branch),
+        };
+    }
+    match worktree_is_clean(dir) {
+        Ok(true) => {}
+        Ok(false) => return skip("uncommitted changes".to_owned()),
+        Err(error) => return skip(error),
+    }
+    let Some(reference) = status.upstream_ref.clone() else {
+        return skip("no upstream default branch".to_owned());
+    };
+    match git(dir, &["merge", "--ff-only", "--quiet", &reference]) {
+        Ok(_) => ForkUpdate {
+            name,
+            action: UPDATED,
+            detail: Some(format!("{branch} +{behind}")),
+        },
+        Err(error) => skip(error),
+    }
+}
+
+/// Fast-forward every fork under `root`, or only those named in `only`.
+pub fn update_all(root: &Path, only: &[String]) -> Result<Vec<ForkUpdate>, String> {
+    Ok(fork_directories(root)?
+        .into_iter()
+        .filter(|directory| only.is_empty() || only.iter().any(|name| directory.ends_with(name)))
+        .map(|directory| update(&directory))
         .collect())
 }
 
@@ -228,6 +316,23 @@ pub fn table(rows: &[ForkStatus]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+/// Render one update per line, aligned for reading in a terminal.
+pub fn update_table(rows: &[ForkUpdate]) -> String {
+    let width = rows.iter().map(|row| row.name.len()).max().unwrap_or(0);
+    rows.iter()
+        .map(|row| {
+            format!(
+                "{:<width$}  {:<10}  {}",
+                row.name,
+                row.action,
+                row.detail.clone().unwrap_or_default(),
+                width = width
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
