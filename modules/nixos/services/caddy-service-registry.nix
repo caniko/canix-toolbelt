@@ -57,6 +57,19 @@
 
   proxyEndpointNames = route: [route.action.endpoint] ++ route.action.fallbackEndpoints;
 
+  # forwardAuth providers render Caddy's forward_auth semantics; every other
+  # provider (or none) keeps the caddy-security authenticator behaviour.
+  forwardAuthProvider = policy: ((cfg.authProviders.${policy} or {}).type or "") == "forwardAuth";
+
+  resolveAuthProvider = route:
+    if route.authPolicy == null || !(forwardAuthProvider route.authPolicy)
+    then null
+    else
+      cfg.authProviders.${route.authPolicy}
+      // {
+        endpoint = resolveEndpoint (cfg.authProviders.${route.authPolicy}.endpoint or (throw "canix-toolbelt Caddy registry: authProviders.`${route.authPolicy}` forwardAuth provider has no endpoint"));
+      };
+
   renderRoute = site: route:
     caddyLib.mkHttpRoute {
       inherit (site) hostname;
@@ -66,6 +79,7 @@
         then resolveEndpoint route.action.endpoint
         else null;
       fallbacks = map resolveEndpoint route.action.fallbackEndpoints;
+      authProvider = resolveAuthProvider route;
       inherit (cfg) staticRoots;
     };
 
@@ -140,7 +154,73 @@
   serviceCfg.httpSites);
   activeRoutes = lib.concatMap (site: site.routes) activeSites;
   authPolicies = lib.unique (builtins.filter (policy: policy != null) (map (route: route.authPolicy) activeRoutes));
+  securityProviders = lib.filterAttrs (_: provider: (provider.type or "") != "forwardAuth") cfg.authProviders;
+  streamReauthPolicies = builtins.filter (policy: (((cfg.authProviders.${policy} or {}).streamReauth or null) != null)) (builtins.filter forwardAuthProvider authPolicies);
+  streamReauthPlugin = "github.com/caniko/caddy-stream-reauth";
   caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
+  relayTargets = lib.unique (builtins.filter (target: target != null) (lib.mapAttrsToList (_: endpoint: endpoint.remoteVia or null) serviceCfg.endpoints));
+  # Relay listeners by address, so an alias of a relay endpoint is caught too.
+  relayAddresses = map (target: let
+    relay = serviceCfg.endpoints.${target} or null;
+  in
+    if relay == null
+    then ""
+    else "${relay.targetHost}:${toString relay.port}")
+  relayTargets;
+  validDuration = value: builtins.match "([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+" value != null;
+
+  forwardAuthProviderAssertions = lib.concatMap (name: let
+    provider = cfg.authProviders.${name};
+    reauth = provider.streamReauth or null;
+    endpointName = provider.endpoint or "";
+    endpoint = serviceCfg.endpoints.${endpointName} or null;
+  in
+    lib.optionals (forwardAuthProvider name) (
+      [
+        {
+          assertion = endpoint != null;
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` names unknown forwardAuth endpoint `${endpointName}`";
+        }
+        {
+          assertion = endpoint == null || endpoint.transport != "tcp";
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` forwardAuth endpoint `${endpointName}` must be an HTTP endpoint";
+        }
+        {
+          assertion = lib.hasPrefix "/" (provider.uri or "");
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` forwardAuth uri must start with `/`";
+        }
+        {
+          # Relays are discovered from proxy actions only, and a relayed hop
+          # changes the Host the auth endpoint sees.
+          assertion = endpoint == null || (endpoint.remoteVia or null) == null;
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` forwardAuth endpoint `${endpointName}` must not use remoteVia";
+        }
+        {
+          # A relay answers for the sites behind it, not for the gate: naming
+          # one directly would let it authorize without asking the endpoint.
+          assertion = !(lib.elem endpointName relayTargets) && (endpoint == null || !(lib.elem "${endpoint.targetHost}:${toString endpoint.port}" relayAddresses));
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` forwardAuth endpoint `${endpointName}` is a remoteVia relay, not an auth endpoint";
+        }
+      ]
+      ++ lib.optionals (reauth != null) [
+        {
+          # stream_reauth dials the endpoint address directly; over TLS that
+          # address would not match the certificate, and a failed check keeps
+          # the stream open.
+          assertion = endpoint == null || endpoint.transport == "http";
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` streamReauth needs a plain `http` endpoint, not `${endpointName}` (${toString (endpoint.transport or "")})";
+        }
+        {
+          assertion = validDuration (reauth.interval or "");
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` streamReauth interval must be a Caddy duration string such as `7s`";
+        }
+        {
+          assertion = validDuration (reauth.timeout or "");
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` streamReauth timeout must be a Caddy duration string such as `2s`";
+        }
+      ]
+    ))
+  (builtins.attrNames cfg.authProviders);
 
   scopeForAccess = {
     cloudflare = "public";
@@ -213,6 +293,11 @@ in {
         message = "canix-toolbelt Caddy registry: authPolicy `${policy}` is missing from canix-toolbelt.services.caddy.authProviders";
       })
       authPolicies
+      ++ forwardAuthProviderAssertions
+      ++ lib.optional (streamReauthPolicies != []) {
+        assertion = lib.any (plugin: lib.hasInfix streamReauthPlugin plugin) cfg.plugins;
+        message = "canix-toolbelt Caddy registry: authPolicy `${builtins.head streamReauthPolicies}` enables streamReauth, so canix-toolbelt.services.caddy.plugins must pin ${streamReauthPlugin} (and its pluginsHash)";
+      }
       ++ lib.mapAttrsToList (groupName: group: {
         assertion =
           !groupIsActive groupName group
@@ -225,7 +310,7 @@ in {
 
     canix-toolbelt.services.caddy = {
       servers = ingressServers // relayServers;
-      plugins = lib.mkIf (cfg.authProviders != {}) (lib.mkBefore [caddySecurityPlugin]);
+      plugins = lib.mkIf (securityProviders != {}) (lib.mkBefore [caddySecurityPlugin]);
     };
   };
 }

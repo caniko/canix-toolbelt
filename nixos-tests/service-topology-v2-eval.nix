@@ -6,6 +6,23 @@
   inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
+  reauthRoute = {
+    match = {
+      paths = [
+        {
+          type = "exact";
+          value = "/reauth";
+        }
+      ];
+      absentQueryParams = [];
+    };
+    action = {
+      type = "proxy";
+      endpoint = "stream";
+    };
+    authPolicy = "forward";
+  };
+
   topology = {
     schemaVersion = 2;
     links.wg-home = {
@@ -82,6 +99,12 @@
           port = 9200;
           transport = "h2c";
           bind = "lan";
+        };
+        auth = {
+          targetHost = "hub";
+          port = 9500;
+          transport = "http";
+          bind = "vpn";
         };
         private-cache = {
           targetHost = "hub";
@@ -178,6 +201,7 @@
               };
               responseHeaders.Cache-Control = ["no-store"];
             }
+            reauthRoute
           ];
         };
         direct = {
@@ -397,7 +421,27 @@
     };
   };
 
-  evalFor = hostName: overrides:
+  streamReauthPlugin = "github.com/caniko/caddy-stream-reauth@v0.1.0";
+  caddySecurityPlugin = "github.com/greenpau/caddy-security@v1.1.62";
+  securityProvider = {
+    driver = "generic";
+    client_id = "users";
+  };
+  forwardAuthProvider = {
+    type = "forwardAuth";
+    endpoint = "auth";
+    uri = "/oauth2/auth";
+    copyHeaders = ["Cookie"];
+    streamReauth = {
+      interval = "7s";
+      timeout = "2s";
+    };
+  };
+
+  mkEvalFor = {
+    authProviders,
+    plugins ? [],
+  }: hostName: overrides:
     lib.evalModules {
       specialArgs = {inherit inputs pkgs;};
       modules = [
@@ -422,10 +466,7 @@
             };
             cloudflareCidrs = ["203.0.113.0/24"];
             staticRoots.docs = ../lib;
-            authProviders.users = {
-              driver = "generic";
-              client_id = "users";
-            };
+            inherit authProviders plugins;
             certificates = [
               {
                 certificate = "/var/lib/acme/example/fullchain.pem";
@@ -441,6 +482,18 @@
         }
       ];
     };
+
+  evalFor = mkEvalFor {
+    authProviders = {
+      users = securityProvider;
+      forward = forwardAuthProvider;
+    };
+    plugins = [streamReauthPlugin];
+  };
+  forwardOnlyEval = mkEvalFor {authProviders = {forward = forwardAuthProvider;};};
+  forwardOnly = forwardOnlyEval "edge1" {
+    services.httpSites.app.routes = [reauthRoute];
+  };
 
   edge1 = evalFor "edge1" {};
   edge2 = evalFor "edge2" {};
@@ -470,6 +523,13 @@
   prefixRoute = builtins.elemAt appRoutes 1;
   redirectRoute = builtins.elemAt appRoutes 2;
   fallbackRoute = builtins.elemAt appRoutes 3;
+  forwardRoute = builtins.elemAt appRoutes 4;
+  forwardAuthHandler = builtins.elemAt forwardRoute.handle 0;
+  streamReauthHandler = builtins.elemAt forwardRoute.handle 1;
+  forwardActionHandler = builtins.elemAt forwardRoute.handle 2;
+  forwardInvalid = provider: message:
+    builtins.any (a: !a.assertion && lib.hasPrefix message a.message)
+    (mkEvalFor {authProviders = {forward = forwardAuthProvider // provider;};} "edge1" {}).config.assertions;
   handler = name: route: lib.findFirst (item: item.handler or "" == name) null route.handle;
   relayRoute = builtins.head backend.config.canix-toolbelt.services.caddy.servers.relay-app-relay.routes;
   dnsAddresses = hub.config.services.dnsmasq.settings.address;
@@ -481,6 +541,13 @@ in
     nativeBuildInputs = [pkgs.jq];
     runtimeScript = ''
       jq -e '.apps.tls.certificates.load_files == [{"certificate":"/var/lib/acme/example/fullchain.pem","key":"/var/lib/acme/example/key.pem"}]' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.security.config.identity_providers == [{"name":"users","kind":"oauth","params":{"realm":"users","key_verification_disabled":true,"driver":"generic","client_id":"users"}}]' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.security.config.authentication_portals | length == 1 and .[0].name == "users"' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.security.config.authorization_policies | length == 1 and .[0].name == "users"' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.security == null' ${forwardOnly.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.http.servers.public.routes[] | select(.match[0].host == ["app.example.test"] and .match[0].path == ["/reauth"]) | (.handle | map(.handler)) == ["reverse_proxy", "stream_reauth", "reverse_proxy"]' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.http.servers.public.routes[] | select(.match[0].host == ["app.example.test"] and .match[0].path == ["/reauth"]) | .handle[0] | .rewrite == {"method":"GET","uri":"/oauth2/auth"} and .headers.request.set["X-Forwarded-Method"] == ["{http.request.method}"] and .headers.request.set["X-Forwarded-Uri"] == ["{http.request.uri}"] and .handle_response[0].match.status_code == [2] and .upstreams == [{"dial":"198.51.100.1:9500"}]' ${edge1.config.services.caddy.configFile} >/dev/null
+      jq -e '.apps.http.servers.public.routes[] | select(.match[0].host == ["app.example.test"] and .match[0].path == ["/reauth"]) | .handle[1] | .handler == "stream_reauth" and .uri == "http://198.51.100.1:9500/oauth2/auth" and .interval == "7s" and .timeout == "2s" and .copy_headers == ["Cookie"]' ${edge1.config.services.caddy.configFile} >/dev/null
     '';
     assertions = [
       {
@@ -552,6 +619,91 @@ in
         name = "auth-and-response-headers";
         assertion = (handler "authenticator" exactRoute).portal_name == "users" && (handler "headers" exactRoute).response.set.X-Service == ["app"] && (handler "headers" fallbackRoute).response.set.Cache-Control == ["no-store"];
         message = "auth policies and route response headers must render";
+      }
+      {
+        name = "forward-auth-handlers";
+        assertion =
+          forwardAuthHandler.handler
+          == "reverse_proxy"
+          && forwardAuthHandler.rewrite
+          == {
+            method = "GET";
+            uri = "/oauth2/auth";
+          }
+          && forwardAuthHandler.headers.request.set
+          == {
+            "X-Forwarded-Method" = ["{http.request.method}"];
+            "X-Forwarded-Uri" = ["{http.request.uri}"];
+          }
+          && forwardAuthHandler.handle_response
+          == [
+            {
+              match.status_code = [2];
+              routes = [
+                {handle = [{handler = "vars";}];}
+              ];
+            }
+          ]
+          && forwardAuthHandler.upstreams == [{dial = "198.51.100.1:9500";}]
+          && !(forwardAuthHandler ? transport)
+          && streamReauthHandler
+          == {
+            handler = "stream_reauth";
+            uri = "http://198.51.100.1:9500/oauth2/auth";
+            interval = "7s";
+            timeout = "2s";
+            copy_headers = ["Cookie"];
+          }
+          && forwardActionHandler.handler == "reverse_proxy"
+          && forwardActionHandler.upstreams == [{dial = "192.0.2.30:9200";}]
+          && builtins.length forwardRoute.handle == 3;
+        message = "forwardAuth routes must render the auth reverse_proxy, optional stream_reauth, then the original action";
+      }
+      {
+        name = "forward-auth-skips-caddy-security";
+        assertion =
+          forwardOnly.config.canix-toolbelt.services.caddy.plugins
+          == []
+          && forwardOnly.config.canix-toolbelt.services.caddy.authProviders != {}
+          && lib.elem caddySecurityPlugin edge1.config.canix-toolbelt.services.caddy.plugins
+          && lib.elem streamReauthPlugin edge1.config.canix-toolbelt.services.caddy.plugins;
+        message = "forwardAuth-only configs must not inject caddy-security, while caddy-security configs keep it";
+      }
+      {
+        name = "forward-auth-stream-reauth-plugin-required";
+        assertion = builtins.any (a: !a.assertion && lib.hasPrefix "canix-toolbelt Caddy registry: authPolicy `forward` enables streamReauth" a.message) forwardOnly.config.assertions;
+        message = "a forwardAuth provider with streamReauth must require the caddy-stream-reauth plugin";
+      }
+      {
+        name = "forward-auth-provider-validation";
+        assertion =
+          forwardInvalid {endpoint = "missing-endpoint";} "canix-toolbelt Caddy registry: authProviders.`forward` names unknown forwardAuth endpoint"
+          && forwardInvalid {uri = "oauth2/auth";} "canix-toolbelt Caddy registry: authProviders.`forward` forwardAuth uri must start with"
+          && forwardInvalid {
+            streamReauth = {
+              interval = "fast";
+              timeout = "2s";
+            };
+          } "canix-toolbelt Caddy registry: authProviders.`forward` streamReauth interval must be a Caddy duration string"
+          && forwardInvalid {
+            streamReauth = {
+              interval = "7s";
+              timeout = "slow";
+            };
+          } "canix-toolbelt Caddy registry: authProviders.`forward` streamReauth timeout must be a Caddy duration string"
+          && forwardInvalid {endpoint = "app";} "canix-toolbelt Caddy registry: authProviders.`forward` forwardAuth endpoint `app` must not use remoteVia"
+          && forwardInvalid {endpoint = "app";} "canix-toolbelt Caddy registry: authProviders.`forward` streamReauth needs a plain `http` endpoint"
+          && forwardInvalid {endpoint = "app-relay";} "canix-toolbelt Caddy registry: authProviders.`forward` forwardAuth endpoint `app-relay` is a remoteVia relay"
+          && builtins.any (a: !a.assertion && lib.hasPrefix "canix-toolbelt Caddy registry: authProviders.`forward` forwardAuth endpoint `auth-alias` is a remoteVia relay" a.message)
+          (mkEvalFor {authProviders = {forward = forwardAuthProvider // {endpoint = "auth-alias";};};} "edge1" {
+            services.endpoints.auth-alias = {
+              targetHost = "backend";
+              port = 9100;
+              transport = "http";
+              bind = "lan";
+            };
+          }).config.assertions;
+        message = "invalid forwardAuth provider fields must fail evaluation with a clear message";
       }
       {
         name = "vpn-dns-from-access";

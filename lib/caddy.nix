@@ -61,6 +61,76 @@
         };
       };
 
+  # Mirrors the forward_auth Caddyfile adapter (Caddy v2.11.7,
+  # modules/caddyhttp/reverseproxy/forwardauth/caddyfile.go): a reverse_proxy
+  # to the provider that rewrites to GET + provider uri, forwards the original
+  # method and uri, and lets 2xx responses fall through to the route's real
+  # handlers. Other statuses are returned to the client unchanged (fail closed).
+  forwardAuthHandler = provider: let
+    inherit (provider) endpoint;
+  in
+    if endpoint.transport == "tcp"
+    then throw "canix-toolbelt Caddy registry: TCP endpoint `${endpoint.name}` cannot back a forwardAuth provider"
+    else
+      {
+        handler = "reverse_proxy";
+        headers.request.set = {
+          "X-Forwarded-Method" = ["{http.request.method}"];
+          "X-Forwarded-Uri" = ["{http.request.uri}"];
+        };
+        rewrite = {
+          method = "GET";
+          inherit (provider) uri;
+        };
+        handle_response = [
+          {
+            # Status class 2, as the adapter's `@good status 2xx` match.
+            match.status_code = [2];
+            # A no-op handler keeps the fall-through path: an empty route list
+            # makes reverse_proxy write the auth response instead.
+            routes = [
+              {handle = [{handler = "vars";}];}
+            ];
+          }
+        ];
+        upstreams = [
+          {dial = "${endpoint.address}:${toString endpoint.port}";}
+        ];
+      }
+      // lib.optionalAttrs (endpoint.transport == "https") {
+        transport = {
+          protocol = "http";
+          # An empty tls block enables TLS; SNI defaults to the dial host.
+          tls = lib.optionalAttrs (endpoint.tlsServerName != null) {server_name = endpoint.tlsServerName;};
+        };
+      }
+      // lib.optionalAttrs (endpoint.transport == "h2c") {
+        transport = {
+          protocol = "http";
+          versions = ["h2c" "2"];
+        };
+      };
+
+  # http.handlers.stream_reauth (github.com/caniko/caddy-stream-reauth) polls
+  # the same auth endpoint for the lifetime of a hijacked WebSocket stream.
+  streamReauthHandler = provider: let
+    inherit (provider) endpoint;
+    reauth = provider.streamReauth;
+    scheme =
+      if endpoint.transport == "https"
+      then "https"
+      else "http";
+  in
+    {
+      handler = "stream_reauth";
+      uri = "${scheme}://${endpoint.address}:${toString endpoint.port}${provider.uri}";
+    }
+    // lib.optionalAttrs ((reauth.interval or null) != null) {inherit (reauth) interval;}
+    // lib.optionalAttrs ((reauth.timeout or null) != null) {inherit (reauth) timeout;}
+    // lib.optionalAttrs ((provider.copyHeaders or []) != []) {
+      copy_headers = provider.copyHeaders;
+    };
+
   actionHandlers = {
     action,
     endpoint ? null,
@@ -120,14 +190,24 @@ in rec {
     endpoint ? null,
     fallbacks ? [],
     staticRoots ? {},
+    # Resolved forwardAuth provider; null for caddy-security policies.
+    authProvider ? null,
   }: {
     match = [(requestMatch hostname route.match)];
     handle =
-      lib.optional (route.authPolicy != null) {
-        handler = "authenticator";
-        portal_name = route.authPolicy;
-        route_matcher = "*";
-      }
+      (
+        if route.authPolicy == null
+        then []
+        else if authProvider == null
+        then [
+          {
+            handler = "authenticator";
+            portal_name = route.authPolicy;
+            route_matcher = "*";
+          }
+        ]
+        else [(forwardAuthHandler authProvider)] ++ lib.optional ((authProvider.streamReauth or null) != null) (streamReauthHandler authProvider)
+      )
       ++ lib.optional (route.responseHeaders != {}) {
         handler = "headers";
         response.set = route.responseHeaders;
