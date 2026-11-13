@@ -154,7 +154,7 @@ in {
     authProviders = lib.mkOption {
       type = lib.types.attrsOf lib.types.attrs;
       default = {};
-      description = "Caddy-security provider configs keyed by auth policy name.";
+      description = "Auth provider configs keyed by auth policy name. Providers without `type` are caddy-security identity providers; `type = \"forwardAuth\"` renders Caddy forward_auth semantics.";
     };
   };
 
@@ -246,6 +246,10 @@ in {
     in
       lib.optionals hasAuth (lib.concatMap getHostnameFromMatch (route.match or [])))
     allRoutes);
+
+    # forwardAuth providers render Caddy's forward_auth semantics and must not
+    # appear in the caddy-security app config.
+    securityProviders = lib.filterAttrs (_: provider: (provider.type or "") != "forwardAuth") cfg.authProviders;
   in {
     services.caddy = {
       enable = true;
@@ -267,7 +271,7 @@ in {
                   cfg.certificates;
               };
           }
-          // lib.optionalAttrs (cfg.authProviders != {}) {
+          // lib.optionalAttrs (securityProviders != {}) {
             security.config = {
               identity_providers =
                 lib.mapAttrsToList (name: provider: {
@@ -284,7 +288,7 @@ in {
                     }
                     // lib.filterAttrs (n: _: n != "driver") provider;
                 })
-                cfg.authProviders;
+                securityProviders;
 
               authentication_portals =
                 lib.mapAttrsToList (name: _provider: {
@@ -299,7 +303,7 @@ in {
                     lib.optionalAttrs (cookieDomain != "") {"${cookieDomain}" = {};};
                   ui.private_links = [];
                 })
-                cfg.authProviders;
+                securityProviders;
 
               authorization_policies =
                 lib.mapAttrsToList (name: _provider: {
@@ -313,7 +317,7 @@ in {
                   validate_bearer_header = true;
                   pass_claims_with_headers = true;
                 })
-                cfg.authProviders;
+                securityProviders;
             };
           };
 

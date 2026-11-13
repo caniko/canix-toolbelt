@@ -5,6 +5,17 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Added
+
+- Caddy service registry `authPolicy` accepts `type = "forwardAuth"` providers.
+  Such routes render Caddy's `forward_auth` semantics -- a fail-closed auth
+  proxy whose 2xx responses fall through to the route's handlers -- instead of
+  a caddy-security authenticator, and never inject the caddy-security plugin or
+  app config. An optional `streamReauth` block orders the third-party
+  `http.handlers.stream_reauth` handler before `reverse_proxy` for
+  per-connection re-authorization, which requires the consumer to pin
+  `github.com/caniko/caddy-stream-reauth` in `plugins`.
+
 ## [0.7.0] - 2026-11-13
 
 ### Changed

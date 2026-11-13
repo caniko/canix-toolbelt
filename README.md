@@ -336,6 +336,39 @@ transfers and the application-owned WebTransport fixture. It does not certify a
 cloud provider, Stalwart, a browser's WebTransport implementation, or paid transit
 capacity. See Canix's public-edge design for the enrollment and publication gates.
 
+### Caddy service registry auth policies
+
+`canix-toolbelt.services.httpSites.<site>.routes[].authPolicy` names a provider
+in `canix-toolbelt.services.caddy.authProviders`. A provider without `type`
+(the default) is a [caddy-security](https://github.com/greenpau/caddy-security)
+identity provider and portal.
+
+A provider with `type = "forwardAuth"` instead renders Caddy's
+[`forward_auth`](https://caddyserver.com/docs/caddyfile/directives/forward_auth)
+semantics: the route first proxies the request to the provider as
+`GET <uri>` with `X-Forwarded-Method` and `X-Forwarded-Uri`, and only a 2xx
+response lets the request continue to the route's own handlers. Any other
+status is returned to the client unchanged, so protected routes fail closed.
+
+```nix
+canix-toolbelt.services.caddy.authProviders.oauth2-proxy = {
+  type = "forwardAuth";
+  endpoint = "oauth2-proxy"; # services.endpoints key
+  uri = "/oauth2/auth";
+  copyHeaders = ["Cookie"];
+  streamReauth = {interval = "7s"; timeout = "2s";};
+};
+```
+
+`endpoint` must name an HTTP endpoint in the service registry; its
+loopback/relay/VPN address selects the dial target exactly as a proxy action
+does. Forward-auth providers never inject the caddy-security plugin or app
+config. `streamReauth` additionally renders the third-party
+[`stream_reauth`](https://github.com/caniko/caddy-stream-reauth) handler before
+`reverse_proxy`, re-checking a hijacked WebSocket connection while it is open;
+consumers pin `github.com/caniko/caddy-stream-reauth` in
+`canix-toolbelt.services.caddy.plugins` (and its `pluginsHash`) themselves.
+
 ### GPU compute requests
 
 `lib.gpu.normalize` and `lib.gpu.forHost` expose an optional `compute` record:
