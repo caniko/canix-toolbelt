@@ -218,6 +218,58 @@
     then lib.hasPrefix leftPrefix rightPattern
     else lib.hasPrefix rightPrefix leftPattern;
 
+  # Facts about one pattern.  `wildcard` and `prefix` re-strip the environment
+  # prefix, exactly as `patternsMayOverlap` does for each pair.
+  patternFacts = pattern: let
+    stripped = stripEnvironmentPrefix pattern;
+  in {
+    pattern = stripped;
+    wildcard = hasWildcard stripped;
+    prefix = patternPrefix stripped;
+  };
+
+  # Every prefix of a string, including "" and the string itself.
+  patternPrefixes = string:
+    map (length: builtins.substring 0 length string) (lib.range 0 (builtins.stringLength string));
+
+  # Equivalent to
+  # `lib.filter (p: builtins.any (d: patternsMayOverlap p d) deny) programs`,
+  # but linear: pattern facts and the deny index are built once instead of
+  # re-deriving both sides of every program/deny pair.
+  #
+  # `patternsMayOverlap` reduces to four cases, all expressed through the
+  # stripped pattern and its wildcard prefix: literals match by equality, a
+  # wildcard prefix must prefix the other side (or vice versa), and a wildcard
+  # on the left must prefix a right literal.  Hence a program needs only its
+  # own prefixes looked up in sets keyed by deny facts.
+  conflictsFor = programs: deny: let
+    denyFacts = map patternFacts deny;
+    literalDenies = map (fact: fact.pattern) (lib.filter (fact: !fact.wildcard) denyFacts);
+    wildcardDenyPrefixes = map (fact: fact.prefix) (lib.filter (fact: fact.wildcard) denyFacts);
+    index = strings:
+      builtins.listToAttrs (map (string: {
+          name = string;
+          value = true;
+        })
+        strings);
+    literalIndex = index literalDenies;
+    wildcardPrefixIndex = index wildcardDenyPrefixes;
+    # A program wildcard prefix may be a prefix of a deny pattern, so the deny
+    # side is indexed too; `lib.hasPrefix ""` makes the empty prefix a match.
+    denyPrefixIndex = index (lib.concatMap patternPrefixes (literalDenies ++ wildcardDenyPrefixes));
+    conflicts = program: let
+      inherit (patternFacts program) wildcard pattern prefix;
+      # Some deny wildcard prefix is a prefix of this program pattern.
+      denyPrefixIsProgramPrefix = builtins.any (candidate: builtins.hasAttr candidate wildcardPrefixIndex) (patternPrefixes prefix);
+      # This program prefix is a prefix of some deny pattern.
+      programPrefixIsDenyPrefix = builtins.hasAttr prefix denyPrefixIndex;
+    in
+      if wildcard
+      then denyPrefixIsProgramPrefix || programPrefixIsDenyPrefix
+      else builtins.hasAttr pattern literalIndex || denyPrefixIsProgramPrefix;
+  in
+    lib.filter conflicts programs;
+
   # Codex execpolicy matches literal argv prefixes and resolves overlapping
   # rules strictest-wins, so only literal patterns translate exactly. Exact
   # allows are dropped because a prefix rule would widen them, and quoted,
@@ -366,12 +418,7 @@
   }: let
     programRules = renderPrograms programs;
     policyRules = renderActionRules {inherit allow ask deny;};
-    conflicts =
-      lib.filter (
-        programPattern:
-          builtins.any (denyPattern: patternsMayOverlap programPattern denyPattern) deny
-      )
-      (builtins.attrNames programRules);
+    conflicts = conflictsFor (builtins.attrNames programRules) deny;
   in
     assert lib.assertMsg (conflicts == []) (
       "agent-safety: autoSafe cannot override deny rule(s): "
@@ -386,8 +433,10 @@ in {
   inherit
     autoSafeSubmodule
     autoSafeType
+    conflictsFor
     mergeRules
     normalize
+    patternsMayOverlap
     renderActionRules
     renderCodexRules
     renderProgram
