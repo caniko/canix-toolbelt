@@ -102,6 +102,24 @@
       programs = ["shell" "shell *" "ls"];
     }
     {
+      # Review counterexamples: a program prefix shorter than a deny wildcard
+      # prefix, and patterns whose wildcard status depends on stripping the
+      # environment prefix exactly as patternsMayOverlap does.
+      name = "deny-prefix-longer";
+      deny = ["git push*"];
+      programs = ["git *"];
+    }
+    {
+      name = "double-strip-literal";
+      deny = ["a*"];
+      programs = ["*=* *=* a"];
+    }
+    {
+      name = "double-strip-wildcard";
+      deny = ["*=* *=* ab"];
+      programs = ["*=* *=* a"];
+    }
+    {
       name = "store-path";
       deny = ["/nix/store/*/bin/rm -rf *"];
       programs = ["/nix/store/hash-x/bin/rm -rf /" "/nix/store/hash-x/bin/ls" "/nix/store/*/bin/rm"];
