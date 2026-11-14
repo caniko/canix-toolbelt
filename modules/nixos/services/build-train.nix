@@ -1,5 +1,5 @@
 # Fleetix owns the service, policy renderer and lifecycle. Preserve Toolbelt's
-# public option paths using leaf aliases, including staged deployment recovery.
+# public option paths using leaf aliases.
 {fleetixBuildTrain}: {lib, ...}: {
   imports =
     [fleetixBuildTrain]
@@ -27,6 +27,8 @@
       "planningTimeoutSeconds"
       "substitutes"
       "memoryMax"
+      "fenceSeconds"
+      # Removed upstream; the alias forwards its removal notice.
       "retainedDeployment"
     ];
 }
