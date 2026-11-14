@@ -64,6 +64,55 @@
       deny = ["/nix/store/*/bin/demo query --delete *"];
     })
     true);
+
+  # `conflictsFor` replaced a pairwise overlap scan; keep that scan here as the
+  # reference so the set-based version cannot drift from `patternsMayOverlap`.
+  referenceConflicts = programs: deny:
+    lib.filter (program: builtins.any (denied: safety.patternsMayOverlap program denied) deny) programs;
+
+  conflictCases = [
+    {
+      name = "literal";
+      deny = ["git" "rg --files"];
+      programs = ["git" "git status" "rg --files" "zzz"];
+    }
+    {
+      name = "wildcard";
+      deny = ["git *" "demo query *"];
+      programs = ["git commit *" "git" "demo query --delete *" "zzz *"];
+    }
+    {
+      name = "left-wildcard";
+      deny = ["demo sudo"];
+      programs = ["demo *" "demo" "zzz *"];
+    }
+    {
+      name = "right-wildcard";
+      deny = ["demo *" "/nix/store/hash-rm/bin/rm -rf /"];
+      programs = ["demo sudo" "demo" "/nix/store/hash-rm/bin/rm -rf *" "/nix/store/hash-zsh/bin/zsh *"];
+    }
+    {
+      name = "environment-prefix";
+      deny = ["*=* curl *" "*=* *=* curl *"];
+      programs = ["curl" "curl *" "*=* curl" "*=* *=* curl *" "wget"];
+    }
+    {
+      name = "empty-prefix";
+      deny = ["* ls"];
+      programs = ["shell" "shell *" "ls"];
+    }
+    {
+      name = "store-path";
+      deny = ["/nix/store/*/bin/rm -rf *"];
+      programs = ["/nix/store/hash-x/bin/rm -rf /" "/nix/store/hash-x/bin/ls" "/nix/store/*/bin/rm"];
+    }
+  ];
+
+  conflictingFixtures = map (case: case.name) (lib.filter (case: referenceConflicts case.programs case.deny != []) conflictCases);
+  mismatchedFixtures = map (case: case.name) (lib.filter (case:
+    safety.conflictsFor case.programs case.deny
+    != referenceConflicts case.programs case.deny)
+  conflictCases);
 in
   mkEvalCheck {
     name = "agent-safety-eval";
@@ -129,6 +178,19 @@ in
         name = "deny-overlap-dominance";
         assertion = overlappingConflict.success == false;
         message = "a broad autoSafe pattern must not overlap a narrower deny";
+      }
+      {
+        name = "conflicts-equivalence";
+        assertion = mismatchedFixtures == [];
+        message = "set-based conflict detection must equal the pairwise overlap scan: ${lib.concatStringsSep ", " mismatchedFixtures}";
+      }
+      {
+        name = "conflicts-nontrivial";
+        assertion =
+          conflictingFixtures
+          != []
+          && lib.any (case: referenceConflicts case.programs case.deny != case.programs) conflictCases;
+        message = "the conflict fixtures must exercise both matching and non-matching patterns";
       }
     ];
   }
