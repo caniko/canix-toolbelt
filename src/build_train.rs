@@ -5,7 +5,7 @@
 //! through re-exports so consumers share those exact types and implementation.
 //! Publication, resource admission and host activation remain caller-owned.
 
-pub use fleetix::build_train::native::{Connection, Service, policy_identity, rollover, serve};
+pub use fleetix::build_train::native::{Connection, Service, policy_identity, serve};
 
 #[cfg(feature = "cli")]
 /// Toolbelt's command path over the shared Fleetix frontend.

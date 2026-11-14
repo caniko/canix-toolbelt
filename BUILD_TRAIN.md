@@ -39,58 +39,11 @@ independent of `serde_json/preserve_order` feature unification.
 The Toolbelt module imports Fleetix's service and aliases its option leaves;
 there is one policy renderer, systemd unit and root lifecycle. New configurations
 bind operator identity inside the existing opaque version-2 admission string.
-Historical service files keep their original positional hashes and remain valid
-for staged retirement and rollover.
-
-The service retains its original policy during a host activation. A changed
-connection or persisted journal is rejected rather than altering queued work.
-Drain old requests under their original coordinator before replacing its policy.
-Protocol/journal version 2 rejects version 1 state without rewriting it.
-
-### Explicit policy rollover
-
-The module publishes `/etc/fleetix-train/service.json` as a symlink to the immutable
-service configuration. Retain that exact store path, the original executable
-closure and the original connection before activation. Stage a changed policy
-with `canix-toolbelt.services.buildTrain.retainedDeployment` set to the original
-`{ package; user; serviceConfig; }`. The active connection and unit keep their
-original executable, policy, ownership and resource limits; candidate contracts
-appear at `/etc/fleetix-train/next-service.json` and `next-connection.json`, and
-both executable closures remain in the system closure. The runtime directory is
-preserved on service stop so the operator-owned socket lease remains available.
-
-Drain the original train and inspect its requests; explicitly cancel any
-remaining pending interests through the original connection. A caller-owned
-host activation lease must cover stopping the old coordinator, rollover and
-replacement startup.
-Run the rollover command as the configured service operator UID; root-owned
-rollover artifacts would violate the service's private-state ownership contract.
-
-```sh
-canix-toolbelt build-train rollover --previous-config ORIGINAL_SERVICE_CONFIG --config /etc/fleetix-train/next-service.json --token TOKEN
-```
-
-This offline command requires both coordinator leases, unchanged state/socket and
-request-root locations, the same builder, a different valid policy, the exact
-retained fence and terminal requests. It snapshots the complete original journal,
-archives and supersession evidence, archives each request before releasing its
-private roots, then initializes the new empty journal. Historical evidence is
-retained under `state_dir/rollovers/`; lease anchors stay present.
-
-After successful rollover, clear `retainedDeployment`, activate that configuration
-and start the replacement service. Never restart the original-policy executable
-against the replaced journal. Operator custody cannot change in place; retire the
-old service and use a separate private namespace for a different operator.
-
-An interruption marker blocks startup until the exact command succeeds. Repeating
-a finished handover does not erase replacement-policy work. The new coordinator
-answers old-policy status/retirement from completed archives; old request intake,
-admission, retry, cancellation, fence release and activation remain rejected.
-Callers keep their own preparation/candidate roots and deployment checkpoints.
-
-Rollover archives old requests instead of migrating them to new execution policy.
-Use new deployment attempts after an upgrade. To continue old pending work, restore
-and verify the original execution/admission contract before releasing its fence.
+A coordinator whose persisted journal belongs to another protocol or policy
+discards it at startup and starts an empty train; Nix already deduplicates the
+store outputs that journal scheduled. A policy change therefore needs no staged
+handover: activate the new configuration and restart the service. Activation
+fences expire after `fenceSeconds`, so a dead owner cannot hold dispatch.
 
 ## Request lifecycle
 

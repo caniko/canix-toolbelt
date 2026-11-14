@@ -5,6 +5,18 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Consume fleetix 0.11.1. The build-train coordinator is crash-only: a journal
+  from another policy is discarded at startup, activation fences expire after
+  `fenceSeconds`, and retired history is pruned.
+
+### Removed
+
+- `build_train::rollover` and `build-train rollover`; no staged policy handover
+  is needed. `canix-toolbelt.services.buildTrain.retainedDeployment` now
+  forwards Fleetix's removed-option notice.
+
 ### Added
 
 - Caddy service registry `authPolicy` accepts `type = "forwardAuth"` providers.
