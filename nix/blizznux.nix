@@ -13,6 +13,7 @@
   librsvg,
   pango,
   python3,
+  umu-launcher,
   vulkan-loader,
   webkitgtk_4_1,
 }:
@@ -40,8 +41,7 @@ rustPlatform.buildRustPackage {
   buildInputs = [cairo gdk-pixbuf glib gtk3 libsoup_3 librsvg pango webkitgtk_4_1];
 
   # Proton and the Labs modes come from the NixOS module (programs.blizznux.proton
-  # and .labs): a Nix-built Proton must run directly, since umu's Steam Runtime
-  # container cannot see the /nix/store it lives in.
+  # and .labs).
   postInstall = ''
     install -Dm755 bin/blizznux-run $out/bin/blizznux-run
     install -Dm644 share/applications/com.blizznux.launcher.desktop $out/share/applications/com.blizznux.launcher.desktop
@@ -50,12 +50,14 @@ rustPlatform.buildRustPackage {
   '';
 
   # Wraps the app and blizznux-run: curl fetches Blizzard's installer, python3
-  # runs the `proton` script, and Proton probes libvulkan through ctypes before
-  # Wine starts.
+  # runs the `proton` script in Labs direct mode, Proton probes libvulkan through
+  # ctypes before Wine starts, and nixpkgs' umu-launcher replaces the one the
+  # launcher would download.
   preFixup = ''
     gappsWrapperArgs+=(
       --prefix PATH : ${lib.makeBinPath [curl python3]}
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [vulkan-loader]}
+      --set-default BLIZZNUX_UMU ${lib.getExe umu-launcher}
     )
   '';
 
