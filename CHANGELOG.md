@@ -7,6 +7,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Consume fleetix 0.12.0. Its build-train types are re-exported, so this is a
+  breaking release (0.9.0). Rops spools no longer refuse a request whose T3
+  thread id (`mcp:launch:…`) fails the spool id check; the id is left out of
+  the source instead.
 - Consume fleetix 0.11.1. The build-train coordinator is crash-only: a journal
   from another policy is discarded at startup, activation fences expire after
   `fenceSeconds`, and retired history is pruned.
