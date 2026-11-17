@@ -2,6 +2,7 @@
   lib,
   rustPlatform,
   fetchFromGitHub,
+  aws-lc,
   pkg-config,
   wrapGAppsHook4,
   cairo,
@@ -38,7 +39,8 @@ rustPlatform.buildRustPackage {
   cargoHash = "sha256-UXwhzI/E+PLfnbz/EIwivlJ6ECO+7uX7+9rTsPB5C+g=";
 
   nativeBuildInputs = [pkg-config wrapGAppsHook4];
-  buildInputs = [cairo gdk-pixbuf glib gtk3 libsoup_3 librsvg pango webkitgtk_4_1];
+  # Reqwest's Rustls pulls in aws-lc-sys, which nixpkgs links against the system AWS-LC.
+  buildInputs = [aws-lc cairo gdk-pixbuf glib gtk3 libsoup_3 librsvg pango webkitgtk_4_1];
 
   # Proton and the Labs modes come from the NixOS module (programs.blizznux.proton
   # and .labs).
