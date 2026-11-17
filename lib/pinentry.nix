@@ -1,12 +1,17 @@
 {lib}: rec {
+  # Zellij 0.46.0 already drops both duplicate RemoveClient sends upstream, so
+  # only the source-reviewed 0.45 releases take the cleanup patch.
   mkZellij = {pkgs}:
-    assert lib.assertMsg (lib.elem pkgs.zellij.version ["0.45.0" "0.45.1"])
-    "Toolbelt's Zellij cleanup patch requires source review for this version; select an explicitly verified zellij package.";
-      pkgs.zellij.override {
-        zellij-unwrapped = pkgs.zellij-unwrapped.overrideAttrs (old: {
-          patches = (old.patches or []) ++ [../nix/zellij-conn-status-single-cleanup.patch];
-        });
-      };
+    if pkgs.zellij.version == "0.46.0"
+    then pkgs.zellij
+    else
+      assert lib.assertMsg (lib.elem pkgs.zellij.version ["0.45.0" "0.45.1"])
+      "Toolbelt's Zellij cleanup patch requires source review for this version; select an explicitly verified zellij package.";
+        pkgs.zellij.override {
+          zellij-unwrapped = pkgs.zellij-unwrapped.overrideAttrs (old: {
+            patches = (old.patches or []) ++ [../nix/zellij-conn-status-single-cleanup.patch];
+          });
+        };
 
   mkPackages = {
     pkgs,
