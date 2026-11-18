@@ -7,6 +7,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Consume fleetix 0.14.0. Its build-train types are re-exported, so this is a
+  breaking release (0.10.0). fleetix 0.14 replaces the rops spool with the
+  `ops` attended-transaction contract; this crate does not use it, and canix
+  needs both on the same fleetix to move.
 - Consume fleetix 0.12.0. Its build-train types are re-exported, so this is a
   breaking release (0.9.0). Rops spools no longer refuse a request whose T3
   thread id (`mcp:launch:…`) fails the spool id check; the id is left out of
