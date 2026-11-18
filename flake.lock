@@ -9094,12 +9094,12 @@
         "rev": "51ad0422b925d830bf4af36979fed51209f79c0a",
         "revCount": 87,
         "type": "git",
-        "url": "https://codeberg.org/viperML/wrapper-manager"
+        "url": "https://github.com/caniko/wrapper-manager.git"
       },
       "original": {
         "rev": "51ad0422b925d830bf4af36979fed51209f79c0a",
         "type": "git",
-        "url": "https://codeberg.org/viperML/wrapper-manager"
+        "url": "https://github.com/caniko/wrapper-manager.git"
       }
     }
   },
