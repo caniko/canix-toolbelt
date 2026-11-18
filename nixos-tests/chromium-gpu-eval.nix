@@ -93,7 +93,7 @@ in
     ${amd}/bin/fake-chromium > amd.out
     grep -F -- '--render-node-override=/dev/dri/by-path/pci-0000:65:00.0-render' amd.out >/dev/null
     grep -F -- 'LIBVA=radeonsi' amd.out >/dev/null
-    grep -F -- '--enable-features=AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiVideoEncoder,VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks' amd.out >/dev/null
+    grep -F -- '--enable-features=AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiVideoEncoder,VaapiVideoDecoder,AcceleratedVideoDecodeLinuxGL,VaapiIgnoreDriverChecks' amd.out >/dev/null
     test "$(feature_count amd.out)" = 1
     if grep -F -- 'DRI_PRIME' amd.out >/dev/null; then
       echo 'no wrapper may set DRI_PRIME' >&2

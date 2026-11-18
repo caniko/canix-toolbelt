@@ -28,7 +28,7 @@
           "AcceleratedVideoDecodeLinuxZeroCopyGL"
           "VaapiVideoEncoder"
           "VaapiVideoDecoder"
-          "VaapiVideoDecodeLinuxGL"
+          "AcceleratedVideoDecodeLinuxGL"
           "VaapiIgnoreDriverChecks"
         ]
         ++ lib.optional isNvidia "VaapiOnNvidiaGPUs";
