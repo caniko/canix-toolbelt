@@ -7,6 +7,10 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Consume fleetix 0.15.0. Its build-train types are re-exported, so this is a
+  breaking release (0.11.0). fleetix 0.15 adds `Link.devices` (non-host
+  WireGuard peers); this crate does not use it, and canix needs both on the
+  same fleetix to move.
 - Consume fleetix 0.14.0. Its build-train types are re-exported, so this is a
   breaking release (0.10.0). fleetix 0.14 replaces the rops spool with the
   `ops` attended-transaction contract; this crate does not use it, and canix
