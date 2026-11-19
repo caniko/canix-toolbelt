@@ -458,7 +458,9 @@ fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Resu
         command.pre_exec(|| {
             const PR_SET_PDEATHSIG: i32 = 1;
             const SIGKILL: u64 = 9;
-            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if prctl(PR_SET_PDEATHSIG, SIGKILL) == -1 {
+                return Err(io::Error::last_os_error());
+            }
             Ok(())
         });
     }

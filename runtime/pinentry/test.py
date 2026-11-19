@@ -141,6 +141,7 @@ class RequestContextIntegration(unittest.TestCase):
             process = subprocess.Popen([agent], env=dict(env, FIXTURE_HANG="1", FIXTURE_SEAT="in-use",
                                                          PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.addCleanup(process.stdout.close)
             self.addCleanup(process.kill)
             self.assertEqual(os.read(process.stdout.fileno(), 64), b"OK\n")
             os.write(process.stdin.fileno(), b"GETPIN\n")
