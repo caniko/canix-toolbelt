@@ -229,3 +229,19 @@ fn peers_are_tab_separated_commands() {
         ]
     );
 }
+
+#[test]
+fn only_a_complete_ok_status_line_accepts_a_peer() {
+    for greeting in [b"OK\n".as_slice(), b"OK Pleased to meet you\n"] {
+        assert!(accepted(greeting));
+    }
+    for greeting in [
+        b"OKAY welcome\n".as_slice(),
+        b"OK",
+        b"OK Pleased",
+        b"ERR 83886179 locked\n",
+        b"",
+    ] {
+        assert!(!accepted(greeting));
+    }
+}

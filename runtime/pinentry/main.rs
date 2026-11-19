@@ -605,6 +605,24 @@ fn peers() -> Vec<Vec<String>> {
         .unwrap_or_default()
 }
 
+/// An Assuan greeting is the `OK` status token, alone or followed by text.
+fn accepted(greeting: &[u8]) -> bool {
+    greeting == b"OK\n" || (greeting.starts_with(b"OK ") && greeting.ends_with(b"\n"))
+}
+
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
+
+fn stop_group(child: &mut std::process::Child) {
+    const SIGKILL: i32 = 9;
+    // SAFETY: kill(2) takes plain integers; the group is this attempt's own.
+    if let Ok(group) = i32::try_from(child.id()) {
+        unsafe { kill(-group, SIGKILL) };
+    }
+    let _ = child.wait();
+}
+
 /// Hands the Assuan stream to the first peer whose seat is in use. A peer
 /// declines by exiting before its greeting, so no request byte has been read
 /// until one accepts; after that its outcome is final.
@@ -615,6 +633,8 @@ fn forward(peers: &[Vec<String>]) -> io::Result<Option<ExitCode>> {
             .arg("--serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            // Its own group lets a rejected attempt stop the SSH client too.
+            .process_group(0)
             .spawn()
         {
             Ok(child) => child,
@@ -631,18 +651,16 @@ fn forward(peers: &[Vec<String>]) -> io::Result<Option<ExitCode>> {
             let read = reader.read_until(b'\n', &mut greeting);
             let _ = sender.send(read.map(|_| (greeting, reader)));
         });
-        let Ok(Ok((greeting, mut reader))) = receiver.recv_timeout(FORWARD_TIMEOUT) else {
-            let _ = child.kill();
-            let _ = child.wait();
+        // Anything but a complete pinentry greeting (EOF, a login banner, ERR)
+        // declines; stop the whole attempt so no transport outlives it.
+        let greeting = match receiver.recv_timeout(FORWARD_TIMEOUT) {
+            Ok(Ok((greeting, reader))) if accepted(&greeting) => Some((greeting, reader)),
+            _ => None,
+        };
+        let Some((greeting, mut reader)) = greeting else {
+            stop_group(&mut child);
             continue;
         };
-        // Anything but a pinentry greeting (EOF, a login banner, ERR) declines;
-        // stop the peer so a half-open transport cannot hold this request.
-        if !greeting.starts_with(b"OK") {
-            let _ = child.kill();
-            let _ = child.wait();
-            continue;
-        }
         let mut input = child.stdin.take().expect("piped stdin");
         thread::spawn(move || io::copy(&mut io::stdin().lock(), &mut input));
         let mut stdout = io::stdout().lock();
