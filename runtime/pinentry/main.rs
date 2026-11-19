@@ -11,6 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -27,7 +28,19 @@ const QT: &str = match option_env!("CANIX_PINENTRY_QT") {
     None => "pinentry-qt",
 };
 const GPG: Option<&str> = option_env!("CANIX_PINENTRY_GPG");
+const LOGINCTL: &str = match option_env!("CANIX_PINENTRY_LOGINCTL") {
+    Some(path) => path,
+    None => "loginctl",
+};
+const SYSTEMCTL: &str = match option_env!("CANIX_PINENTRY_SYSTEMCTL") {
+    Some(path) => path,
+    None => "systemctl",
+};
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+// A peer's greeting follows its SSH connect and, at most, one popup start.
+const FORWARD_TIMEOUT: Duration = Duration::from_secs(20);
+// `--serve` exits with this before any Assuan output when its seat is not in use.
+const ABSENT: u8 = 3;
 const DISCOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const LAUNCH_ATTEMPTS: usize = 3;
 const DISPLAY_VARIABLES: [&str; 6] = [
@@ -76,7 +89,12 @@ fn desktop_context(data: &str) -> Option<[Option<OsString>; DISPLAY_VARIABLES.le
 enum Route {
     Desktop,
     Tty,
-    Zellij { pane: u32, session: String },
+    /// No display and no terminal: only a configured peer or seat can prompt.
+    Headless,
+    Zellij {
+        pane: u32,
+        session: String,
+    },
 }
 
 fn route(data: Option<&str>) -> Route {
@@ -85,6 +103,9 @@ fn route(data: Option<&str>) -> Route {
     };
     if data == "desktop" || desktop_context(&format!("canix-pinentry-v1:{data}")).is_some() {
         return Route::Desktop;
+    }
+    if data == "headless" {
+        return Route::Headless;
     }
     if let Some((pane, session)) = data
         .strip_prefix("zellij:")
@@ -107,6 +128,7 @@ fn client_route(
     session: Option<&str>,
     ssh: bool,
     graphical: bool,
+    terminal: bool,
 ) -> Route {
     if let (Some(pane), Some(session)) = (pane, session) {
         return route(Some(&format!("canix-pinentry-v1:zellij:{pane}:{session}")));
@@ -119,8 +141,10 @@ fn client_route(
     }
     if graphical && !ssh {
         Route::Desktop
-    } else {
+    } else if terminal {
         Route::Tty
+    } else {
+        Route::Headless
     }
 }
 
@@ -139,6 +163,7 @@ impl Route {
                 format!("canix-pinentry-v1:desktop:{}", fields.join(":"))
             }
             Self::Tty => "canix-pinentry-v1:tty".into(),
+            Self::Headless => "canix-pinentry-v1:headless".into(),
             Self::Zellij { pane, session } => {
                 format!("canix-pinentry-v1:zellij:{pane}:{session}")
             }
@@ -159,7 +184,25 @@ fn current_route(inherit_marker: bool) -> Route {
         session.as_deref(),
         present("SSH_CONNECTION") || present("SSH_TTY"),
         present("DISPLAY") || present("WAYLAND_DISPLAY"),
+        terminal().is_some() || present("GPG_TTY") || fs::File::open("/dev/tty").is_ok(),
     )
+}
+
+// Signing often consumes piped stdin and writes a file. Prefer stdin, then
+// interactive stderr/stdout; accept virtual consoles and serial TTYs too.
+// Popup metadata retains its stricter owned-PTY check.
+fn terminal() -> Option<PathBuf> {
+    [
+        (0, io::stdin().is_terminal()),
+        (2, io::stderr().is_terminal()),
+        (1, io::stdout().is_terminal()),
+    ]
+    .into_iter()
+    .find_map(|(fd, terminal)| {
+        terminal
+            .then(|| fs::read_link(format!("/proc/self/fd/{fd}")).ok())
+            .flatten()
+    })
 }
 
 fn exec_gpg() -> io::Error {
@@ -170,21 +213,7 @@ fn exec_gpg() -> io::Error {
     command
         .args(env::args_os().skip(1))
         .env("PINENTRY_USER_DATA", current_route(true).user_data());
-    // Signing often consumes piped stdin and writes a file. Prefer stdin, then
-    // interactive stderr/stdout; accept virtual consoles and serial TTYs too.
-    // Popup metadata retains its stricter owned-PTY check.
-    let terminal = [
-        (0, io::stdin().is_terminal()),
-        (2, io::stderr().is_terminal()),
-        (1, io::stdout().is_terminal()),
-    ]
-    .into_iter()
-    .find_map(|(fd, terminal)| {
-        terminal
-            .then(|| fs::read_link(format!("/proc/self/fd/{fd}")).ok())
-            .flatten()
-    });
-    if let Some(tty) = terminal {
+    if let Some(tty) = terminal() {
         command.env("GPG_TTY", tty);
     }
     command.exec()
@@ -379,32 +408,38 @@ fn popup(pane: u32, session: &str) -> io::Result<Popup> {
     })
 }
 
-fn request_line(line: &[u8], tty: &str) -> Vec<u8> {
+/// Rewrites `OPTION ttyname` to the prompt's terminal. A forwarded request's
+/// terminal, display and touch file name the requesting host, so they become
+/// `NOP`, which keeps Assuan's one-reply-per-command pairing intact.
+fn request_line(line: &[u8], tty: Option<&str>, forwarded: bool) -> Vec<u8> {
     if let Ok(text) = std::str::from_utf8(line) {
         let mut words = text.split_whitespace();
         if words
             .next()
             .is_some_and(|command| command.eq_ignore_ascii_case("OPTION"))
-            && words.next().is_some_and(|option| {
-                option.trim_start_matches("--").split('=').next() == Some("ttyname")
-            })
+            && let Some(option) = words.next()
         {
-            return format!("OPTION ttyname={tty}\n").into_bytes();
+            let option = option.trim_start_matches("--").split('=').next();
+            match (option, tty) {
+                (Some("ttyname"), Some(tty)) => {
+                    return format!("OPTION ttyname={tty}\n").into_bytes();
+                }
+                (Some("ttyname" | "display" | "xauthority" | "touch-file"), _) if forwarded => {
+                    return b"NOP\n".to_vec();
+                }
+                _ => {}
+            }
         }
     }
     line.to_vec()
 }
 
-fn run_popup(popup: Popup) -> io::Result<ExitCode> {
-    let mut child = backend(TTY)
-        .args(["--ttyname", &popup.tty])
-        .stdin(Stdio::piped())
-        .spawn()?;
+fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Result<ExitCode> {
+    let mut child = command.stdin(Stdio::piped()).spawn()?;
     let mut input = child
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("pinentry has no stdin"))?;
-    let tty = popup.tty.clone();
     thread::spawn(move || {
         let mut source = io::stdin().lock();
         let mut line = Vec::new();
@@ -413,7 +448,9 @@ fn run_popup(popup: Popup) -> io::Result<ExitCode> {
             match source.read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    if input.write_all(&request_line(&line, &tty)).is_err()
+                    if input
+                        .write_all(&request_line(&line, tty.as_deref(), forwarded))
+                        .is_err()
                         || input.flush().is_err()
                     {
                         break;
@@ -423,8 +460,179 @@ fn run_popup(popup: Popup) -> io::Result<ExitCode> {
         }
     });
     let status = child.wait()?;
-    drop(popup);
     Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
+}
+
+fn run_popup(popup: Popup, mut pinentry: Command, forwarded: bool) -> io::Result<ExitCode> {
+    pinentry.args(["--ttyname", &popup.tty]);
+    let status = relay(pinentry, Some(popup.tty.clone()), forwarded);
+    drop(popup);
+    status
+}
+
+fn output(program: &str, args: &[&str]) -> io::Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!("{program} {args:?} failed")));
+    }
+    String::from_utf8(output.stdout).map_err(io::Error::other)
+}
+
+/// A seat is in use while its graphical session is local, active and unlocked.
+/// Lockers must maintain logind's `LockedHint` for an unattended seat to decline.
+fn seat_in_use(properties: &str) -> bool {
+    let value = |name: &str| {
+        properties
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+    };
+    value("Active") == Some("yes")
+        && value("LockedHint") == Some("no")
+        && value("Remote") == Some("no")
+        && matches!(value("Type"), Some("wayland" | "x11"))
+}
+
+fn present() -> io::Result<bool> {
+    let uid = fs::metadata("/proc/self")?.uid().to_string();
+    let session = output(LOGINCTL, &["show-user", &uid, "-p", "Display", "--value"])?;
+    let session = session.trim();
+    if session.is_empty() {
+        return Ok(false);
+    }
+    let properties = output(
+        LOGINCTL,
+        &[
+            "show-session",
+            session,
+            "-p",
+            "Active",
+            "-p",
+            "LockedHint",
+            "-p",
+            "Remote",
+            "-p",
+            "Type",
+        ],
+    )?;
+    Ok(seat_in_use(&properties))
+}
+
+/// The focused terminal pane of a client attached to `zellij action list-clients`.
+fn client_pane(clients: &str) -> Option<u32> {
+    clients.lines().skip(1).find_map(|line| {
+        line.split_whitespace()
+            .nth(1)?
+            .strip_prefix("terminal_")?
+            .parse()
+            .ok()
+    })
+}
+
+fn attached_pane() -> Option<(u32, String)> {
+    let sessions = output(ZELLIJ, &["list-sessions", "--short", "--no-formatting"]).ok()?;
+    sessions.lines().find_map(|session| {
+        let clients = output(ZELLIJ, &["--session", session, "action", "list-clients"]).ok()?;
+        Some((client_pane(&clients)?, session.to_string()))
+    })
+}
+
+/// Prompts on this seat for a request without a usable origin: a floating pane
+/// in an attached Zellij session, else Qt on the user manager's display.
+fn prompt_here(forwarded: bool) -> io::Result<ExitCode> {
+    if let Some((pane, session)) = attached_pane() {
+        match popup(pane, &session) {
+            Ok(popup) => return run_popup(popup, Command::new(TTY), forwarded),
+            Err(error) => eprintln!("toolbelt-pinentry: {error}; using the desktop"),
+        }
+    }
+    let mut qt = Command::new(QT);
+    for name in DISPLAY_VARIABLES {
+        qt.env_remove(name);
+    }
+    for line in output(SYSTEMCTL, &["--user", "show-environment"])?.lines() {
+        if let Some((name, value)) = line.split_once('=')
+            && DISPLAY_VARIABLES.contains(&name)
+        {
+            qt.env(name, value);
+        }
+    }
+    relay(qt, None, forwarded)
+}
+
+/// Tab-separated peer commands, one per line; `--serve` is appended to each.
+fn parse_peers(text: &str) -> Vec<Vec<String>> {
+    text.lines()
+        .map(|line| {
+            line.split('\t')
+                .filter(|arg| !arg.is_empty())
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .filter(|peer| !peer.is_empty())
+        .collect()
+}
+
+fn peers() -> Vec<Vec<String>> {
+    let config = env::var_os("XDG_CONFIG_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    config
+        .and_then(|config| fs::read_to_string(config.join("canix-toolbelt/pinentry-peers")).ok())
+        .map(|text| parse_peers(&text))
+        .unwrap_or_default()
+}
+
+/// Hands the Assuan stream to the first peer whose seat is in use. A peer
+/// declines by exiting before its greeting, so no request byte has been read
+/// until one accepts; after that its outcome is final.
+fn forward(peers: &[Vec<String>]) -> io::Result<Option<ExitCode>> {
+    for peer in peers {
+        let mut child = match Command::new(&peer[0])
+            .args(&peer[1..])
+            .arg("--serve")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("toolbelt-pinentry: {}: {error}", peer[0]);
+                continue;
+            }
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut greeting = Vec::new();
+            let read = reader.read_until(b'\n', &mut greeting);
+            let _ = sender.send(read.map(|_| (greeting, reader)));
+        });
+        let Ok(Ok((greeting, mut reader))) = receiver.recv_timeout(FORWARD_TIMEOUT) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            continue;
+        };
+        if greeting.is_empty() {
+            let _ = child.wait();
+            continue;
+        }
+        let mut input = child.stdin.take().expect("piped stdin");
+        thread::spawn(move || io::copy(&mut io::stdin().lock(), &mut input));
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(&greeting)?;
+        stdout.flush()?;
+        io::copy(&mut reader, &mut stdout)?;
+        stdout.flush()?;
+        let status = child.wait()?;
+        return Ok(Some(ExitCode::from(status.code().unwrap_or(1) as u8)));
+    }
+    Ok(None)
 }
 
 fn run() -> io::Result<ExitCode> {
@@ -435,8 +643,20 @@ fn run() -> io::Result<ExitCode> {
     }
     if args.get(1).is_some_and(|arg| arg == "--context") && args.len() == 2 {
         // Shell hooks refresh from live context, not their previous marker.
-        println!("{}", current_route(false).user_data());
+        // They run interactively; a headless marker would stick to children.
+        let route = match current_route(false) {
+            Route::Headless => Route::Tty,
+            route => route,
+        };
+        println!("{}", route.user_data());
         return Ok(ExitCode::SUCCESS);
+    }
+    if args.get(1).is_some_and(|arg| arg == "--serve") && args.len() == 2 {
+        // A peer forwarded this request; never forward it again.
+        if !present().unwrap_or(false) {
+            return Ok(ExitCode::from(ABSENT));
+        }
+        return prompt_here(true);
     }
     if args.get(1).is_some_and(|arg| arg == "--pane") {
         if args.len() != 3 {
@@ -452,11 +672,32 @@ fn run() -> io::Result<ExitCode> {
     } else {
         current_route(true)
     };
+    // Peers are opt-in; without them every route behaves as before.
+    let peers = match request {
+        Route::Desktop | Route::Headless => peers(),
+        _ => Vec::new(),
+    };
     match request {
+        // An unknown local seat state keeps the request here.
+        Route::Desktop if !peers.is_empty() && !present().unwrap_or(true) => {
+            match forward(&peers)? {
+                Some(status) => Ok(status),
+                None => Err(exec_desktop(agent)),
+            }
+        }
         Route::Desktop => Err(exec_desktop(agent)),
-        Route::Tty => Err(exec_tty()),
+        Route::Headless if !peers.is_empty() => {
+            if present().unwrap_or(false) {
+                return prompt_here(false);
+            }
+            match forward(&peers)? {
+                Some(status) => Ok(status),
+                None => Err(exec_tty()),
+            }
+        }
+        Route::Tty | Route::Headless => Err(exec_tty()),
         Route::Zellij { pane, session } => match popup(pane, &session) {
-            Ok(popup) => run_popup(popup),
+            Ok(popup) => run_popup(popup, backend(TTY), false),
             Err(error) => {
                 eprintln!("toolbelt-pinentry: {error}; using the requesting terminal");
                 // No protocol bytes have been consumed. Only startup failure can

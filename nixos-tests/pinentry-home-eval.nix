@@ -63,6 +63,12 @@
     };
     nushell = true;
   };
+  remote = evaluate {
+    settings = {
+      enable = true;
+      peers = [["ssh" "me@peer" "--" "canix-toolbelt-pinentry"]];
+    };
+  };
   nushellOptOut = evaluate {
     settings = {
       enable = true;
@@ -87,6 +93,10 @@ in
   assert !lib.hasInfix "PINENTRY_USER_DATA" gpg.programs.nushell.extraConfig;
   assert lib.hasInfix "PINENTRY_USER_DATA" nushell.programs.nushell.extraConfig;
   assert nushellOptOut.programs.nushell.extraConfig == "";
+  assert remote.xdg.configFile."canix-toolbelt/pinentry-peers".text == "ssh\tme@peer\t--\tcanix-toolbelt-pinentry\n";
+  assert !(direct.xdg.configFile ? "canix-toolbelt/pinentry-peers");
+  # Peers invoke the router by name from the login PATH.
+  assert lib.any (package: package.outPath == remote.canix-toolbelt.pinentry.packages.router.outPath) remote.home.packages;
     pkgs.runCommand "pinentry-home-eval" {} ''
       test "$(readlink -f ${coexist.home.path}/bin/rage)" = "${coexist.canix-toolbelt.pinentry.packages.rage}/bin/rage"
       for program in gpg gpg2; do

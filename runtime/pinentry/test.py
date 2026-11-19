@@ -24,6 +24,35 @@ if WRAPPED_RAGE:
     del sys.argv[1]
 
 
+def compile_seat_router(root, **backends):
+    """Build a router whose loginctl reports a seat in use only under FIXTURE_SEAT=in-use."""
+    loginctl = root / "loginctl"
+    loginctl.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                        "if os.environ.get('FIXTURE_SEAT') != 'in-use': print(); raise SystemExit\n"
+                        "print('c1' if sys.argv[1] == 'show-user' else 'Remote=no\\nType=wayland\\nActive=yes\\nLockedHint=no')\n")
+    for path in [loginctl, *backends.values()]:
+        Path(path).chmod(0o700)
+    router = root / "router"
+    env = dict(os.environ, CANIX_PINENTRY_LOGINCTL=str(loginctl),
+               **{f"CANIX_PINENTRY_{name}": str(path) for name, path in backends.items()})
+    subprocess.run(["rustc", "--edition=2024", "-D", "warnings", str(Path(__file__).with_name("main.rs")), "-o", str(router)],
+                   env=env, capture_output=True, check=True, timeout=60)
+    return router
+
+
+def write_peers(root, router, seats):
+    """Peers run the router locally, standing in for an SSH command per seat state."""
+    lines = []
+    for index, seat in enumerate(seats):
+        peer = root / f"peer-{index}-{seat}"
+        peer.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                        f"os.execve({str(router)!r}, [{str(router)!r}, *sys.argv[1:]], dict(os.environ, FIXTURE_SEAT={seat!r}))\n")
+        peer.chmod(0o700)
+        lines.append(str(peer))
+    (root / "config/canix-toolbelt").mkdir(parents=True, exist_ok=True)
+    (root / "config/canix-toolbelt/pinentry-peers").write_text("".join(f"{line}\n" for line in lines))
+
+
 class RequestContextIntegration(unittest.TestCase):
     """Exercise executable entrypoints with recording, non-secret backends."""
 
@@ -53,6 +82,42 @@ class RequestContextIntegration(unittest.TestCase):
         cls.agent.symlink_to(binary)
         cls.env = {key: value for key, value in os.environ.items()
                    if not key.startswith(("ZELLIJ", "GPG", "GNUPG", "SSH_", "PINENTRY"))}
+        # Never read an operator's peer list while testing.
+        cls.env["XDG_CONFIG_HOME"] = str(root / "config")
+
+    def test_forwarded_desktop_request_prompts_on_the_first_peer_seat_in_use(self):
+        root = Path(self.temp.name) / "forward"
+        root.mkdir()
+        record = root / "record.json"
+        qt = root / "qt"
+        qt.write_text(f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+                      "lines = []\nprint('OK', flush=True)\n"
+                      "for line in sys.stdin:\n"
+                      " lines.append(line.rstrip('\\n'))\n"
+                      " if line.startswith('GETPIN'): print('D forward-fixture-pin', flush=True)\n"
+                      " print('OK', flush=True)\n"
+                      " if line.startswith('BYE'): break\n"
+                      "Path(os.environ['PINENTRY_FIXTURE_RECORD']).write_text(json.dumps({'lines': lines, 'env': "
+                      "{key: os.environ.get(key) for key in ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY']}}))\n")
+        no_zellij = root / "zellij"
+        no_zellij.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+        router = compile_seat_router(root, QT=qt, ZELLIJ=no_zellij, SYSTEMCTL=Path(self.temp.name) / "manager")
+        agent = root / "canix-toolbelt-pinentry-agent"
+        agent.symlink_to(router)
+        request = "OPTION ttyname=/dev/pts/9\nOPTION display=:request\nOPTION lc-ctype=C\nGETPIN\nBYE\n"
+        env = dict(self.env, PINENTRY_FIXTURE_RECORD=str(record), PINENTRY_USER_DATA="canix-pinentry-v1:desktop",
+                   DISPLAY=":request", XDG_CONFIG_HOME=str(root / "config"))
+        for peers, display in [(["absent", "in-use"], ":manager"), (["absent"], ":request")]:
+            with self.subTest(peers=peers):
+                write_peers(root, router, peers)
+                result = subprocess.run([agent], env=env, input=request, text=True, capture_output=True, check=True, timeout=15)
+                self.assertEqual(result.stdout.splitlines(), ["OK"] * 4 + ["D forward-fixture-pin", "OK", "OK"], result.stderr)
+                actual = json.loads(record.read_text())
+                self.assertEqual(actual["env"]["DISPLAY"], display)
+                if display == ":manager":
+                    # The peer's display replaces the requester's, and the
+                    # requester's terminal and display never reach the peer.
+                    self.assertEqual(actual["lines"], ["NOP", "NOP", "OPTION lc-ctype=C", "GETPIN", "BYE"])
 
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",
@@ -378,6 +443,39 @@ class PinentryIntegration(unittest.TestCase):
         os.write(master, b"terminal-fixture\n")
         stdout, stderr = process.communicate(timeout=15)
         self.assertIn("D terminal-fixture", stdout, stderr)
+        self.assertNotIn("ERR ", stdout)
+        self.assert_closed()
+
+    def test_forwarded_headless_request_prompts_in_the_peers_attached_session(self):
+        root = self.root / "forward"
+        root.mkdir()
+        router = compile_seat_router(root)
+        agent = root / "canix-toolbelt-pinentry-agent"
+        agent.symlink_to(router)
+        write_peers(root, router, ["absent", "in-use"])
+        env = dict(self.env, XDG_CONFIG_HOME=str(root / "config"), PINENTRY_USER_DATA="canix-pinentry-v1:headless")
+        process = subprocess.Popen([agent], env=env, text=True, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.queries.append(process)
+        process.stdin.write("OPTION ttyname=/dev/pts/99999999\nOPTION display=:requester\n"
+                            "SETPROMPT Forwarded_prompt\nGETPIN\nBYE\n")
+        process.stdin.flush()
+        process.stdin.close()
+        process.stdin = None
+
+        def prompted():
+            for candidate in self.panes():
+                pane = f"terminal_{candidate['id']}"
+                if candidate["title"] == "Hardware key PIN" and "Forwarded_prompt" in self.zellij(
+                        "action", "dump-screen", "--pane-id", pane):
+                    return candidate
+            return None
+
+        popup = self.wait_for(prompted)
+        self.assertTrue(popup["is_floating"])
+        self.enter(f"terminal_{popup['id']}", "forwarded-pin")
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertIn("D forwarded-pin", stdout, stderr)
         self.assertNotIn("ERR ", stdout)
         self.assert_closed()
 
