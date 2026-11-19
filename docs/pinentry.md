@@ -90,15 +90,18 @@ unlocked; the screen locker must maintain `LockedHint`.
 
 | Local seat | Desktop request | Headless request |
 | --- | --- | --- |
-| In use, or its state is unknown | Local Qt | Local prompt as a peer would show it |
-| Locked or absent | First peer in use, else local Qt | First peer in use, else terminal |
+| In use | Local Qt | Local prompt as a peer would show it |
+| Locked, absent or unknown | First peer in use, else local Qt | First peer in use, else terminal |
 
 A serving peer with an attached Zellij client opens the floating PIN pane next
 to that client's focused pane; otherwise it shows Qt on its user manager's
 display. A peer that is unreachable or locked declines before sending its
-Assuan greeting, so the next peer receives an untouched request.
+Assuan `OK` greeting, so the next peer receives an untouched request. Any other
+first line, such as a login banner, also declines.
 A peer that sends no greeting within 20 seconds is stopped and skipped the
-same way. A served request is never forwarded again.
+same way. A served request is never forwarded again. When the requester's
+stream closes, as on an agent timeout, the peer stops its prompt after one
+second.
 
 The forwarded Assuan stream carries the PIN back over the peer command to the
 requesting agent and its card. The peer replaces the requester's `ttyname`,

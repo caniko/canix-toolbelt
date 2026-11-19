@@ -41,6 +41,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(20);
 // `--serve` exits with this before any Assuan output when its seat is not in use.
 const ABSENT: u8 = 3;
+// Lets a forwarded prompt answer BYE before a closed caller stream stops it.
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
 const DISCOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const LAUNCH_ATTEMPTS: usize = 3;
 const DISPLAY_VARIABLES: [&str; 6] = [
@@ -440,6 +442,7 @@ fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Resu
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("pinentry has no stdin"))?;
+    let (closed, caller_gone) = mpsc::channel();
     thread::spawn(move || {
         let mut source = io::stdin().lock();
         let mut line = Vec::new();
@@ -458,8 +461,23 @@ fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Resu
                 }
             }
         }
+        let _ = closed.send(Instant::now());
     });
-    let status = child.wait()?;
+    // A forwarded requester that disconnects (agent timeout or cancel) cannot
+    // kill this backend itself; a dialog blocked in GETPIN would outlive it.
+    let mut gone = None;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if forwarded {
+            gone = gone.or_else(|| caller_gone.try_recv().ok());
+            if gone.is_some_and(|at| at.elapsed() >= CLOSE_GRACE) {
+                let _ = child.kill();
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
     Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
 }
 
@@ -618,7 +636,10 @@ fn forward(peers: &[Vec<String>]) -> io::Result<Option<ExitCode>> {
             let _ = child.wait();
             continue;
         };
-        if greeting.is_empty() {
+        // Anything but a pinentry greeting (EOF, a login banner, ERR) declines;
+        // stop the peer so a half-open transport cannot hold this request.
+        if !greeting.starts_with(b"OK") {
+            let _ = child.kill();
             let _ = child.wait();
             continue;
         }
@@ -678,8 +699,9 @@ fn run() -> io::Result<ExitCode> {
         _ => Vec::new(),
     };
     match request {
-        // An unknown local seat state keeps the request here.
-        Route::Desktop if !peers.is_empty() && !present().unwrap_or(true) => {
+        // An unknown local seat state (no logind user) counts as absent; local
+        // Qt still follows when no peer accepts.
+        Route::Desktop if !peers.is_empty() && !present().unwrap_or(false) => {
             match forward(&peers)? {
                 Some(status) => Ok(status),
                 None => Err(exec_desktop(agent)),

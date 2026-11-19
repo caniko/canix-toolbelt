@@ -45,7 +45,9 @@ def write_peers(root, router, seats):
     lines = []
     for index, seat in enumerate(seats):
         peer = root / f"peer-{index}-{seat}"
-        peer.write_text(f"#!{sys.executable}\nimport os, sys\n"
+        # A login banner before a declining router must not count as acceptance.
+        banner = "print('Welcome to the peer', flush=True)\n" if seat == "banner" else ""
+        peer.write_text(f"#!{sys.executable}\nimport os, sys\n{banner}"
                         f"os.execve({str(router)!r}, [{str(router)!r}, *sys.argv[1:]], dict(os.environ, FIXTURE_SEAT={seat!r}))\n")
         peer.chmod(0o700)
         lines.append(str(peer))
@@ -90,10 +92,11 @@ class RequestContextIntegration(unittest.TestCase):
         root.mkdir()
         record = root / "record.json"
         qt = root / "qt"
-        qt.write_text(f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+        qt.write_text(f"#!{sys.executable}\nimport json, os, sys, time\nfrom pathlib import Path\n"
                       "lines = []\nprint('OK', flush=True)\n"
                       "for line in sys.stdin:\n"
                       " lines.append(line.rstrip('\\n'))\n"
+                      " if line.startswith('GETPIN') and os.environ.get('FIXTURE_HANG'): time.sleep(60)\n"
                       " if line.startswith('GETPIN'): print('D forward-fixture-pin', flush=True)\n"
                       " print('OK', flush=True)\n"
                       " if line.startswith('BYE'): break\n"
@@ -107,7 +110,7 @@ class RequestContextIntegration(unittest.TestCase):
         request = "OPTION ttyname=/dev/pts/9\nOPTION display=:request\nOPTION lc-ctype=C\nGETPIN\nBYE\n"
         env = dict(self.env, PINENTRY_FIXTURE_RECORD=str(record), PINENTRY_USER_DATA="canix-pinentry-v1:desktop",
                    DISPLAY=":request", XDG_CONFIG_HOME=str(root / "config"))
-        for peers, display in [(["absent", "in-use"], ":manager"), (["absent"], ":request")]:
+        for peers, display in [(["absent", "in-use"], ":manager"), (["banner", "in-use"], ":manager"), (["absent"], ":request")]:
             with self.subTest(peers=peers):
                 write_peers(root, router, peers)
                 result = subprocess.run([agent], env=env, input=request, text=True, capture_output=True, check=True, timeout=15)
@@ -118,6 +121,13 @@ class RequestContextIntegration(unittest.TestCase):
                     # The peer's display replaces the requester's, and the
                     # requester's terminal and display never reach the peer.
                     self.assertEqual(actual["lines"], ["NOP", "NOP", "OPTION lc-ctype=C", "GETPIN", "BYE"])
+        with self.subTest("requester disconnects during GETPIN"):
+            write_peers(root, router, ["in-use"])
+            # The agent gave up: its stream closes while the peer dialog waits.
+            started = time.monotonic()
+            subprocess.run([agent], env=dict(env, FIXTURE_HANG="1"), input="GETPIN\n", text=True,
+                           capture_output=True, check=False, timeout=15)
+            self.assertLess(time.monotonic() - started, 10)
 
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",

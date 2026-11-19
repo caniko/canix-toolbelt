@@ -54,8 +54,14 @@ in {
         else {};
     }
     (lib.mkIf cfg.enable {
-      # Peers run `canix-toolbelt-pinentry --serve` from the login PATH.
-      home.packages = [(lib.lowPrio packages.router)];
+      # Peers run `canix-toolbelt-pinentry --serve` from the login PATH. Only
+      # that name: the router's generic `pinentry` alias stays scoped to rage.
+      home.packages = [
+        (pkgs.runCommand "canix-toolbelt-pinentry-serve" {} ''
+          mkdir -p "$out/bin"
+          ln -s ${lib.getExe packages.router} "$out/bin/canix-toolbelt-pinentry"
+        '')
+      ];
       xdg.configFile."canix-toolbelt/pinentry-peers" = lib.mkIf (cfg.peers != []) {
         text = lib.concatMapStrings (peer: lib.concatStringsSep "\t" peer + "\n") cfg.peers;
       };
