@@ -74,13 +74,16 @@ sits. List commands that reach the other hosts' routers:
 
 ```nix
 canix-toolbelt.pinentry.peers = [
-  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "me@laptop" "--" "canix-toolbelt-pinentry"]
+  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]
 ];
 ```
 
 Home Manager writes them to `$XDG_CONFIG_HOME/canix-toolbelt/pinentry-peers`
 and installs `canix-toolbelt-pinentry` on the login PATH, so every peer can
-serve. The router appends `--serve` to each command.
+serve. The router appends `--serve` to each command. A peer command must stay
+in the foreground: a declined attempt is stopped by killing its process group,
+which an SSH `ControlPersist` master escapes, so disable multiplexing with
+`-S none` (`ControlPath=none`).
 
 Peers apply only to requests that have no origin to prompt on: desktop
 requests and requests with neither a display nor a terminal (marker
