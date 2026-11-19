@@ -467,24 +467,32 @@ class PinentryIntegration(unittest.TestCase):
         process = subprocess.Popen([agent], env=env, text=True, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.queries.append(process)
+        # Keep the stream open like gpg-agent does; closing it means the caller left.
         process.stdin.write("OPTION ttyname=/dev/pts/99999999\nOPTION display=:requester\n"
-                            "SETPROMPT Forwarded_prompt\nGETPIN\nBYE\n")
+                            "SETDESC Forwarded_desc\nSETPROMPT Forwarded_prompt\nGETPIN\n")
         process.stdin.flush()
-        process.stdin.close()
-        process.stdin = None
+        requester = Path("/proc/sys/kernel/hostname").read_text().strip()
 
         def prompted():
             for candidate in self.panes():
                 pane = f"terminal_{candidate['id']}"
-                if candidate["title"] == "Hardware key PIN" and "Forwarded_prompt" in self.zellij(
-                        "action", "dump-screen", "--pane-id", pane):
+                screen = self.zellij("action", "dump-screen", "--pane-id", pane)
+                if candidate["title"] == "Hardware key PIN" and "Forwarded_prompt" in screen:
+                    # Each host has its own card; the peer names the one asking.
+                    self.assertIn(f"Request from {requester}", screen)
+                    self.assertIn("Forwarded_desc", screen)
                     return candidate
             return None
 
         popup = self.wait_for(prompted)
         self.assertTrue(popup["is_floating"])
         self.enter(f"terminal_{popup['id']}", "forwarded-pin")
+        replies = [process.stdout.readline() for _ in range(6)]
+        process.stdin.write("BYE\n")
+        process.stdin.close()
+        process.stdin = None
         stdout, stderr = process.communicate(timeout=15)
+        stdout = "".join(replies) + stdout
         self.assertIn("D forwarded-pin", stdout, stderr)
         self.assertNotIn("ERR ", stdout)
         self.assert_closed()

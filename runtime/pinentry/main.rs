@@ -186,7 +186,10 @@ fn current_route(inherit_marker: bool) -> Route {
         session.as_deref(),
         present("SSH_CONNECTION") || present("SSH_TTY"),
         present("DISPLAY") || present("WAYLAND_DISPLAY"),
-        terminal().is_some() || present("GPG_TTY") || fs::File::open("/dev/tty").is_ok(),
+        // A GPG_TTY inherited from a closed terminal is no origin.
+        terminal().is_some()
+            || env::var_os("GPG_TTY").is_some_and(|tty| fs::File::open(tty).is_ok())
+            || fs::File::open("/dev/tty").is_ok(),
     )
 }
 
@@ -426,7 +429,17 @@ fn request_line(line: &[u8], tty: Option<&str>, forwarded: bool) -> Vec<u8> {
                 (Some("ttyname"), Some(tty)) => {
                     return format!("OPTION ttyname={tty}\n").into_bytes();
                 }
-                (Some("ttyname" | "display" | "xauthority" | "touch-file"), _) if forwarded => {
+                // The external cache would be this seat's keyring, not the requester's.
+                (
+                    Some(
+                        "ttyname"
+                        | "display"
+                        | "xauthority"
+                        | "touch-file"
+                        | "allow-external-password-cache",
+                    ),
+                    _,
+                ) if forwarded => {
                     return b"NOP\n".to_vec();
                 }
                 _ => {}
@@ -605,6 +618,30 @@ fn peers() -> Vec<Vec<String>> {
         .unwrap_or_default()
 }
 
+/// This host's name when it needs no Assuan escaping.
+fn requester_host() -> Option<String> {
+    let host = fs::read_to_string("/proc/sys/kernel/hostname").ok()?;
+    let host = host.trim();
+    (!host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._".contains(&byte)))
+    .then(|| host.to_string())
+}
+
+/// Hosts carry separate cards with the same holder; a PIN typed for the wrong
+/// one spends a retry, so a forwarded description names the requesting host.
+fn describe_requester(line: &[u8], host: Option<&str>) -> Vec<u8> {
+    match (line.strip_prefix(b"SETDESC "), host) {
+        (Some(description), Some(host)) => [
+            format!("SETDESC Request from {host}%0A").as_bytes(),
+            description,
+        ]
+        .concat(),
+        _ => line.to_vec(),
+    }
+}
+
 /// An Assuan greeting is the `OK` status token, alone or followed by text.
 fn accepted(greeting: &[u8]) -> bool {
     greeting == b"OK\n" || (greeting.starts_with(b"OK ") && greeting.ends_with(b"\n"))
@@ -662,7 +699,21 @@ fn forward(peers: &[Vec<String>]) -> io::Result<Option<ExitCode>> {
             continue;
         };
         let mut input = child.stdin.take().expect("piped stdin");
-        thread::spawn(move || io::copy(&mut io::stdin().lock(), &mut input));
+        let host = requester_host();
+        thread::spawn(move || {
+            let mut source = io::stdin().lock();
+            let mut line = Vec::new();
+            while source
+                .read_until(b'\n', &mut line)
+                .is_ok_and(|read| read > 0)
+            {
+                let line_out = describe_requester(&line, host.as_deref());
+                if input.write_all(&line_out).is_err() || input.flush().is_err() {
+                    break;
+                }
+                line.clear();
+            }
+        });
         let mut stdout = io::stdout().lock();
         stdout.write_all(&greeting)?;
         stdout.flush()?;

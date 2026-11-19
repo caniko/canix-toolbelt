@@ -30,7 +30,7 @@ in {
     peers = lib.mkOption {
       type = lib.types.listOf (lib.types.nonEmptyListOf (lib.types.strMatching "[^\t\n]+"));
       default = [];
-      example = [["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]];
+      example = [["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-o" "ServerAliveInterval=10" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]];
       description = ''
         Commands that reach another host's router, tried in order; `--serve`
         is appended. A desktop or headless request whose local seat is locked

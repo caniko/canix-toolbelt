@@ -74,7 +74,7 @@ sits. List commands that reach the other hosts' routers:
 
 ```nix
 canix-toolbelt.pinentry.peers = [
-  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]
+  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-o" "ServerAliveInterval=10" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]
 ];
 ```
 
@@ -83,7 +83,10 @@ and installs `canix-toolbelt-pinentry` on the login PATH, so every peer can
 serve. The router appends `--serve` to each command. A peer command must stay
 in the foreground: a declined attempt is stopped by killing its process group,
 which an SSH `ControlPersist` master escapes, so disable multiplexing with
-`-S none` (`ControlPath=none`).
+`-S none` (`ControlPath=none`). `ServerAliveInterval` ends a forward whose peer
+suspends mid-prompt; without it the agent, which runs one pinentry at a time,
+waits for TCP to notice. Peer authentication must not need the hardware key
+being unlocked (such as gpg-agent SSH support), or the forward waits on itself.
 
 Peers apply only to requests that have no origin to prompt on: desktop
 requests and requests with neither a display nor a terminal (marker
@@ -101,6 +104,8 @@ to that client's focused pane; otherwise it shows Qt on its user manager's
 display. A peer that is unreachable or locked declines before sending its
 Assuan `OK` greeting, so the next peer receives an untouched request. Any other
 first line, such as a login banner, also declines.
+Zellij does not say where a client is attached from, so a client attached to
+the peer over SSH from elsewhere also receives the pane.
 A peer that sends no greeting within 20 seconds is stopped and skipped the
 same way. A served request is never forwarded again. When the requester's
 stream closes, as on an agent timeout, the peer stops its prompt after one
@@ -108,10 +113,13 @@ second.
 
 The forwarded Assuan stream carries the PIN back over the peer command to the
 requesting agent and its card. The peer replaces the requester's `ttyname`,
-`display`, `xauthority` and `touch-file` options with `NOP`, which keeps
-request/reply pairing while dropping paths that only exist on the requester.
-Anyone who can run the peer command can therefore show a PIN dialog on that
-seat; restrict it to the user's own SSH identity.
+`display`, `xauthority`, `touch-file` and `allow-external-password-cache`
+options with `NOP`, which keeps request/reply pairing while dropping paths
+that only exist on the requester and keeping the peer's keyring out of it.
+The requester prefixes `SETDESC` with `Request from <host>`: both cards may
+show the same holder, and a PIN for the wrong card spends one of its retries.
+Anyone who can run the peer command can show a PIN dialog on that seat and
+receives what is typed; restrict it to the user's own SSH identity.
 
 ## Packaged callers
 

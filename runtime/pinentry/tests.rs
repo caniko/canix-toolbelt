@@ -245,3 +245,21 @@ fn only_a_complete_ok_status_line_accepts_a_peer() {
         assert!(!accepted(greeting));
     }
 }
+
+#[test]
+fn forwarded_descriptions_name_the_requesting_host() {
+    assert_eq!(
+        describe_requester(b"SETDESC Please unlock the card%0A\n", Some("atlas")),
+        b"SETDESC Request from atlas%0APlease unlock the card%0A\n"
+    );
+    for (line, host) in [
+        (b"SETPROMPT PIN\n".as_slice(), Some("atlas")),
+        (b"SETDESC text\n", None),
+    ] {
+        assert_eq!(describe_requester(line, host), line);
+    }
+    assert_eq!(
+        request_line(b"OPTION allow-external-password-cache\n", None, true),
+        b"NOP\n"
+    );
+}
