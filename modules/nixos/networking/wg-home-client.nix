@@ -72,6 +72,34 @@
       esac
     }
 
+    # Whether the host reaches LAN candidate $1 on a directly connected route
+    # out of a non-tunnel interface, i.e. it is on that LAN right now.
+    lan_on_link() {
+      local route word previous="" interface=""
+      "$IP" -4 address show to "$1" >/dev/null 2>&1 || return 1
+      route="$("$IP" route get "$1" 2>/dev/null)" || return 1
+      for word in $route; do
+        [ "$word" != via ] || return 1
+        if [ "$previous" = dev ]; then interface="$word"; fi
+        previous="$word"
+      done
+      case "$interface" in
+        ""|"$WG_INTERFACE"|tun*|tap*|wg*|ppp*|lo) return 1 ;;
+      esac
+    }
+
+    # A LAN endpoint the host can no longer reach directly (it roamed away).
+    unusable_lan_endpoint() {
+      local candidate
+      for candidate in $LAN_ENDPOINTS; do
+        if [ "$1" = "$candidate:$WG_PORT" ]; then
+          ! lan_on_link "$candidate"
+          return $?
+        fi
+      done
+      return 1
+    }
+
     save_last_endpoint() {
       umask 077
       printf '%s\n' "$1" > "$STATE_DIRECTORY/.last-endpoint"
@@ -86,8 +114,8 @@
 
     restore_last_endpoint() {
       local reason="$1" family
-      if [ -z "$last_endpoint" ]; then
-        log "family=none candidate=none handshake=$(latest_handshake) fallback=$reason no-persisted-endpoint"
+      if [ -z "$last_endpoint" ] || unusable_lan_endpoint "$last_endpoint"; then
+        log "family=none candidate=none handshake=$(latest_handshake) fallback=$reason no-usable-endpoint"
         return 1
       fi
       if [ "$current_endpoint" != "$last_endpoint" ]; then
@@ -177,6 +205,9 @@
     if [ "$current_handshake" -gt 0 ] && [ "$current_handshake" -le "$now" ] && [ $((now - current_handshake)) -le "$healthy_window" ]; then
       current_healthy=true
     fi
+    if unusable_lan_endpoint "$current_endpoint"; then
+      current_healthy=false
+    fi
 
     last_endpoint=""
     if [ -f "$STATE_DIRECTORY/last-endpoint" ]; then
@@ -186,6 +217,23 @@
       last_endpoint="$current_endpoint"
       save_last_endpoint "$last_endpoint"
     fi
+
+    # On the server's LAN, its LAN address beats any public candidate: a
+    # full-tunnel VPN can route the public address and the resolver away.
+    for candidate in $LAN_ENDPOINTS; do
+      lan_on_link "$candidate" || continue
+      if $current_healthy && [ "$current_endpoint" = "$candidate:$WG_PORT" ]; then
+        log "family=LAN candidate=$candidate handshake=$current_handshake selected=healthy-existing"
+        exit 0
+      fi
+      if try_candidate IPv4 "$candidate"; then
+        save_last_endpoint "$ATTEMPT_ENDPOINT"
+        log "family=LAN candidate=$candidate handshake=$ATTEMPT_HANDSHAKE selected=true"
+        exit 0
+      fi
+      current_healthy=false
+      log "family=LAN candidate=$candidate handshake=$(latest_handshake) fallback=$ATTEMPT_REASON"
+    done
 
     ipv6_status=0
     if resolve_records 6 AAAA; then
@@ -329,6 +377,14 @@ in {
       description = "Additional destination CIDRs routed through the wg-home server.";
     };
 
+    lanEndpoints = lib.mkOption {
+      # ponytail: IPv4 only; IPv6 needs canonical-form comparison against
+      # `wg show endpoints` before a stale LAN endpoint can be recognized.
+      type = lib.types.listOf (lib.types.strMatching "[0-9]{1,3}(\\.[0-9]{1,3}){3}");
+      default = [];
+      description = "Literal IPv4 LAN addresses of the wg-home server. Tried first, and only while a directly connected non-tunnel route reaches them; a LAN endpoint is dropped once the host roams away.";
+    };
+
     ipv6RetryCooldownSeconds = lib.mkOption {
       type = lib.types.ints.positive;
       default = 900;
@@ -399,6 +455,7 @@ in {
         ENDPOINT_HOST = wgHome.endpointHost;
         HANDSHAKE_WAIT_SECONDS = "10";
         IPV6_RETRY_COOLDOWN_SECONDS = toString cfg.ipv6RetryCooldownSeconds;
+        LAN_ENDPOINTS = lib.concatStringsSep " " cfg.lanEndpoints;
         REFRESH_SECONDS = toString cfg.dynamicEndpointRefreshSeconds;
         WG_INTERFACE = "wg-home";
         WG_PORT = toString wgHome.port;
