@@ -109,7 +109,8 @@ the peer over SSH from elsewhere also receives the pane.
 A peer that sends no greeting within 20 seconds is stopped and skipped the
 same way. A served request is never forwarded again. When the requester's
 stream closes, as on an agent timeout, the peer stops its prompt after one
-second. That applies to every relayed prompt, local or forwarded.
+second. That applies to every seat prompt, local or forwarded. Each backend also
+dies with the router, since gpg-agent cancels by signalling only the router.
 
 The forwarded Assuan stream carries the PIN back over the peer command to the
 requesting agent and its card. The peer replaces the requester's `ttyname`,

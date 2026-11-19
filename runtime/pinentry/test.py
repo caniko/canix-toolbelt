@@ -5,6 +5,7 @@ import json
 import os
 import pty
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -134,6 +135,23 @@ class RequestContextIntegration(unittest.TestCase):
                                              PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
                            input="GETPIN\n", text=True, capture_output=True, check=False, timeout=15)
             self.assertLess(time.monotonic() - started, 10)
+        with self.subTest("agent cancels by signalling only the router"):
+            # gpg-agent SIGINTs the pinentry PID and keeps its pipes open; the
+            # dialog must not survive the router and hold Assuan stdout.
+            process = subprocess.Popen([agent], env=dict(env, FIXTURE_HANG="1", FIXTURE_SEAT="in-use",
+                                                         PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.addCleanup(process.kill)
+            self.assertEqual(os.read(process.stdout.fileno(), 64), b"OK\n")
+            os.write(process.stdin.fileno(), b"GETPIN\n")
+            time.sleep(0.5)
+            process.send_signal(signal.SIGINT)
+            deadline, closed = time.monotonic() + 8, False
+            while not closed and time.monotonic() < deadline:
+                if select.select([process.stdout], [], [], 0.2)[0]:
+                    closed = not os.read(process.stdout.fileno(), 4096)
+            self.assertTrue(closed, "the backend outlived the signalled router and kept Assuan stdout open")
+            process.stdin.close()
 
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",

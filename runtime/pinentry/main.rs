@@ -451,6 +451,17 @@ fn request_line(line: &[u8], tty: Option<&str>, forwarded: bool) -> Vec<u8> {
 }
 
 fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Result<ExitCode> {
+    // gpg-agent cancels by signalling only this process. A backend left behind
+    // keeps Assuan stdout open and its dialog up, blocking the next prompt.
+    // SAFETY: prctl(2) is async-signal-safe and touches only the new child.
+    unsafe {
+        command.pre_exec(|| {
+            const PR_SET_PDEATHSIG: i32 = 1;
+            const SIGKILL: u64 = 9;
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            Ok(())
+        });
+    }
     let mut child = command.stdin(Stdio::piped()).spawn()?;
     let mut input = child
         .stdin
@@ -477,17 +488,20 @@ fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Resu
         }
         let _ = closed.send(Instant::now());
     });
-    // Callers hold the stream for the whole conversation. One that disconnects
-    // (agent timeout or cancel, or a forwarder that lost its link) cannot reach
-    // this backend, and a dialog blocked in GETPIN would outlive it.
+    // A seat prompt's caller holds the stream for the whole conversation. One
+    // that disconnects (agent timeout, or a forwarder that lost its link)
+    // cannot reach this backend, and a dialog blocked in GETPIN would outlive
+    // it. Origin popups keep their existing behaviour.
     let mut gone = None;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        gone = gone.or_else(|| caller_gone.try_recv().ok());
-        if gone.is_some_and(|at| at.elapsed() >= CLOSE_GRACE) {
-            let _ = child.kill();
+        if forwarded {
+            gone = gone.or_else(|| caller_gone.try_recv().ok());
+            if gone.is_some_and(|at| at.elapsed() >= CLOSE_GRACE) {
+                let _ = child.kill();
+            }
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -570,7 +584,8 @@ fn attached_pane() -> Option<(u32, String)> {
         .lines()
         .filter(|line| !line.contains("(EXITED"))
         .find_map(|line| {
-            let session = line.split_whitespace().next()?;
+            // Names may contain spaces; the metadata starts at " [Created".
+            let session = line.split(" [Created ").next()?.trim();
             let clients = output(ZELLIJ, &["--session", session, "action", "list-clients"]).ok()?;
             Some((client_pane(&clients)?, session.to_string()))
         })
@@ -667,6 +682,7 @@ fn accepted(greeting: &[u8]) -> bool {
 
 unsafe extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
+    fn prctl(option: i32, ...) -> i32;
 }
 
 fn stop_group(child: &mut std::process::Child) {
