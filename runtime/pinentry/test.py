@@ -5,6 +5,7 @@ import json
 import os
 import pty
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -22,6 +23,37 @@ sys.argv[1:11] = []
 WRAPPED_RAGE = sys.argv[1:2] == ["--wrapped-rage"]
 if WRAPPED_RAGE:
     del sys.argv[1]
+
+
+def compile_seat_router(root, **backends):
+    """Build a router whose loginctl reports a seat in use only under FIXTURE_SEAT=in-use."""
+    loginctl = root / "loginctl"
+    loginctl.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                        "if os.environ.get('FIXTURE_SEAT') != 'in-use': print(); raise SystemExit\n"
+                        "print('c1' if sys.argv[1] == 'show-user' else 'Remote=no\\nType=wayland\\nActive=yes\\nLockedHint=no')\n")
+    for path in [loginctl, *backends.values()]:
+        Path(path).chmod(0o700)
+    router = root / "router"
+    env = dict(os.environ, CANIX_PINENTRY_LOGINCTL=str(loginctl),
+               **{f"CANIX_PINENTRY_{name}": str(path) for name, path in backends.items()})
+    subprocess.run(["rustc", "--edition=2024", "-D", "warnings", str(Path(__file__).with_name("main.rs")), "-o", str(router)],
+                   env=env, capture_output=True, check=True, timeout=60)
+    return router
+
+
+def write_peers(root, router, seats):
+    """Peers run the router locally, standing in for an SSH command per seat state."""
+    lines = []
+    for index, seat in enumerate(seats):
+        peer = root / f"peer-{index}-{seat}"
+        # A login banner before a declining router must not count as acceptance.
+        banner = "print('Welcome to the peer', flush=True)\n" if seat == "banner" else ""
+        peer.write_text(f"#!{sys.executable}\nimport os, sys\n{banner}"
+                        f"os.execve({str(router)!r}, [{str(router)!r}, *sys.argv[1:]], dict(os.environ, FIXTURE_SEAT={seat!r}))\n")
+        peer.chmod(0o700)
+        lines.append(str(peer))
+    (root / "config/canix-toolbelt").mkdir(parents=True, exist_ok=True)
+    (root / "config/canix-toolbelt/pinentry-peers").write_text("".join(f"{line}\n" for line in lines))
 
 
 class RequestContextIntegration(unittest.TestCase):
@@ -53,6 +85,74 @@ class RequestContextIntegration(unittest.TestCase):
         cls.agent.symlink_to(binary)
         cls.env = {key: value for key, value in os.environ.items()
                    if not key.startswith(("ZELLIJ", "GPG", "GNUPG", "SSH_", "PINENTRY"))}
+        # Never read an operator's peer list while testing.
+        cls.env["XDG_CONFIG_HOME"] = str(root / "config")
+
+    def test_forwarded_desktop_request_prompts_on_the_first_peer_seat_in_use(self):
+        root = Path(self.temp.name) / "forward"
+        root.mkdir()
+        record = root / "record.json"
+        qt = root / "qt"
+        qt.write_text(f"#!{sys.executable}\nimport json, os, sys, time\nfrom pathlib import Path\n"
+                      "lines = []\nprint('OK', flush=True)\n"
+                      "for line in sys.stdin:\n"
+                      " lines.append(line.rstrip('\\n'))\n"
+                      " if line.startswith('GETPIN') and os.environ.get('FIXTURE_HANG'): time.sleep(60)\n"
+                      " if line.startswith('GETPIN'): print('D forward-fixture-pin', flush=True)\n"
+                      " print('OK', flush=True)\n"
+                      " if line.startswith('BYE'): break\n"
+                      "Path(os.environ['PINENTRY_FIXTURE_RECORD']).write_text(json.dumps({'lines': lines, 'env': "
+                      "{key: os.environ.get(key) for key in ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY']}}))\n")
+        no_zellij = root / "zellij"
+        no_zellij.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+        router = compile_seat_router(root, QT=qt, ZELLIJ=no_zellij, SYSTEMCTL=Path(self.temp.name) / "manager")
+        agent = root / "canix-toolbelt-pinentry-agent"
+        agent.symlink_to(router)
+        request = "OPTION ttyname=/dev/pts/9\nOPTION display=:request\nOPTION lc-ctype=C\nGETPIN\nBYE\n"
+        env = dict(self.env, PINENTRY_FIXTURE_RECORD=str(record), PINENTRY_USER_DATA="canix-pinentry-v1:desktop",
+                   DISPLAY=":request", XDG_CONFIG_HOME=str(root / "config"))
+        for peers, display in [(["absent", "in-use"], ":manager"), (["banner", "in-use"], ":manager"), (["absent"], ":request")]:
+            with self.subTest(peers=peers):
+                write_peers(root, router, peers)
+                result = subprocess.run([agent], env=env, input=request, text=True, capture_output=True, check=True, timeout=15)
+                self.assertEqual(result.stdout.splitlines(), ["OK"] * 4 + ["D forward-fixture-pin", "OK", "OK"], result.stderr)
+                actual = json.loads(record.read_text())
+                self.assertEqual(actual["env"]["DISPLAY"], display)
+                if display == ":manager":
+                    # The peer's display replaces the requester's, and the
+                    # requester's terminal and display never reach the peer.
+                    self.assertEqual(actual["lines"], ["NOP", "NOP", "OPTION lc-ctype=C", "GETPIN", "BYE"])
+        with self.subTest("requester disconnects during GETPIN"):
+            write_peers(root, router, ["in-use"])
+            # The agent gave up: its stream closes while the peer dialog waits.
+            started = time.monotonic()
+            subprocess.run([agent], env=dict(env, FIXTURE_HANG="1"), input="GETPIN\n", text=True,
+                           capture_output=True, check=False, timeout=15)
+            self.assertLess(time.monotonic() - started, 10)
+        with self.subTest("requester disconnects from a headless prompt on its own seat"):
+            started = time.monotonic()
+            subprocess.run([agent], env=dict(env, FIXTURE_HANG="1", FIXTURE_SEAT="in-use",
+                                             PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
+                           input="GETPIN\n", text=True, capture_output=True, check=False, timeout=15)
+            self.assertLess(time.monotonic() - started, 10)
+        with self.subTest("agent cancels by signalling only the router"):
+            # gpg-agent SIGINTs the pinentry PID and keeps its pipes open; the
+            # dialog must not survive the router and hold Assuan stdout.
+            process = subprocess.Popen([agent], env=dict(env, FIXTURE_HANG="1", FIXTURE_SEAT="in-use",
+                                                         PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.addCleanup(process.stdout.close)
+            self.addCleanup(process.kill)
+            self.assertEqual(os.read(process.stdout.fileno(), 64), b"OK\n")
+            os.write(process.stdin.fileno(), b"GETPIN\n")
+            time.sleep(0.5)
+            process.send_signal(signal.SIGINT)
+            deadline, closed = time.monotonic() + 8, False
+            while not closed and time.monotonic() < deadline:
+                if select.select([process.stdout], [], [], 0.2)[0]:
+                    closed = not os.read(process.stdout.fileno(), 4096)
+            self.assertTrue(closed, "the backend outlived the signalled router and kept Assuan stdout open")
+            process.stdin.close()
 
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",
@@ -378,6 +478,51 @@ class PinentryIntegration(unittest.TestCase):
         os.write(master, b"terminal-fixture\n")
         stdout, stderr = process.communicate(timeout=15)
         self.assertIn("D terminal-fixture", stdout, stderr)
+        self.assertNotIn("ERR ", stdout)
+        self.assert_closed()
+
+    def test_forwarded_headless_request_prompts_in_the_peers_attached_session(self):
+        root = self.root / "forward"
+        root.mkdir()
+        router = compile_seat_router(root)
+        agent = root / "canix-toolbelt-pinentry-agent"
+        agent.symlink_to(router)
+        write_peers(root, router, ["absent", "in-use"])
+        env = dict(self.env, XDG_CONFIG_HOME=str(root / "config"), PINENTRY_USER_DATA="canix-pinentry-v1:headless")
+        process = subprocess.Popen([agent], env=env, text=True, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.queries.append(process)
+        # Keep the stream open like gpg-agent does; closing it means the caller left.
+        process.stdin.write("OPTION ttyname=/dev/pts/99999999\nOPTION display=:requester\n"
+                            "SETDESC Forwarded_desc\nSETPROMPT Forwarded_prompt\nGETPIN\n")
+        process.stdin.flush()
+        requester = Path("/proc/sys/kernel/hostname").read_text().strip()
+
+        def prompted():
+            for candidate in self.panes():
+                pane = f"terminal_{candidate['id']}"
+                screen = self.zellij("action", "dump-screen", "--pane-id", pane)
+                if candidate["title"] == "Hardware key PIN" and "Forwarded_prompt" in screen:
+                    # Each host has its own card; the peer names the one asking.
+                    self.assertIn(f"Request from {requester}", screen)
+                    self.assertIn("Forwarded_desc", screen)
+                    return candidate
+            return None
+
+        popup = self.wait_for(prompted)
+        self.assertTrue(popup["is_floating"])
+        self.enter(f"terminal_{popup['id']}", "forwarded-pin")
+        # A lost reply fails the test instead of blocking it.
+        watchdog = threading.Timer(15, process.kill)
+        watchdog.start()
+        self.addCleanup(watchdog.cancel)
+        replies = [process.stdout.readline() for _ in range(6)]
+        process.stdin.write("BYE\n")
+        process.stdin.close()
+        process.stdin = None
+        stdout, stderr = process.communicate(timeout=15)
+        stdout = "".join(replies) + stdout
+        self.assertIn("D forwarded-pin", stdout, stderr)
         self.assertNotIn("ERR ", stdout)
         self.assert_closed()
 

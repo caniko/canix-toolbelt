@@ -11,11 +11,12 @@
   bash,
   xorg-server,
   xdotool,
+  systemd,
 }:
 assert lib.versionAtLeast zellij.version "0.45";
   stdenv.mkDerivation {
     pname = "canix-toolbelt-pinentry";
-    version = "0.2.0";
+    version = "0.3.0";
     src = lib.fileset.toSource {
       root = ../runtime/pinentry;
       fileset = lib.fileset.unions [../runtime/pinentry/main.rs ../runtime/pinentry/tests.rs ../runtime/pinentry/test.py ../runtime/pinentry/fixture_plugin.py];
@@ -26,6 +27,8 @@ assert lib.versionAtLeast zellij.version "0.45";
       CANIX_PINENTRY_TTY = lib.getExe pinentry-tty;
       CANIX_PINENTRY_QT = lib.getExe pinentry-qt;
       CANIX_PINENTRY_GPG = "${gnupg}/bin/gpg";
+      CANIX_PINENTRY_LOGINCTL = "${systemd}/bin/loginctl";
+      CANIX_PINENTRY_SYSTEMCTL = "${systemd}/bin/systemctl";
     };
     buildPhase = ''
       runHook preBuild

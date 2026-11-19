@@ -57,6 +57,7 @@ fn live_zellij_beats_stale_desktop_context_even_over_ssh() {
             Some("17"),
             Some("main"),
             true,
+            true,
             true
         ),
         Route::Zellij {
@@ -74,6 +75,7 @@ fn explicit_terminal_context_survives_background_clients() {
             None,
             None,
             false,
+            false,
             false
         ),
         Route::Zellij {
@@ -82,7 +84,7 @@ fn explicit_terminal_context_survives_background_clients() {
         }
     );
     assert_eq!(
-        client_route(Some("canix-pinentry-v1:tty"), None, None, false, true),
+        client_route(Some("canix-pinentry-v1:tty"), None, None, false, true, true),
         Route::Tty
     );
 }
@@ -96,12 +98,16 @@ fn ssh_and_headless_clients_do_not_inherit_desktop_routing() {
                 None,
                 None,
                 ssh,
-                graphical
+                graphical,
+                true
             ),
             Route::Tty
         );
     }
-    assert_eq!(client_route(None, None, None, false, true), Route::Desktop);
+    assert_eq!(
+        client_route(None, None, None, false, true, true),
+        Route::Desktop
+    );
 }
 
 #[test]
@@ -113,7 +119,7 @@ fn rewrites_gpg_and_rage_terminal_options_without_changing_other_protocol_bytes(
         "option --ttyname /dev/pts/1\n",
     ] {
         assert_eq!(
-            request_line(option.as_bytes(), "/dev/pts/42"),
+            request_line(option.as_bytes(), Some("/dev/pts/42"), false),
             b"OPTION ttyname=/dev/pts/42\n"
         );
     }
@@ -123,6 +129,143 @@ fn rewrites_gpg_and_rage_terminal_options_without_changing_other_protocol_bytes(
         b"BYE\n",
         b"D \xff\n",
     ] {
-        assert_eq!(request_line(line, "/dev/pts/42"), line);
+        assert_eq!(request_line(line, Some("/dev/pts/42"), false), line);
     }
+}
+
+#[test]
+fn clients_without_display_or_terminal_are_headless() {
+    assert_eq!(
+        client_route(None, None, None, false, false, false),
+        Route::Headless
+    );
+    assert_eq!(
+        client_route(None, None, None, true, true, false),
+        Route::Headless
+    );
+    // A graphical local client keeps Qt; an inherited marker still wins.
+    assert_eq!(
+        client_route(None, None, None, false, true, false),
+        Route::Desktop
+    );
+    assert_eq!(
+        client_route(
+            Some("canix-pinentry-v1:tty"),
+            None,
+            None,
+            false,
+            false,
+            false
+        ),
+        Route::Tty
+    );
+    assert_eq!(route(Some(&Route::Headless.user_data())), Route::Headless);
+}
+
+#[test]
+fn forwarded_requests_drop_the_requesting_hosts_terminal_and_display() {
+    for option in [
+        "OPTION ttyname=/dev/pts/1\n",
+        "OPTION display=:1\n",
+        "OPTION xauthority=/run/user/1000/xauth\n",
+        "OPTION touch-file=/run/user/1000/gnupg/S.gpg-agent\n",
+    ] {
+        assert_eq!(request_line(option.as_bytes(), None, true), b"NOP\n");
+    }
+    assert_eq!(
+        request_line(b"OPTION ttyname=/dev/pts/1\n", Some("/dev/pts/42"), true),
+        b"OPTION ttyname=/dev/pts/42\n"
+    );
+    assert_eq!(
+        request_line(b"OPTION display=:1\n", Some("/dev/pts/42"), true),
+        b"NOP\n"
+    );
+    for line in [
+        b"OPTION ttytype=xterm\n".as_slice(),
+        b"OPTION lc-ctype=C.UTF-8\n",
+        b"GETPIN\n",
+    ] {
+        assert_eq!(request_line(line, None, true), line);
+    }
+    // Local requests keep their display options untouched.
+    assert_eq!(
+        request_line(b"OPTION display=:1\n", Some("/dev/pts/42"), false),
+        b"OPTION display=:1\n"
+    );
+}
+
+#[test]
+fn only_an_active_unlocked_local_graphical_seat_is_in_use() {
+    let seat = "Remote=no\nType=wayland\nActive=yes\nLockedHint=no\n";
+    assert!(seat_in_use(seat));
+    for (from, to) in [
+        ("LockedHint=no", "LockedHint=yes"),
+        ("Active=yes", "Active=no"),
+        ("Remote=no", "Remote=yes"),
+        ("Type=wayland", "Type=tty"),
+        ("LockedHint=no\n", ""),
+    ] {
+        assert!(!seat_in_use(&seat.replace(from, to)), "{to}");
+    }
+}
+
+#[test]
+fn attached_clients_yield_their_focused_terminal_pane() {
+    let clients = "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         plugin_2       N/A\n2         terminal_17    nu\n";
+    assert_eq!(client_pane(clients), Some(17));
+    assert_eq!(
+        client_pane("CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n"),
+        None
+    );
+}
+
+#[test]
+fn peers_are_tab_separated_commands() {
+    assert_eq!(
+        parse_peers("ssh\t-o\tBatchMode=yes\tcan@peer\n\n\t\nlocal router\n"),
+        [
+            vec!["ssh", "-o", "BatchMode=yes", "can@peer"],
+            vec!["local router"],
+        ]
+    );
+}
+
+#[test]
+fn only_a_complete_ok_status_line_accepts_a_peer() {
+    for greeting in [b"OK\n".as_slice(), b"OK Pleased to meet you\n"] {
+        assert!(accepted(greeting));
+    }
+    for greeting in [
+        b"OKAY welcome\n".as_slice(),
+        b"OK",
+        b"OK Pleased",
+        b"ERR 83886179 locked\n",
+        b"",
+    ] {
+        assert!(!accepted(greeting));
+    }
+}
+
+#[test]
+fn forwarded_descriptions_name_the_requesting_host() {
+    assert_eq!(
+        describe_requester(b"SETDESC Please unlock the card%0A\n", Some("atlas")),
+        b"SETDESC Request from atlas%0APlease unlock the card%0A\n"
+    );
+    for (line, host) in [
+        (b"SETPROMPT PIN\n".as_slice(), Some("atlas")),
+        (b"SETDESC text\n", None),
+    ] {
+        assert_eq!(describe_requester(line, host), line);
+    }
+    assert_eq!(
+        request_line(b"OPTION allow-external-password-cache\n", None, true),
+        b"NOP\n"
+    );
+}
+
+#[test]
+fn a_description_at_the_assuan_line_limit_stays_unlabeled() {
+    let full = [b"SETDESC ".as_slice(), &[b'x'; 990], b"\n"].concat();
+    assert_eq!(describe_requester(&full, Some("atlas")), full);
 }

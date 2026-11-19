@@ -22,6 +22,7 @@ the requesting context. Enable each integration explicitly:
 | Local graphical caller outside Zellij | Qt |
 | SSH outside Zellij | Requesting terminal |
 | Headless | Terminal; fails when no interactive terminal is usable |
+| Desktop or headless with `peers`, local seat locked or absent | The first peer whose seat is in use (below) |
 
 Zellij 0.45+ and Linux are required. Live Zellij coordinates take precedence
 over inherited desktop markers. Shell hooks and the wrapped `gpg`/`gpg2` classify
@@ -32,7 +33,8 @@ The desktop marker carries a hex-encoded snapshot of the caller's display,
 Wayland socket, Xauthority, session type, runtime directory and Qt platform
 selector through GnuPG.
 The agent restores that snapshot and clears absent values from older sessions.
-The router never replaces it with the systemd user manager's shared environment.
+For local requests the router never replaces it with the systemd user manager's
+shared environment.
 The GPG wrapper captures any already-open terminal, including virtual consoles
 and serial TTYs, checking stderr/stdout when stdin is piped. Shell hooks honor
 Home Manager's per-shell integration toggles.
@@ -64,6 +66,63 @@ markers remain compatible. Background clients can forward the originating
 marker when they lack live Zellij coordinates. Session names may contain colons.
 Legacy desktop markers retain GnuPG's X11 forwarding. Wrapped GnuPG and rage take
 profile precedence over existing raw installations.
+
+## Remote seats
+
+A host with its own hardware key can prompt on another host where the user
+sits. List commands that reach the other hosts' routers:
+
+```nix
+canix-toolbelt.pinentry.peers = [
+  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-o" "ServerAliveInterval=10" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]
+];
+```
+
+Home Manager writes them to `$XDG_CONFIG_HOME/canix-toolbelt/pinentry-peers`
+and installs `canix-toolbelt-pinentry` on the login PATH, so every peer can
+serve. The router appends `--serve` to each command. A peer command must stay
+in the foreground: a declined attempt is stopped by killing its process group,
+which an SSH `ControlPersist` master escapes, so disable multiplexing with
+`-S none` (`ControlPath=none`). `ServerAliveInterval` ends a forward whose peer
+suspends mid-prompt; without it the agent, which runs one pinentry at a time,
+waits for TCP to notice. Peer authentication must not need the hardware key
+being unlocked (such as gpg-agent SSH support), or the forward waits on itself.
+
+Peers apply only to requests that have no origin to prompt on: desktop
+requests and requests with neither a display nor a terminal (marker
+`canix-pinentry-v1:headless`). Zellij and terminal requests keep their origin.
+A seat is in use while the user's logind display session is local, active and
+unlocked; the screen locker must maintain `LockedHint`.
+
+| Local seat | Desktop request | Headless request |
+| --- | --- | --- |
+| In use | Local Qt | Local prompt as a peer would show it |
+| Locked, absent or unknown | First peer in use, else local Qt | First peer in use, else terminal |
+
+A serving peer with an attached Zellij client opens the floating PIN pane next
+to that client's focused pane; otherwise it shows Qt on its user manager's
+display. A peer that is unreachable or locked declines before sending its
+Assuan `OK` greeting, so the next peer receives an untouched request. Any other
+first line, such as a login banner, also declines.
+Zellij does not say where a client is attached from, so a client attached to
+the peer over SSH from elsewhere also receives the pane.
+A peer that sends no greeting within 20 seconds is stopped and skipped the
+same way. A served request is never forwarded again. When the requester's
+stream closes, as on an agent timeout, the peer stops its prompt after one
+second. That applies to every seat prompt, local or forwarded. Each backend also
+dies with the router, since gpg-agent cancels by signalling only the router.
+
+The forwarded Assuan stream carries the PIN back over the peer command to the
+requesting agent and its card. The peer replaces the requester's `ttyname`,
+`display`, `xauthority`, `touch-file`, `parent-wid` and
+`allow-external-password-cache`
+options with `NOP`, which keeps request/reply pairing while dropping paths
+that only exist on the requester and keeping the peer's keyring out of it.
+The requester prefixes `SETDESC` with `Request from <host>` when the line stays
+within Assuan's 1000 bytes: both cards may
+show the same holder, and a PIN for the wrong card spends one of its retries.
+Anyone who can run the peer command can show a PIN dialog on that seat and
+receives what is typed; restrict it to the user's own SSH identity.
 
 ## Packaged callers
 

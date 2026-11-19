@@ -27,6 +27,18 @@ in {
     rage = lib.mkPackageOption pkgs "rage" {};
     tty = lib.mkPackageOption pkgs "pinentry-tty" {};
     qt = lib.mkPackageOption pkgs "pinentry-qt" {};
+    peers = lib.mkOption {
+      type = lib.types.listOf (lib.types.nonEmptyListOf (lib.types.strMatching "[^\t\n]+"));
+      default = [];
+      example = [["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-o" "ServerAliveInterval=10" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]];
+      description = ''
+        Commands that reach another host's router, tried in order; `--serve`
+        is appended. A desktop or headless request whose local seat is locked
+        or absent prompts on the first peer whose graphical seat is active and
+        unlocked (an attached Zellij session there, else Qt). The PIN returns
+        over the command's stdout to this host's agent and card.
+      '';
+    };
     packages = lib.mkOption {
       type = lib.types.attrsOf lib.types.package;
       readOnly = true;
@@ -41,6 +53,19 @@ in {
         then packages
         else {};
     }
+    (lib.mkIf cfg.enable {
+      # Peers run `canix-toolbelt-pinentry --serve` from the login PATH. Only
+      # that name: the router's generic `pinentry` alias stays scoped to rage.
+      home.packages = [
+        (pkgs.runCommand "canix-toolbelt-pinentry-serve" {} ''
+          mkdir -p "$out/bin"
+          ln -s ${lib.getExe packages.router} "$out/bin/canix-toolbelt-pinentry"
+        '')
+      ];
+      xdg.configFile."canix-toolbelt/pinentry-peers" = lib.mkIf (cfg.peers != []) {
+        text = lib.concatMapStrings (peer: lib.concatStringsSep "\t" peer + "\n") cfg.peers;
+      };
+    })
     (lib.mkIf (cfg.enable && cfg.gpgIntegration) {
       services.gpg-agent.enable = lib.mkDefault true;
       services.gpg-agent.pinentry = {
