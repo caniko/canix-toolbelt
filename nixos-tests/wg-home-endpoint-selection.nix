@@ -34,6 +34,7 @@
               privateKeyFile = "/run/secrets/wg-home";
               ipv6RetryCooldownSeconds = 900;
               additionalAllowedIPs = ["192.0.2.1/32"];
+              lanEndpoints = ["192.0.2.31"];
             };
           };
         };
@@ -95,7 +96,7 @@ in
       #!${pkgs.runtimeShell}
       record="$6"
       case "$CASE:$record" in
-        dns-failure:*) exit 1 ;;
+        dns-failure:*|lan-roamed:*) exit 1 ;;
         cname:AAAA) printf '%s\n' 'alias.example.test.' ;;
         *:AAAA) printf '%s\n' '2001:db8::10' ;;
         *:A) printf '%s\n' '198.51.100.10' ;;
@@ -104,6 +105,13 @@ in
 
       cat > "$fake/ip" <<'EOF'
       #!${pkgs.runtimeShell}
+      if [ "$1" = route ] && [ "$2" = get ]; then
+        case "$CASE" in
+          lan-onlink) printf '%s\n' "$3 dev eth0 src 192.0.2.20" ;;
+          *) printf '%s\n' "$3 via 10.0.0.1 dev tun0" ;;
+        esac
+        exit 0
+      fi
       if [ "$1" = -6 ] && [ "$2" = route ] && [ "$3" = show ] && [ "$4" = default ]; then
         [ "$CASE" = no-v6-route ] || printf '%s\n' 'default via fe80::1 dev eth0'
         exit 0
@@ -178,6 +186,10 @@ in
             printf '%s\n' '198.51.100.10:54321' > "$TEST_ROOT/current-endpoint"
             printf '%s\n' 990 > "$TEST_ROOT/handshake"
             ;;
+          lan-roamed)
+            printf '%s\n' '192.0.2.31:54321' > "$STATE_DIRECTORY/last-endpoint"
+            printf '%s\n' '192.0.2.31:54321' > "$TEST_ROOT/current-endpoint"
+            ;;
         esac
 
         "${selector}" > "$TEST_ROOT/output"
@@ -199,6 +211,19 @@ in
       export WG_PORT=${lib.escapeShellArg service.environment.WG_PORT}
       export WG_PUBLIC_KEY=${lib.escapeShellArg service.environment.WG_PUBLIC_KEY}
       export WG_SERVER_VPN_IP=${lib.escapeShellArg service.environment.WG_SERVER_VPN_IP}
+      export LAN_ENDPOINTS=${lib.escapeShellArg service.environment.LAN_ENDPOINTS}
+
+      run_case lan-onlink
+      grep -Fx '192.0.2.31:54321' "$TEST_ROOT/current-endpoint"
+      grep -Fx '192.0.2.31:54321' "$STATE_DIRECTORY/last-endpoint"
+
+      run_case lan-offlink
+      ! grep -Fq '192.0.2.31:54321' "$TEST_ROOT/wg.log"
+      grep -Fx '[2001:db8::10]:54321' "$TEST_ROOT/current-endpoint"
+
+      if run_case lan-roamed; then exit 1; fi
+      ! grep -Fq '192.0.2.31:54321' "$TEST_ROOT/wg.log"
+      grep -F 'no-usable-endpoint' "$TEST_ROOT/output"
 
       run_case reachable-v6
       grep -Fx '[2001:db8::10]:54321' "$TEST_ROOT/current-endpoint"
