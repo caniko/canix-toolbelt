@@ -128,6 +128,12 @@ class RequestContextIntegration(unittest.TestCase):
             subprocess.run([agent], env=dict(env, FIXTURE_HANG="1"), input="GETPIN\n", text=True,
                            capture_output=True, check=False, timeout=15)
             self.assertLess(time.monotonic() - started, 10)
+        with self.subTest("requester disconnects from a headless prompt on its own seat"):
+            started = time.monotonic()
+            subprocess.run([agent], env=dict(env, FIXTURE_HANG="1", FIXTURE_SEAT="in-use",
+                                             PINENTRY_USER_DATA="canix-pinentry-v1:headless"),
+                           input="GETPIN\n", text=True, capture_output=True, check=False, timeout=15)
+            self.assertLess(time.monotonic() - started, 10)
 
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",
@@ -487,6 +493,10 @@ class PinentryIntegration(unittest.TestCase):
         popup = self.wait_for(prompted)
         self.assertTrue(popup["is_floating"])
         self.enter(f"terminal_{popup['id']}", "forwarded-pin")
+        # A lost reply fails the test instead of blocking it.
+        watchdog = threading.Timer(15, process.kill)
+        watchdog.start()
+        self.addCleanup(watchdog.cancel)
         replies = [process.stdout.readline() for _ in range(6)]
         process.stdin.write("BYE\n")
         process.stdin.close()

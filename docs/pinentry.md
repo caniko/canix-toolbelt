@@ -109,14 +109,16 @@ the peer over SSH from elsewhere also receives the pane.
 A peer that sends no greeting within 20 seconds is stopped and skipped the
 same way. A served request is never forwarded again. When the requester's
 stream closes, as on an agent timeout, the peer stops its prompt after one
-second.
+second. That applies to every relayed prompt, local or forwarded.
 
 The forwarded Assuan stream carries the PIN back over the peer command to the
 requesting agent and its card. The peer replaces the requester's `ttyname`,
-`display`, `xauthority`, `touch-file` and `allow-external-password-cache`
+`display`, `xauthority`, `touch-file`, `parent-wid` and
+`allow-external-password-cache`
 options with `NOP`, which keeps request/reply pairing while dropping paths
 that only exist on the requester and keeping the peer's keyring out of it.
-The requester prefixes `SETDESC` with `Request from <host>`: both cards may
+The requester prefixes `SETDESC` with `Request from <host>` when the line stays
+within Assuan's 1000 bytes: both cards may
 show the same holder, and a PIN for the wrong card spends one of its retries.
 Anyone who can run the peer command can show a PIN dialog on that seat and
 receives what is typed; restrict it to the user's own SSH identity.

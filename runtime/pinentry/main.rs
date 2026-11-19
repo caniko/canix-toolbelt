@@ -436,6 +436,7 @@ fn request_line(line: &[u8], tty: Option<&str>, forwarded: bool) -> Vec<u8> {
                         | "display"
                         | "xauthority"
                         | "touch-file"
+                        | "parent-wid"
                         | "allow-external-password-cache",
                     ),
                     _,
@@ -476,18 +477,17 @@ fn relay(mut command: Command, tty: Option<String>, forwarded: bool) -> io::Resu
         }
         let _ = closed.send(Instant::now());
     });
-    // A forwarded requester that disconnects (agent timeout or cancel) cannot
-    // kill this backend itself; a dialog blocked in GETPIN would outlive it.
+    // Callers hold the stream for the whole conversation. One that disconnects
+    // (agent timeout or cancel, or a forwarder that lost its link) cannot reach
+    // this backend, and a dialog blocked in GETPIN would outlive it.
     let mut gone = None;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if forwarded {
-            gone = gone.or_else(|| caller_gone.try_recv().ok());
-            if gone.is_some_and(|at| at.elapsed() >= CLOSE_GRACE) {
-                let _ = child.kill();
-            }
+        gone = gone.or_else(|| caller_gone.try_recv().ok());
+        if gone.is_some_and(|at| at.elapsed() >= CLOSE_GRACE) {
+            let _ = child.kill();
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -564,19 +564,25 @@ fn client_pane(clients: &str) -> Option<u32> {
 }
 
 fn attached_pane() -> Option<(u32, String)> {
-    let sessions = output(ZELLIJ, &["list-sessions", "--short", "--no-formatting"]).ok()?;
-    sessions.lines().find_map(|session| {
-        let clients = output(ZELLIJ, &["--session", session, "action", "list-clients"]).ok()?;
-        Some((client_pane(&clients)?, session.to_string()))
-    })
+    let sessions = output(ZELLIJ, &["list-sessions", "--no-formatting"]).ok()?;
+    // Resurrectable sessions have no clients; probing each costs a Zellij call.
+    sessions
+        .lines()
+        .filter(|line| !line.contains("(EXITED"))
+        .find_map(|line| {
+            let session = line.split_whitespace().next()?;
+            let clients = output(ZELLIJ, &["--session", session, "action", "list-clients"]).ok()?;
+            Some((client_pane(&clients)?, session.to_string()))
+        })
 }
 
 /// Prompts on this seat for a request without a usable origin: a floating pane
-/// in an attached Zellij session, else Qt on the user manager's display.
-fn prompt_here(forwarded: bool) -> io::Result<ExitCode> {
+/// in an attached Zellij session, else Qt on the user manager's display. The
+/// requester's terminal and display options name no surface here either.
+fn prompt_here() -> io::Result<ExitCode> {
     if let Some((pane, session)) = attached_pane() {
         match popup(pane, &session) {
-            Ok(popup) => return run_popup(popup, Command::new(TTY), forwarded),
+            Ok(popup) => return run_popup(popup, Command::new(TTY), true),
             Err(error) => eprintln!("toolbelt-pinentry: {error}; using the desktop"),
         }
     }
@@ -587,11 +593,14 @@ fn prompt_here(forwarded: bool) -> io::Result<ExitCode> {
     for line in output(SYSTEMCTL, &["--user", "show-environment"])?.lines() {
         if let Some((name, value)) = line.split_once('=')
             && DISPLAY_VARIABLES.contains(&name)
+            // Shell-quoted values would reach Qt with their quotes; leave them unset.
+            && !value.starts_with('\'')
+            && !value.starts_with("$'")
         {
             qt.env(name, value);
         }
     }
-    relay(qt, None, forwarded)
+    relay(qt, None, true)
 }
 
 /// Tab-separated peer commands, one per line; `--serve` is appended to each.
@@ -632,12 +641,21 @@ fn requester_host() -> Option<String> {
 /// Hosts carry separate cards with the same holder; a PIN typed for the wrong
 /// one spends a retry, so a forwarded description names the requesting host.
 fn describe_requester(line: &[u8], host: Option<&str>) -> Vec<u8> {
+    // Assuan lines hold at most 1000 bytes; a full description stays unlabeled.
+    const ASSUAN_LINE: usize = 1000;
     match (line.strip_prefix(b"SETDESC "), host) {
-        (Some(description), Some(host)) => [
-            format!("SETDESC Request from {host}%0A").as_bytes(),
-            description,
-        ]
-        .concat(),
+        (Some(description), Some(host)) => {
+            let labeled = [
+                format!("SETDESC Request from {host}%0A").as_bytes(),
+                description,
+            ]
+            .concat();
+            if labeled.len() <= ASSUAN_LINE {
+                labeled
+            } else {
+                line.to_vec()
+            }
+        }
         _ => line.to_vec(),
     }
 }
@@ -746,7 +764,7 @@ fn run() -> io::Result<ExitCode> {
         if !present().unwrap_or(false) {
             return Ok(ExitCode::from(ABSENT));
         }
-        return prompt_here(true);
+        return prompt_here();
     }
     if args.get(1).is_some_and(|arg| arg == "--pane") {
         if args.len() != 3 {
@@ -779,7 +797,7 @@ fn run() -> io::Result<ExitCode> {
         Route::Desktop => Err(exec_desktop(agent)),
         Route::Headless if !peers.is_empty() => {
             if present().unwrap_or(false) {
-                return prompt_here(false);
+                return prompt_here();
             }
             match forward(&peers)? {
                 Some(status) => Ok(status),

@@ -263,3 +263,9 @@ fn forwarded_descriptions_name_the_requesting_host() {
         b"NOP\n"
     );
 }
+
+#[test]
+fn a_description_at_the_assuan_line_limit_stays_unlabeled() {
+    let full = [b"SETDESC ".as_slice(), &[b'x'; 990], b"\n"].concat();
+    assert_eq!(describe_requester(&full, Some("atlas")), full);
+}
