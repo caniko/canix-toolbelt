@@ -26,6 +26,9 @@
   batches = builtins.div (builtins.length checks + 7) 8;
   probeTimeout = lib.foldl' (value: check: lib.max value (check.source.timeoutSeconds or 10)) 1 checks;
   runBudget = batches * (probeTimeout + 1 + 10) + 5;
+  # A job probe reads a running job as unhealthy. Timer coalescing can start
+  # the publisher in the same instant as a probed job, so wait for its run.
+  jobUnits = lib.unique (map (c: c.source.probe.unit) (builtins.filter (c: (c.source.probe.type or "") == "job") checks));
 in {
   options.services.gatusHealthPublisher = {
     enable = lib.mkEnableOption "host-local health publication";
@@ -66,7 +69,7 @@ in {
     systemd.services.gatus-health-publisher = {
       description = "Publish host-local service health";
       wants = ["network-online.target"];
-      after = ["network-online.target"];
+      after = ["network-online.target"] ++ jobUnits;
       serviceConfig = {
         Type = "oneshot";
         DynamicUser = true;

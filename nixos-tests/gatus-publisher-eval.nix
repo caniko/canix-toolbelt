@@ -78,6 +78,16 @@
     };
   };
   cfg = evaluate settings;
+  job = host:
+    lib.recursiveUpdate (check host) {
+      key = "job_${host}";
+      source.probe = {
+        type = "job";
+        unit = "job-${host}.service";
+        maxAgeSeconds = 90;
+      };
+    };
+  withJobs = evaluate (lib.recursiveUpdate settings {services.gatusHealthPublisher.checks = [(check "hub") (job "hub") (job "other")];});
   tooMany = evaluate (lib.recursiveUpdate settings {services.gatusHealthPublisher.checks = lib.genList (_: check "hub") 100;});
   emptyHost = evaluate (lib.recursiveUpdate settings {networking.hostName = "unused";});
   ingress = (builtins.fromJSON cfg.services.caddy.configFile.text).apps.http.servers.gatus-health;
@@ -86,6 +96,8 @@ in
   assert !(lib.all (a: a.assertion) tooMany.assertions);
   assert !(emptyHost.systemd.services ? gatus-health-publisher);
   assert cfg.systemd.services.gatus-health-publisher.serviceConfig.DynamicUser;
+  assert cfg.systemd.services.gatus-health-publisher.after == ["network-online.target"];
+  assert withJobs.systemd.services.gatus-health-publisher.after == ["network-online.target" "job-hub.service"];
   assert cfg.systemd.services.gatus-health-publisher.serviceConfig.LoadCredential == ["health.env:/run/agenix/health.env"];
   assert cfg.systemd.services.gatus-health-publisher.serviceConfig.TimeoutStartSec == "26s";
   assert (builtins.head (builtins.head ingress.routes).match).method == ["POST"];
