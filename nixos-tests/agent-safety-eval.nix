@@ -7,6 +7,12 @@
     programs.demo.autoSafe = "*";
   };
 
+  askKeys = map (rule: rule.key) (safety.renderProgram {
+    name = "demo";
+    value = "*";
+    action = "ask";
+  });
+
   narrow = safety.mergeRules {
     programs.demo.autoSafe = {
       commands = ["query *"];
@@ -143,18 +149,18 @@ in
       }
       {
         name = "store-argument-overlap";
-        assertion = !storeArgumentConflict.success;
-        message = "a store wildcard can consume command arguments before a competing executable suffix";
+        assertion = storeArgumentConflict.success;
+        message = "allow rules carry no store wildcard that could consume arguments before a deny's executable";
       }
       {
         name = "env-store-argument-overlap";
-        assertion = !envStoreArgumentConflict.success;
-        message = "environment-prefixed store wildcards retain whole-command overlap";
+        assertion = envStoreArgumentConflict.success;
+        message = "allow rules carry no environment or store wildcard that could overlap a wrapped deny";
       }
       {
         name = "overlapping-store-commands";
-        assertion = !storeConflict.success;
-        message = "a store-prefixed autoSafe command must still conflict with its destructive form";
+        assertion = storeConflict.success;
+        message = "autoSafe allows have no store-path form, so a store-prefixed deny cannot be shadowed";
       }
       {
         name = "wildcard-command";
@@ -162,18 +168,20 @@ in
         message = "the string shorthand must allow no-argument and subcommand invocations";
       }
       {
-        name = "wildcard-env-wrapper";
-        assertion = wildcard."*=* demo" == "allow" && wildcard."*=* demo *" == "allow";
-        message = "wildcard declarations must include environment-prefix wrappers";
+        name = "allow-no-leading-wildcards";
+        assertion =
+          wildcard."./result/bin/demo *"
+          == "allow"
+          && !(lib.any (key: wildcard.${key} == "allow" && (lib.hasPrefix "*" key || lib.hasPrefix "/nix/store/*" key)) (builtins.attrNames wildcard));
+        message = "allow rules must not get environment or store wrappers, whose leading wildcard matches any command";
       }
       {
         name = "combined-env-path-wrappers";
         assertion =
-          wildcard."*=* /nix/store/*/bin/demo *"
-          == "allow"
-          && wildcard."*=* ./result/bin/demo *" == "allow"
-          && !(builtins.hasAttr "*=* ./result/bin/demo query *" narrow);
-        message = "environment wrappers must compose with enabled executable paths";
+          lib.elem "*=* /nix/store/*/bin/demo *" askKeys
+          && lib.elem "*=* ./result/bin/demo *" askKeys
+          && lib.elem "/nix/store/*/bin/demo *" askKeys;
+        message = "ask rules keep environment wrappers composed with enabled executable paths";
       }
       {
         name = "narrow-command";

@@ -25,12 +25,12 @@
             environmentAssignments = mkOption {
               type = types.bool;
               default = true;
-              description = "Allow environment-assignment prefixes in generated rules.";
+              description = "Add environment-assignment prefixes to generated ask and deny rules, as ask; allow rules never get them.";
             };
             nixStorePaths = mkOption {
               type = types.bool;
               default = true;
-              description = "Allow /nix/store/.../bin/<executable> wrapper paths.";
+              description = "Add /nix/store/.../bin/<executable> wrapper paths to generated ask and deny rules, as ask; allow rules never get them.";
             };
             resultBinPaths = mkOption {
               type = types.bool;
@@ -129,16 +129,27 @@
           (lib.concatMap commandVariants normalized.commands)
       )
       normalized.executables;
-    envRules = lib.optionals normalized.wrappers.environmentAssignments (
-      map (rule: rule // {key = "*=* ${rule.key}";})
+    # OpenCode matches `*` against the whole command, so a wildcard before the
+    # executable also matches `rm -rf / X=1 demo` or `/nix/store/a/bin/sh ...
+    # /nix/store/b/bin/demo`. These leading-wildcard wrappers therefore only
+    # ask: an allow would admit unrelated commands and a deny would refuse
+    # them outright. Allowed programs prompt in those invocation forms.
+    leadingWildcards = action != "allow";
+    envRules = lib.optionals (leadingWildcards && normalized.wrappers.environmentAssignments) (
+      map (rule:
+        rule
+        // {
+          key = "*=* ${rule.key}";
+          action = "ask";
+        })
       (commandRules ++ storeRules ++ resultRules)
     );
-    storeRules = lib.optionals normalized.wrappers.nixStorePaths (
+    storeRules = lib.optionals (leadingWildcards && normalized.wrappers.nixStorePaths) (
       lib.concatMap (
         executable:
           map (command: {
             key = mkPathCommand "/nix/store/*/bin" executable command;
-            inherit action;
+            action = "ask";
           })
           (lib.concatMap commandVariants normalized.commands)
       )
@@ -417,9 +428,21 @@
     deny ? [],
   }: let
     programRules = renderPrograms programs;
-    policyRules = renderActionRules {inherit allow ask deny;};
+    # Environment and store forms match any command that merely mentions the
+    # rest (see renderProgram): such denies ask instead, such allows are refused.
+    leadingWildcard = pattern: lib.hasPrefix "*=* " pattern || lib.hasPrefix "/nix/store/*" pattern;
+    policyRules = renderActionRules {
+      inherit allow;
+      ask = ask ++ lib.filter leadingWildcard deny;
+      deny = lib.filter (pattern: !leadingWildcard pattern) deny;
+    };
     conflicts = conflictsFor (builtins.attrNames programRules) deny;
+    wildcardAllows = lib.filter leadingWildcard allow;
   in
+    assert lib.assertMsg (wildcardAllows == []) (
+      "agent-safety: allow rules cannot use environment or store wildcards: "
+      + lib.concatStringsSep ", " wildcardAllows
+    );
     assert lib.assertMsg (conflicts == []) (
       "agent-safety: autoSafe cannot override deny rule(s): "
       + lib.concatStringsSep ", " conflicts
