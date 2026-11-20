@@ -13,16 +13,20 @@
 
   cases = [
     [default "nix eval --no-allow-import-from-derivation .#foo" "allow"]
-    [default "FOO=1 nix eval --no-allow-import-from-derivation .#foo" "allow"]
+    # Environment and store-path forms have no allow, and their deny twins ask.
+    [default "FOO=1 nix eval --no-allow-import-from-derivation .#foo" "ask"]
     [default "nix eval .#foo" "deny"]
     [default "nix eval --no-allow-import-from-derivation --expr 'builtins.readFile /home/u/.ssh/id_ed25519'" "ask"]
     [default "nix eval --no-allow-import-from-derivation .#foo --apply 'f: f'" "ask"]
     [default "nix-instantiate --eval --no-allow-import-from-derivation -E 1" "ask"]
     [default "nix eval --no-allow-import-from-derivation --allow-import-from-derivation .#foo" "deny"]
     [default "nix build --dry-run --no-allow-import-from-derivation .#foo --no-dry-run" "deny"]
-    [default "FOO=1 nix build .#foo" "deny"]
+    [default "FOO=1 nix build .#foo" "ask"]
     [default "./result/bin/nix build .#foo" "deny"]
-    [default "/nix/store/abc-nix/bin/nix store ls /nix/store/abc-foo" "allow"]
+    [default "/nix/store/abc-nix/bin/nix store ls /nix/store/abc-foo" "ask"]
+    # Whole-command globbing: an unrelated command naming an allowed one never inherits its allow.
+    [default "rm -rf /tmp/x X=1 nix hash file README.md" "ask"]
+    [default "/nix/store/abc-bash/bin/sh -c id /nix/store/abc-nix/bin/nix store ls /nix/store/abc-foo" "ask"]
     [default "nix path-info /nix/store/abc-foo" "allow"]
     [default "nix path-info /nix/store/abc-foo --expr x" "deny"]
     [default "nix-store --query --references /nix/store/abc-foo" "allow"]

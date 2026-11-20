@@ -8,10 +8,12 @@
 # suffix denies below sort after their allow prefix and reject anything that
 # re-enables it later on the command line.
 #
-# Deny coverage spans bare, environment-prefixed (`FOO=1 nix ...`), and
-# result-bin invocations. A `/nix/store/.../bin/nix` deny is deliberately
-# absent: its literal prefix collides with every program's generated store
-# wrapper in `mergeRules`, so those stay default ask instead of silent allow.
+# Deny coverage spans bare and result-bin invocations. Environment-prefixed
+# forms (`FOO=1 nix ...`) ask via `mergeRules`: OpenCode matches `*` across the whole
+# command, so `*=* nix *` also matches `git commit -m "a=b nix x"`. A
+# `/nix/store/.../bin/nix` deny is deliberately absent: its literal prefix
+# collides with every program's generated store wrapper in `mergeRules`, so
+# those stay default ask instead of silent allow.
 # This remains a prompt policy, not a sandbox. The explicit ask list keeps
 # uncommon operations accessible; builds and checks belong to a consumer route.
 {lib}: {
@@ -40,12 +42,10 @@
     "./result/bin/"
     "*=* ./result/bin/"
   ];
-  inspectionWrappers =
-    queryWrappers
-    ++ [
-      "/nix/store/*/bin/"
-      "*=* /nix/store/*/bin/"
-    ];
+  # OpenCode matches `*` against the whole command, so allows take no
+  # environment or store-path form: `X=1 nix hash` and `/nix/store/*/bin/nix`
+  # invocations prompt instead of matching unrelated commands.
+  allowWrappers = ["" "./result/bin/"];
   readOnlyCommands = [
     "nix --version *"
     "nix --help *"
@@ -98,9 +98,9 @@ in {
       "nix-prefetch-url *"
       "nix-instantiate --parse *"
     ]
-    ++ wrapped inspectionWrappers readOnlyCommands
-    ++ wrapped queryWrappers (map (prefix: "${prefix}*") (storeMetadataPrefixes ++ storeQueryPrefixes))
-    ++ wrapped queryWrappers (map (prefix: "${prefix}*") evaluationPrefixes);
+    ++ wrapped allowWrappers readOnlyCommands
+    ++ wrapped allowWrappers (map (prefix: "${prefix}*") (storeMetadataPrefixes ++ storeQueryPrefixes))
+    ++ wrapped allowWrappers (map (prefix: "${prefix}*") evaluationPrefixes);
 
   ask =
     [

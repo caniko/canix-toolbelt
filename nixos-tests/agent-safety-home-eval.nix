@@ -148,9 +148,9 @@ in
       {
         name = "codex-unrepresentable-listed";
         assertion =
-          lib.hasInfix "\n#   deny *=* curl *\n" bareWrapperDeny.config.home.file.".codex/rules/agent-safety.rules".text
+          !(lib.hasInfix "*=* curl" bareWrapperDeny.config.home.file.".codex/rules/agent-safety.rules".text)
           && !(lib.any (lib.hasInfix "*=* sudo") codexRules);
-        message = "uncovered wrappers must be listed; covered ones dropped";
+        message = "environment-form denies ask, which the Codex default prompt already covers";
       }
       {
         name = "codex-home";
