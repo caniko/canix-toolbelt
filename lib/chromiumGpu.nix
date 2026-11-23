@@ -9,31 +9,18 @@
     then ["--ozone-platform=${ozonePlatform}"]
     else throw "canix-toolbelt.chromiumGpu: ozonePlatform must be one of auto, wayland, or x11";
 
-  # VA-API decode route policy. Produces exactly one feature set plus the
-  # device override + libva env. Empty when gpuMedia is disabled.
+  # Select the VA-API device and driver without forcing Chromium features.
   mediaPolicy = gpuMedia: let
     enabled = gpuMedia != null && (gpuMedia.enable or false);
   in
     if !enabled
     then {
-      features = [];
       flags = [];
       env = {};
     }
     else let
       isNvidia = gpuMedia.vendor == "nvidia";
-      features =
-        [
-          "AcceleratedVideoEncoder"
-          "AcceleratedVideoDecodeLinuxZeroCopyGL"
-          "VaapiVideoEncoder"
-          "VaapiVideoDecoder"
-          "AcceleratedVideoDecodeLinuxGL"
-          "VaapiIgnoreDriverChecks"
-        ]
-        ++ lib.optional isNvidia "VaapiOnNvidiaGPUs";
     in {
-      inherit features;
       flags = ["--render-node-override=${gpuMedia.renderNode}"];
       env =
         {
@@ -57,12 +44,10 @@
     extraEnv ? {},
   }: let
     media = mediaPolicy gpuMedia;
-    features = media.features ++ extraFeatures;
     flags =
       ozoneFlags ozonePlatform
-      ++ ["--use-gl=angle"]
       ++ media.flags
-      ++ lib.optional (features != []) "--enable-features=${lib.concatStringsSep "," features}"
+      ++ lib.optional (extraFeatures != []) "--enable-features=${lib.concatStringsSep "," extraFeatures}"
       ++ extraFlags;
     env = media.env // extraEnv;
     wrapperBasePackage =

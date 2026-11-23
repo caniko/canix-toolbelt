@@ -1,10 +1,9 @@
 # Chromium GPU-acceleration wrapper (home-manager).
 #
 # Exposes `canix-toolbelt.chromiumGpu.wrap`, which wraps a Chromium-based
-# package with VA-API video-accel feature flags + the matching env. Decode
-# follows canix-toolbelt.gpuMedia: when the media route is enabled, decode is
-# pinned to it via --render-node-override + LIBVA_DRIVER_NAME; otherwise pure
-# rendering wrappers are produced (Wayland/ANGLE only).
+# package with Ozone selection and optional VA-API device routing. When
+# canix-toolbelt.gpuMedia is enabled, --render-node-override and LIBVA_DRIVER_NAME
+# select the device and driver. Chromium features are caller opt-in.
 #
 # `wrapper-manager` is injected by the flake (homeModules) so consumers need
 # not thread `inputs.wrapper-manager` themselves.

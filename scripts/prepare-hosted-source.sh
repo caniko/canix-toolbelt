@@ -34,3 +34,6 @@ git fetch --no-tags origin "$revision"
 git checkout --detach "$revision"
 test "$(git rev-parse HEAD)" = "$revision"
 git show --no-patch --format='checkout=%H%ntree=%T%nparents=%P' HEAD
+
+# The public RustSec clone must not inherit the checkout token for this repo.
+git config --global http.https://github.com/RustSec/advisory-db.git.extraHeader ''
