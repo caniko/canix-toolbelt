@@ -46,7 +46,13 @@
   gatus-instances = ./services/gatus-instances.nix;
   gatus-health-publisher = ./services/gatus-health-publisher.nix;
   gatus-external-ingress = ./services/gatus-external-ingress.nix;
+  dns-octodns = ./services/dns-octodns.nix;
   dns-octodns-cloudflare = ./services/dns-octodns-cloudflare.nix;
+  # DDNS uses the same provider and zone options, even without octoDNS enabled.
+  dns-ddns.imports = [
+    ./services/dns-ddns.nix
+    ./services/dns-octodns.nix
+  ];
   garage = ./services/garage.nix;
   garage-buckets-registry = ./services/garage-buckets-registry.nix;
   host-profile = ./registry/host-profile.nix;

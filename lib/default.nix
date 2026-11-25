@@ -14,6 +14,7 @@ in
     deviceTypes = import ./deviceTypes.nix;
     devAgentIsolation = import ./dev-agent-isolation.nix {inherit lib;};
     dns = import ./dns.nix;
+    dnsProviders = import ./dns-providers.nix;
     facterDisks = import ./facterDisks.nix;
     gpu = import ./gpu.nix {
       fleetixGpu =

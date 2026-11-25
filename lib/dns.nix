@@ -1,5 +1,5 @@
 # Reusable DNS record fragments.
-{
+rec {
   # List-returning helpers are meant to be spliced with `++`; single-record
   # helpers are meant to be inserted inline in a records list.
 
@@ -9,6 +9,29 @@
     zone,
   }:
     fqdn == zone || lib.hasSuffix ".${zone}" fqdn;
+
+  normalizeHostname = lib: name: lib.toLower (lib.removeSuffix "." name);
+
+  # Match label boundaries (including the apex), preferring delegated children.
+  zoneForHost = {
+    lib,
+    zones,
+    fqdn,
+  }: let
+    normalize = normalizeHostname lib;
+  in
+    lib.foldl' (best: zone:
+      if
+        hostInZone {
+          inherit lib;
+          fqdn = normalize fqdn;
+          zone = normalize zone;
+        }
+        && (best == null || builtins.stringLength (normalize zone) > builtins.stringLength (normalize best))
+      then zone
+      else best)
+    null
+    zones;
 
   dynamicHostExcludes = {
     lib,
@@ -60,19 +83,20 @@
   }: let
     lc = lib.toLower;
     zoneNames = builtins.attrNames zones;
-    # Most specific (longest) zone owning the FQDN, or null.
     zoneFor = fqdn:
-      lib.foldl' (best: zone:
-        if (lc fqdn == lc zone || lib.hasSuffix ".${lc zone}" (lc fqdn)) && (best == null || builtins.stringLength zone > builtins.stringLength best)
-        then zone
-        else best)
-      null
-      zoneNames;
+      zoneForHost {
+        inherit lib fqdn;
+        zones = zoneNames;
+      };
     relName = fqdn: zone:
-      if lc fqdn == lc zone
+      if normalizeHostname lib fqdn == normalizeHostname lib zone
       then "@"
-      else lib.removeSuffix ".${lc zone}" (lc fqdn);
-    key = zone: name: type: "${lc zone}|${lc name}|${type}";
+      else lib.removeSuffix ".${normalizeHostname lib zone}" (normalizeHostname lib fqdn);
+    key = zone: name: type: "${lc zone}|${lc (
+      if name == ""
+      then "@"
+      else name
+    )}|${type}";
     records = map (r: r // {zone = zoneFor r.fqdn;}) (
       map (fqdn: {
         inherit fqdn;
