@@ -229,6 +229,14 @@
             dns-apex-cname-assertion = import ./nixos-tests/dns-apex-cname-assertion.nix {inherit inputs pkgs;};
             dns-caddy-redirect-routes = import ./nixos-tests/dns-caddy-redirect-routes.nix {inherit inputs pkgs;};
             dns-lib-helpers-eval = import ./nixos-tests/dns-lib-helpers-eval.nix {inherit pkgs;};
+            dns-multi-provider-eval = import ./nixos-tests/dns-multi-provider-eval.nix {inherit inputs pkgs;};
+            dns-ddns-runtime = pkgs.runCommand "dns-ddns-runtime" {nativeBuildInputs = [pkgs.python3];} ''
+              mkdir -p fixture/tests fixture/modules/nixos/services
+              cp ${./tests/test_dns_ddns.py} fixture/tests/test_dns_ddns.py
+              cp ${./modules/nixos/services/dns-ddns.py} fixture/modules/nixos/services/dns-ddns.py
+              python fixture/tests/test_dns_ddns.py
+              touch "$out"
+            '';
             dns-octodns-apply-force = import ./nixos-tests/dns-octodns-apply-force.nix {inherit inputs pkgs;};
             dns-pages-zone-eval = import ./nixos-tests/dns-pages-zone-eval.nix {inherit inputs pkgs;};
             dns-publication-eval = import ./nixos-tests/dns-publication-eval.nix {inherit inputs pkgs;};

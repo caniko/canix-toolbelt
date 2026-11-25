@@ -73,6 +73,57 @@ toolbelt profiles and registers their admission files as activation artifacts.
 Detaching a profile closes new admission without changing worker units or their
 restart triggers. See [executor admission](docs/executor-admission.md).
 
+### DNS reconciliation, ACME, and DDNS
+
+Import `nixosModules.dns-octodns` and pass the flake `inputs` as a NixOS
+special argument. Set `canix-toolbelt.dns.enable` for octoDNS reconciliation
+and `canix-toolbelt.dns.ddns.enable` for periodic address updates. DDNS can
+also be enabled on its own via `nixosModules.dns-ddns`. For example:
+
+```nix
+{ config, ... }:
+{
+  canix-toolbelt.dns = {
+    enable = true;
+    providers.eu = {
+      kind = "desec";
+      token.secretPath = "/run/agenix/dns-eu";
+      ddnsTokenPath = "/run/agenix/ddns-eu";
+    };
+    zones."example.org" = {
+      provider = "eu";
+      exclude = [
+        { name = "home"; type = "A"; }
+        { name = "home"; type = "AAAA"; }
+      ];
+    };
+    ddns = {
+      enable = true;
+      hosts.home = {
+        fqdn = "home.example.org";
+        provider = "eu";
+        families = [ "ipv4" ];
+      };
+    };
+  };
+  security.acme.certs."example.org" = config.canix-toolbelt.dns.acmeFor "example.org";
+}
+```
+
+Keep DDNS addresses out of octoDNS with `exclude` (both A and AAAA for
+deSEC, which clears omitted families). Hetzner needs an existing RRset;
+Bunny needs one existing record per selected family. Gcore replaces the
+selected RRset. The upstream Cloudflare DDNS service uses one credential
+per machine.
+
+`migrateTo` adds a second octoDNS target; ACME and `stalwartDnsFor` still use
+the authoritative `provider`. Migrations and non-Cloudflare octoDNS zones
+require a DNS-manager input exposing `generate.sync` and provider Python
+packages from nixpkgs or DNS-manager. Cloudflare-only, single-target
+configurations also work with the older pin. `dns-octodns-cloudflare`,
+`cloudflareToken`, and the local `octodns-sync-cloudflare` launcher remain
+available for existing consumers.
+
 ### Hardware-key pinentry
 
 `homeModules.pinentry` selects an origin-relative Zellij popup, Qt, or the
