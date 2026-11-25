@@ -20,6 +20,7 @@
     endpoint,
     fallbacks ? [],
     hostname,
+    stripUpstreamCookies,
   }:
     if endpoint.transport == "tcp"
     then throw "canix-toolbelt Caddy registry: TCP endpoint `${endpoint.name}` cannot back an HTTP proxy action"
@@ -59,6 +60,23 @@
           protocol = "http";
           versions = ["h2c" "2"];
         };
+      }
+      // lib.optionalAttrs (stripUpstreamCookies != []) {
+        # Remove later occurrences first, then the leading pair and its separator.
+        headers.request.replace.Cookie =
+          lib.concatMap (cookie: let
+            escaped = lib.escapeRegex cookie;
+          in [
+            {
+              search_regexp = ";[\t ]*${escaped}=[^;]*";
+              replace = "";
+            }
+            {
+              search_regexp = "^[\t ]*${escaped}=[^;]*(;[\t ]*|$)";
+              replace = "";
+            }
+          ])
+          stripUpstreamCookies;
       };
 
   # Mirrors the forward_auth Caddyfile adapter (Caddy v2.11.7,
@@ -137,6 +155,7 @@
     fallbacks ? [],
     hostname,
     staticRoots,
+    stripUpstreamCookies,
   }:
     if action.type == "proxy"
     then
@@ -145,7 +164,7 @@
         strip_path_prefix = action.stripPrefix;
       }
       ++ [
-        (proxyHandler {inherit endpoint fallbacks hostname;})
+        (proxyHandler {inherit endpoint fallbacks hostname stripUpstreamCookies;})
       ]
     else if action.type == "files"
     then let
@@ -215,6 +234,7 @@ in rec {
       ++ actionHandlers {
         inherit (route) action;
         inherit endpoint fallbacks hostname staticRoots;
+        stripUpstreamCookies = authProvider.stripUpstreamCookies or [];
       };
   };
 

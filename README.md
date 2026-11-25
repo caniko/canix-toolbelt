@@ -356,6 +356,7 @@ canix-toolbelt.services.caddy.authProviders.oauth2-proxy = {
   endpoint = "oauth2-proxy"; # services.endpoints key
   uri = "/oauth2/auth";
   copyHeaders = ["Cookie"];
+  stripUpstreamCookies = ["oauth2_session"];
   streamReauth = {interval = "7s"; timeout = "2s";};
 };
 ```
@@ -368,6 +369,10 @@ config. `streamReauth` additionally renders the third-party
 `reverse_proxy`, re-checking a hijacked WebSocket connection while it is open;
 consumers pin `github.com/caniko/caddy-stream-reauth` in
 `canix-toolbelt.services.caddy.plugins` (and its `pluginsHash`) themselves.
+
+`stripUpstreamCookies` defaults to `[]`. It removes the listed cookie names
+only from requests sent to the application proxy. Forward auth and stream
+reauthentication still receive the original cookies.
 
 ### GPU compute requests
 
