@@ -171,6 +171,7 @@
 
   forwardAuthProviderAssertions = lib.concatMap (name: let
     provider = cfg.authProviders.${name};
+    cookies = provider.stripUpstreamCookies or [];
     reauth = provider.streamReauth or null;
     endpointName = provider.endpoint or "";
     endpoint = serviceCfg.endpoints.${endpointName} or null;
@@ -188,6 +189,10 @@
         {
           assertion = lib.hasPrefix "/" (provider.uri or "");
           message = "canix-toolbelt Caddy registry: authProviders.`${name}` forwardAuth uri must start with `/`";
+        }
+        {
+          assertion = builtins.isList cookies && lib.all (cookie: builtins.isString cookie && builtins.match "[0-9A-Za-z!#$%&'*+.^_`|~-]+" cookie != null) cookies;
+          message = "canix-toolbelt Caddy registry: authProviders.`${name}` stripUpstreamCookies must be a list of valid cookie names (nonempty RFC 6265 tokens)";
         }
         {
           # Relays are discovered from proxy actions only, and a relayed hop

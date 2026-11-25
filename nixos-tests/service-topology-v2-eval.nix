@@ -486,7 +486,7 @@
   evalFor = mkEvalFor {
     authProviders = {
       users = securityProvider;
-      forward = forwardAuthProvider;
+      forward = forwardAuthProvider // {stripUpstreamCookies = ["foundry_circle_play" "auth.+^|"];};
     };
     plugins = [streamReauthPlugin];
   };
@@ -646,6 +646,7 @@ in
           ]
           && forwardAuthHandler.upstreams == [{dial = "198.51.100.1:9500";}]
           && !(forwardAuthHandler ? transport)
+          && (forwardAuthHandler.headers.request.replace.Cookie or null) == null
           && streamReauthHandler
           == {
             handler = "stream_reauth";
@@ -658,6 +659,32 @@ in
           && forwardActionHandler.upstreams == [{dial = "192.0.2.30:9200";}]
           && builtins.length forwardRoute.handle == 3;
         message = "forwardAuth routes must render the auth reverse_proxy, optional stream_reauth, then the original action";
+      }
+      {
+        name = "forward-auth-strips-cookies-only-on-application-proxy";
+        assertion =
+          (forwardActionHandler.headers.request.replace.Cookie or [])
+          == [
+            {
+              search_regexp = ";[\\t ]*foundry_circle_play=[^;]*";
+              replace = "";
+            }
+            {
+              search_regexp = "^[\\t ]*foundry_circle_play=[^;]*(;[\\t ]*|$)";
+              replace = "";
+            }
+            {
+              search_regexp = ";[\\t ]*auth\\.\\+\\^\\|=[^;]*";
+              replace = "";
+            }
+            {
+              search_regexp = "^[\\t ]*auth\\.\\+\\^\\|=[^;]*(;[\\t ]*|$)";
+              replace = "";
+            }
+          ]
+          && lib.all (item: (item.headers.request.replace.Cookie or null) == null)
+          (lib.findFirst (route: route.match == forwardRoute.match) null forwardOnly.config.canix-toolbelt.services.caddy.servers.public.routes).handle;
+        message = "cookie stripping must affect only the application proxy and render nothing by default";
       }
       {
         name = "forward-auth-skips-caddy-security";
@@ -704,6 +731,14 @@ in
             };
           }).config.assertions;
         message = "invalid forwardAuth provider fields must fail evaluation with a clear message";
+      }
+      {
+        name = "forward-auth-cookie-name-validation";
+        assertion = lib.all (value:
+          forwardInvalid {stripUpstreamCookies = value;}
+          "canix-toolbelt Caddy registry: authProviders.`forward` stripUpstreamCookies must be a list of valid cookie names")
+        ["not-a-list" null [42] ["bad;name"] ["bad=name"] ["bad name"] [""]];
+        message = "stripUpstreamCookies must reject invalid cookie names and non-list values";
       }
       {
         name = "vpn-dns-from-access";
