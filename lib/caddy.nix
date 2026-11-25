@@ -68,11 +68,11 @@
             escaped = lib.escapeRegex cookie;
           in [
             {
-              search_regexp = ";[\\t ]*${escaped}=[^;]*";
+              search_regexp = ";[\t ]*${escaped}=[^;]*";
               replace = "";
             }
             {
-              search_regexp = "^[\\t ]*${escaped}=[^;]*(;[\\t ]*|$)";
+              search_regexp = "^[\t ]*${escaped}=[^;]*(;[\t ]*|$)";
               replace = "";
             }
           ])

@@ -486,7 +486,7 @@
   evalFor = mkEvalFor {
     authProviders = {
       users = securityProvider;
-      forward = forwardAuthProvider // {stripUpstreamCookies = ["foundry_circle_play" "auth.+^|"];};
+      forward = forwardAuthProvider // {stripUpstreamCookies = ["foundry_circle_play" "a.b+c$d^e|f*g"];};
     };
     plugins = [streamReauthPlugin];
   };
@@ -666,19 +666,19 @@ in
           (forwardActionHandler.headers.request.replace.Cookie or [])
           == [
             {
-              search_regexp = ";[\\t ]*foundry_circle_play=[^;]*";
+              search_regexp = ";[\t ]*foundry_circle_play=[^;]*";
               replace = "";
             }
             {
-              search_regexp = "^[\\t ]*foundry_circle_play=[^;]*(;[\\t ]*|$)";
+              search_regexp = "^[\t ]*foundry_circle_play=[^;]*(;[\t ]*|$)";
               replace = "";
             }
             {
-              search_regexp = ";[\\t ]*auth\\.\\+\\^\\|=[^;]*";
+              search_regexp = ";[\t ]*a\\.b\\+c\\$d\\^e\\|f\\*g=[^;]*";
               replace = "";
             }
             {
-              search_regexp = "^[\\t ]*auth\\.\\+\\^\\|=[^;]*(;[\\t ]*|$)";
+              search_regexp = "^[\t ]*a\\.b\\+c\\$d\\^e\\|f\\*g=[^;]*(;[\t ]*|$)";
               replace = "";
             }
           ]
