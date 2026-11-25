@@ -7,6 +7,11 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Consume fleetix 0.16.0. Its build-train types are re-exported, so this is a
+  breaking release (0.12.0). fleetix 0.16 adds `fleetix::oauth_client`
+  (Google OAuth client validation, resolution, Bitwarden rbw retrieval,
+  private 0600 materialization, and gcloud Drive project bootstrap); this
+  crate does not use it, and canix needs both on the same fleetix to move.
 - Consume fleetix 0.15.0. Its build-train types are re-exported, so this is a
   breaking release (0.11.0). fleetix 0.15 adds `Link.devices` (non-host
   WireGuard peers); this crate does not use it, and canix needs both on the
