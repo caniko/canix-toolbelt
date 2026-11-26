@@ -662,8 +662,14 @@
     cacheEnabled = cache.enable or false;
     cacheDir = cache.dir or null;
     runtimeDnsGenerate = dnsManager.lib.generate runtimePkgs;
+    dropIgnoredPkg = runtimePkgs.python3Packages.toPythonModule (
+      runtimePkgs.runCommand "canix-octodns-drop-ignored" {} ''
+        mkdir -p "$out/${runtimePkgs.python3.sitePackages}"
+        cp ${./dns-octodns-drop-ignored.py} "$out/${runtimePkgs.python3.sitePackages}/canix_octodns_drop_ignored.py"
+      ''
+    );
     octodnsEnv = runtimePkgs.python3.withPackages (_:
-      [runtimePkgs.octodns]
+      [runtimePkgs.octodns dropIgnoredPkg]
       ++ map (
         kind: let
           attr = dnsProviders.${kind}.octodnsProviderAttr;
@@ -749,7 +755,14 @@
     then
       dnsGenerate.sync {
         dnsConfig = validatedDnsConfig;
-        zones = mapAttrs (name: zone: legacyZones.${name} // {targets = zoneTargets zone;}) effectiveZones;
+        extraGlobalConfig.processors.drop-ignored.class = "canix_octodns_drop_ignored.DropIgnoredRecordsProcessor";
+        zones = mapAttrs (name: zone:
+          legacyZones.${name}
+          // {
+            targets = zoneTargets zone;
+            processors = ["drop-ignored"];
+          })
+        effectiveZones;
         providers = mapAttrs (_: provider:
           {inherit (provider) kind settings;}
           // {token = renderToken provider.token;}
