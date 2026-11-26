@@ -35,7 +35,7 @@ class DdnsUpdateTest(unittest.TestCase):
             headers={"Authorization": "Token fixture-token"},
         )
         hetzner.assert_called_with(
-            "api.hetzner.cloud", "/v1/zones/example.org/rrsets/%40/A/actions/set_records",
+            "api.hetzner.cloud", "/v1/zones/example.org/rrsets/@/A/actions/set_records",
             method="POST", headers={"Authorization": "Bearer fixture-token"},
             payload={"records": [{"value": "192.0.2.1"}]},
         )
