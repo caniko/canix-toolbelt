@@ -22,10 +22,13 @@ if not decrypt_file_mode:
     config_dir = pathlib.Path(sys.argv[1])
     source_zones_dir = pathlib.Path(sys.argv[2])
     runtime_zones_dir = pathlib.Path(sys.argv[3])
+    existing_zone_files = {p.name for p in runtime_zones_dir.glob("*.yaml")}
     requested_zone_files = {
-        f"{zone.removesuffix('.')}.yaml"
-        for zone in sys.argv[4:]
-        if zone and not zone.startswith("-")
+        f"{arg.removesuffix('.')}.yaml"
+        for arg in sys.argv[6:]
+        if arg
+        and not arg.startswith("-")
+        and f"{arg.removesuffix('.')}.yaml" in existing_zone_files
     }
     source_zone_paths = {
         str(source_zones_dir),
