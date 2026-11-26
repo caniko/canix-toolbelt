@@ -114,6 +114,64 @@
   externalOnly = evaluate (lib.recursiveUpdate externalModule {
     services.gatusInstances.private.endpoints = lib.mkForce [];
   });
+  alertFiles = ["/run/agenix/gatus-ntfy.env" "/run/agenix/gatus-smtp.env"];
+  alerts = [{type = "ntfy";}];
+  emailAlerts = [{type = "email";}];
+  endpoint = {
+    name = "manual";
+    url = "http://127.0.0.1:8092/health";
+    conditions = ["[STATUS] == 200"];
+  };
+  providers = {
+    ntfy = {
+      token = "\${GATUS_NTFY_TOKEN}";
+      url = "https://ntfy.example.test";
+      topic = "health";
+      default-alert = {
+        enabled = true;
+        send-on-resolved = true;
+      };
+    };
+    email = {
+      from = "gatus@example.test";
+      username = "gatus@example.test";
+      password = "\${GATUS_SMTP_PASS}";
+      host = "smtp.example.test";
+      port = 587;
+      to = "oncall@example.test";
+    };
+  };
+  withPrivate = options:
+    evaluate (lib.recursiveUpdate externalModule {services.gatusInstances.private = options;});
+  alerting = withPrivate {
+    environmentFiles = alertFiles;
+    alerting = providers;
+    defaultAlerts = alerts;
+    endpoints = [
+      (endpoint // {alerts = emailAlerts;})
+      (endpoint
+        // {
+          name = "opt-out";
+          alerts = [];
+        })
+    ];
+  };
+  alertingSettings = alerting.services.gatusInstances.private.settings;
+  networkByName = lib.listToAttrs (map (e: lib.nameValuePair e.name e) alertingSettings.endpoints);
+  nullAlerts = {endpoints = [(endpoint // {alerts = null;})];};
+  nullWithDefaults = withPrivate (nullAlerts
+    // {
+      alerting = providers;
+      defaultAlerts = alerts;
+    });
+  extraFilesOnly = withPrivate {
+    environmentFile = null;
+    environmentFiles = ["/run/agenix/health.env"];
+  };
+  passes = result: lib.all (a: a.assertion) result.assertions;
+  rejects = message: result: map (a: a.message) (lib.filter (a: !a.assertion) result.assertions) == [message];
+  missingProvider = "gatusInstances.private: every enabled alert must reference a non-empty provider attrset in alerting.";
+  invalidType = "gatusInstances.private: every alert must have a non-empty string type.";
 in
   assert disabled.systemd.services == {};
   assert lib.all (a: a.assertion) cfg.assertions;
@@ -147,6 +205,42 @@ in
   assert external.systemd.services.gatus-private.serviceConfig.LoadCredential == ["ca-0.crt:/runtime/ca.crt"];
   assert external.systemd.services.gatus-private.environment.SSL_CERT_DIR == "%d";
   assert (builtins.head external.services.gatusInstances.private.settings.endpoints).client.dns-resolver == "udp://192.0.2.1:53";
+  assert !(cfg.services.gatusInstances.public.settings ? alerting);
+  assert !((builtins.head cfg.services.gatusInstances.public.settings.endpoints) ? alerts);
+  assert !((builtins.head external.services.gatusInstances.private.settings.external-endpoints) ? alerts);
+  assert passes alerting;
+  assert alertingSettings.alerting == providers;
+  assert alerting.systemd.services.gatus-private.serviceConfig.EnvironmentFile == ["/run/agenix/health.env"] ++ alertFiles;
+  assert passes extraFilesOnly;
+  assert extraFilesOnly.systemd.services.gatus-private.serviceConfig.EnvironmentFile == ["/run/agenix/health.env"];
+  assert (builtins.head (lib.filter (e: e.name != "manual" && e.name != "opt-out") alertingSettings.endpoints)).alerts == alerts;
+  assert (builtins.head alertingSettings.external-endpoints).alerts == alerts;
+  assert networkByName.manual.alerts == emailAlerts;
+  assert networkByName.opt-out.alerts == [];
+  assert alerting.services.gatusInstances.public.settings == cfg.services.gatusInstances.public.settings;
+  assert !(alerting.systemd.services.gatus-public.serviceConfig ? EnvironmentFile);
+  assert passes (withPrivate nullAlerts);
+  assert passes nullWithDefaults;
+  assert (lib.findFirst (e: e.name == endpoint.name) {} nullWithDefaults.services.gatusInstances.private.settings.endpoints).alerts == null;
+  assert rejects "gatusInstances.private: endpoint alerts must be a list or null." (withPrivate {endpoints = [(endpoint // {alerts = "ntfy";})];});
+  assert rejects missingProvider (withPrivate {defaultAlerts = alerts;});
+  assert rejects missingProvider (withPrivate {endpoints = [(endpoint // {inherit alerts;})];});
+  assert rejects missingProvider (withPrivate {
+    alerting.ntfy = {};
+    defaultAlerts = alerts;
+  });
+  assert lib.all (provider: !(builtins.tryEval (withPrivate {alerting.ntfy = provider;}).services.gatusInstances.private.alerting.ntfy).success) [null "invalid"];
+  assert rejects invalidType (withPrivate {defaultAlerts = [{}];});
+  assert rejects invalidType (withPrivate {endpoints = [(endpoint // {alerts = [{type = "";}];})];});
+  assert rejects invalidType (withPrivate {endpoints = [(endpoint // {alerts = [{type = 42;}];})];});
+  assert passes (withPrivate {
+    defaultAlerts = [
+      {
+        type = "ntfy";
+        enabled = false;
+      }
+    ];
+  });
     if fixture
     then {
       settings = external.services.gatusInstances.private.settings;

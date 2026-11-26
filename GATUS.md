@@ -29,13 +29,29 @@ their directory to the system certificate bundle. Hostnames and TLS certificates
 are still verified normally. The consuming host must order the instance after
 the service that creates those CA files.
 
-Use a runtime `environmentFile` containing `GATUS_EXTERNAL_TOKEN` on the collecting
-instance. The same credential is delivered to publishers via
+Supply `GATUS_EXTERNAL_TOKEN` in a runtime environment file on the collecting
+instance. Set `environmentFile` for a single file, or use `environmentFiles` to
+load multiple systemd environment files in order, after `environmentFile` if set.
+The same credential is delivered to publishers via
 `credentialEnvFile` and systemd `LoadCredential`. The publisher's `checks` are the
 instance's rendered `externalChecks`; each host keeps only its own checks.
 The result transport should be loopback or an authenticated private network such
 as WireGuard. `gatus-external-ingress.peers` uses actual socket source addresses,
 not forwarded headers, and its firewall rule is interface- and address-scoped.
+
+Set an instance's `alerting` using supported Gatus provider keys such as `ntfy`,
+`email`, `custom`, or `googlechat`. `defaultAlerts` applies to network and
+external endpoints that omit `alerts`; an explicit list replaces the defaults, and `alerts = []` or
+`alerts = null` opts out. The module checks that every alert in `defaultAlerts`
+and per-endpoint `alerts` has a non-empty string `type`, and that every enabled
+alert references a non-empty provider attribute set under `alerting`. Gatus
+silently ignores unrecognized provider keys and validates required fields of
+recognized providers at startup.
+Rendered YAML is world-readable in the Nix store: use
+`${VAR}` placeholders for credentials (write `"\${GATUS_NTFY_TOKEN}"` in Nix)
+and supply the values in `environmentFile` or `environmentFiles` at runtime.
+Gatus substitutes `${VAR}` before parsing YAML, so use YAML-safe secret values,
+such as opaque tokens without bare colons, quotes, or newlines.
 
 Publisher runtime limits include collection/publication batch budgets and timer
 accuracy. Configurations whose run limit could overlap heartbeat expiry fail
@@ -49,7 +65,8 @@ instances. Fleetix's rendered `key` is the key the publisher must use.
 ## Validation
 
 `nixos-tests/gatus-instances-eval.nix` checks instance isolation, discovery,
-credentials, and disabled configurations against a supplied `fleetixLib`.
+credentials, alerting defaults and overrides, and disabled configurations
+against a supplied `fleetixLib`.
 `nixos-tests/gatus-publisher-eval.nix` checks host selection, heartbeat budgets,
 credential delivery, and ingestion routing. These tests can be evaluated against
 a local Fleetix library before updating the shared flake input.
