@@ -56,7 +56,9 @@ def update(kind, token, zone, fqdn, addresses):
         headers = {"Authorization": f"Bearer {token}"}
         host = "api.hetzner.cloud"
         for record_type, address in addresses.items():
-            path = f"/v1/zones/{quote(zone, safe='')}/rrsets/{quote(owner or '@', safe='')}/{record_type}"
+            # Hetzner Cloud DNS expects a literal '@' for apex RRsets (not '%40').
+            owner_segment = "@" if not owner else quote(owner, safe="")
+            path = f"/v1/zones/{quote(zone, safe='')}/rrsets/{owner_segment}/{record_type}"
             rrset = json.loads(request(host, path, headers=headers))["rrset"]
             if [record["value"] for record in rrset["records"]] == [address]:
                 continue
