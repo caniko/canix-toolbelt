@@ -34,6 +34,7 @@
 
   # Services
   betterdesk-server = ./services/betterdesk-server.nix;
+  attic-cache-client = ./services/attic-cache-client.nix;
   attic-projects-registry = ./services/attic-projects-registry.nix;
   atticd-preset = ./services/atticd-preset.nix;
   build-memory-probe = ./services/build-memory-probe.nix;
@@ -66,11 +67,13 @@
   pypi-server = ./services/pypi-server.nix;
   rauthy-preset = ./services/rauthy-preset.nix;
   rbac = ./registry/rbac.nix;
+  rust-housekeeping = ./services/rust-housekeeping.nix;
   samba = ./services/samba.nix;
   service-registry = ./registry/services.nix;
   windmill = ./services/windmill.nix;
   wol-relay = ./services/wol-relay.nix;
 
+  browser-containment = ./desktop/browser-containment.nix;
   forgejo-runner-container-runtime = ./services/forgejo-runner-container-runtime.nix;
   direct-link = ./networking/direct-link.nix;
   direct-network = ./networking/direct-network.nix;

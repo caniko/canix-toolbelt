@@ -2,6 +2,9 @@
   name,
   src,
   rules,
+  includeHidden ? false,
+  noIgnore ? false,
+  reportAll ? false,
 }: let
   normalizedRules = map (rule:
     rule
@@ -36,19 +39,28 @@
     root = sourceRoot;
     fileset = lib.fileset.unions (scanPaths ++ lib.concatMap ancestorIgnores scanPaths);
   };
+  scanFlags = lib.optionalString includeHidden "--hidden " + lib.optionalString noIgnore "--no-ignore ";
   mkRule = rule: let
     globArgs = lib.concatMapStringsSep " " (glob: "-g ${lib.escapeShellArg glob}") (rule.globs ++ map (path: "!/${path}") rule.exclude);
     pathArgs = lib.concatMapStringsSep " " lib.escapeShellArg rule.paths;
+    onMatch =
+      if reportAll
+      then ''if [ "$result" -eq 0 ]; then result=1; fi''
+      else "exit 1";
+    onError =
+      if reportAll
+      then ''result="$status"''
+      else ''exit "$status"'';
   in ''
     echo ${lib.escapeShellArg ">> ${rule.name}"}
-    if rg -n --no-require-git ${lib.optionalString rule.pcre2 "-P "}${globArgs} -- ${lib.escapeShellArg rule.pattern} ${pathArgs}; then
+    if rg -n --no-require-git ${scanFlags}${lib.optionalString rule.pcre2 "-P "}${globArgs} -- ${lib.escapeShellArg rule.pattern} ${pathArgs}; then
       echo ${lib.escapeShellArg rule.message} >&2
-      exit 1
+      ${onMatch}
     else
       status=$?
       if [ "$status" -ne 1 ]; then
         echo ${lib.escapeShellArg "${rule.name}: source scanner failed"} >&2
-        exit "$status"
+        ${onError}
       fi
     fi
   '';
@@ -57,6 +69,8 @@ in
   "${name}: source-rule paths must be directories within src; select files through their parent directory and globs";
     pkgs.runCommand name {nativeBuildInputs = [pkgs.ripgrep];} ''
       cd ${source}
+      ${lib.optionalString reportAll "result=0"}
       ${lib.concatMapStringsSep "\n" mkRule normalizedRules}
+      ${lib.optionalString reportAll ''if [ "$result" -ne 0 ]; then exit "$result"; fi''}
       touch "$out"
     ''

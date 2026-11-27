@@ -33,5 +33,10 @@ in {
     dataRoot = fact (types.nullOr types.str) hostData.dataRoot "Absolute path to this host's user-data filesystem root; null on hosts with no user data.";
     projectStateRoot = fact (types.nullOr types.str) hostData.projectStateRoot "Absolute path to mutable project state. An explicit host fact, never inferred from other roots.";
     flakeRoot = fact (types.nullOr types.str) hostData.flakeRoot "Absolute path to the host's canonical flake checkout.";
+    projectsRoot = fact (types.nullOr types.str) (
+      if cfg.flakeRoot == null
+      then null
+      else "${cfg.flakeRoot}/projects"
+    ) "Absolute path to the projects directory under flakeRoot, or null when flakeRoot is unset.";
   };
 }
