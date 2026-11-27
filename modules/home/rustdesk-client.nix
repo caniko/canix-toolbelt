@@ -17,25 +17,24 @@
   '';
 
   passwordScript = pkgs.writeShellScript "rustdesk-set-password" ''
-    set -eu
+    set -euo pipefail
     password_file="${cfg.passwordFile}"
     [ -r "$password_file" ] || { echo "password file not readable: $password_file"; exit 0; }
-    password=$(cat "$password_file")
     rd_config="${config.xdg.configHome}/rustdesk/RustDesk.toml"
     [ -f "$rd_config" ] || { echo "RustDesk.toml not found — not yet enrolled"; exit 0; }
     device_id=$(${pkgs.gnused}/bin/sed -n 's/^id = "\([^"]*\)".*/\1/p' "$rd_config" 2>/dev/null || true)
     device_token=$(${pkgs.gnused}/bin/sed -n 's/^api_secret = "\([^"]*\)".*/\1/p' "$rd_config" 2>/dev/null || true)
     [ -n "$device_id" ] || { echo "device id not found in $rd_config"; exit 0; }
     [ -n "$device_token" ] || { echo "device token not found in $rd_config"; exit 0; }
-    payload=$(${pkgs.jq}/bin/jq -n \
+    resp=$(${pkgs.jq}/bin/jq -nc \
       --arg device_id "$device_id" \
       --arg device_token "$device_token" \
-      --arg password "$password" \
-      '{device_id: $device_id, device_token: $device_token, password: $password, unattended_enabled: true}')
-    resp=$(${pkgs.curl}/bin/curl -s -o /dev/null -w "%{http_code}" \
-      -X POST "http://${cfg.rendezvousServer}:${toString cfg.apiPort}/api/devices/self/access-policy" \
-      -H "Content-Type: application/json" \
-      -d "$payload")
+      --rawfile password "$password_file" \
+      '{device_id: $device_id, device_token: $device_token, password: ($password | sub("[\r\n]+$"; "")), unattended_enabled: true}' \
+      | ${pkgs.curl}/bin/curl -sS -o /dev/null -w "%{http_code}" \
+        -X POST "http://${cfg.rendezvousServer}:${toString cfg.apiPort}/api/devices/self/access-policy" \
+        -H "Content-Type: application/json" \
+        --data-binary @-)
     if [ "$resp" = "204" ]; then
       echo "BetterDesk password set successfully"
     else

@@ -2,9 +2,8 @@
   inherit (pkgs) lib;
   inherit (import ./lib/eval-checks.nix {inherit pkgs;}) mkEvalCheck;
 
-  base = {
+  baseWithoutAge = {
     options = {
-      age.enable = lib.mkEnableOption "agenix";
       assertions = lib.mkOption {
         type = lib.types.listOf lib.types.attrs;
         default = [];
@@ -27,6 +26,11 @@
     };
   };
 
+  base = {
+    imports = [baseWithoutAge];
+    options.age.enable = lib.mkEnableOption "agenix";
+  };
+
   evaluate = {
     enable,
     ageEnable,
@@ -45,6 +49,19 @@
       ];
     }).config;
 
+  withoutAgeModule =
+    (lib.evalModules {
+      specialArgs = {inherit pkgs;};
+      modules = [
+        baseWithoutAge
+        ../modules/home/agenix-once.nix
+        {
+          canix-toolbelt.agenix-once.enable = true;
+          systemd.user.services.bad-requires.Unit.Requires = ["agenix.service"];
+        }
+      ];
+    }).config;
+
   softDeps = evaluate {
     enable = true;
     ageEnable = true;
@@ -59,6 +76,9 @@
     ageEnable = true;
     services = {
       bad-requires.Unit.Requires = ["agenix.service"];
+      bad-requires-scalar.Unit.Requires = "agenix.service";
+      bad-requisite.Unit.Requisite = ["agenix.service"];
+      bad-bindsto.Unit.BindsTo = ["agenix.service"];
       bad-partof.Unit.PartOf = ["agenix.service"];
     };
   };
@@ -96,8 +116,11 @@ in
           hardDepsFailed
           != []
           && lib.hasInfix "bad-requires" hardDepsMessage
+          && lib.hasInfix "bad-requires-scalar" hardDepsMessage
+          && lib.hasInfix "bad-requisite" hardDepsMessage
+          && lib.hasInfix "bad-bindsto" hardDepsMessage
           && lib.hasInfix "bad-partof" hardDepsMessage;
-        message = "hard dependencies on agenix.service must fail assertion and mention all offending units";
+        message = "all hard dependency forms (Requires, scalar Requires, Requisite, BindsTo, PartOf) on agenix.service must fail assertion and mention all offending units";
       }
       {
         name = "disabled-does-not-modify-agenix-or-fail";
@@ -112,6 +135,13 @@ in
           !(ageDisabled.systemd.user.services ? agenix)
           && lib.all (a: a.assertion) ageDisabled.assertions;
         message = "agenix-once with age.enable = false must not set RemainAfterExit or emit failing assertions";
+      }
+      {
+        name = "absent-age-module-stays-inert";
+        assertion =
+          !(withoutAgeModule.systemd.user.services ? agenix)
+          && lib.all (a: a.assertion) withoutAgeModule.assertions;
+        message = "agenix-once without agenix HM module loaded must evaluate cleanly and stay inert";
       }
     ];
   }

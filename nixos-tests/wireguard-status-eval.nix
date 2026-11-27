@@ -25,12 +25,29 @@
   custom = evaluate {
     enable = true;
     interfaces = ["wg-home"];
+    listenAddress = "127.0.0.2";
+    withRemoteIp = false;
     statusFile = "/etc/custom/wireguard-status.json";
   };
-  invalid = evaluate {
-    enable = true;
-    statusFile = "/var/lib/wg.json";
-  };
+  invalidPaths = [
+    "/var/lib/wg.json"
+    "/etc/"
+    "/etc/../tmp/pwn.json"
+    "/etc/foo/../bar.json"
+    "/etc/foo/"
+    "/etc//foo.json"
+    "/etc/."
+    "/etc/.."
+  ];
+  invalidConfigs =
+    map (path: {
+      inherit path;
+      cfg = evaluate {
+        enable = true;
+        statusFile = path;
+      };
+    })
+    invalidPaths;
 
   enabledJson = builtins.fromJSON enabled.environment.etc."canix-toolbelt/wireguard-status.json".text;
   customJson = builtins.fromJSON custom.environment.etc."custom/wireguard-status.json".text;
@@ -43,7 +60,9 @@ in
         name = "enabled-exporter";
         assertion =
           enabled.services.prometheus.exporters.wireguard.enable
+          && enabled.services.prometheus.exporters.wireguard.listenAddress == "127.0.0.1"
           && enabled.services.prometheus.exporters.wireguard.port == 19586
+          && enabled.services.prometheus.exporters.wireguard.withRemoteIp == true
           && enabled.services.prometheus.exporters.wireguard.interfaces == ["wg-home"];
         message = "enabled wireguard-status must configure services.prometheus.exporters.wireguard";
       }
@@ -60,23 +79,28 @@ in
         message = "default statusFile must render the expected JSON descriptor and pass all assertions";
       }
       {
-        name = "custom-status-file";
+        name = "custom-status-file-and-options";
         assertion =
           (custom.environment.etc ? "custom/wireguard-status.json")
           && !(custom.environment.etc ? "canix-toolbelt/wireguard-status.json")
+          && custom.services.prometheus.exporters.wireguard.listenAddress == "127.0.0.2"
+          && custom.services.prometheus.exporters.wireguard.withRemoteIp == false
           && customJson
           == {
             schemaVersion = 1;
-            metricsUrl = "http://127.0.0.1:9586/metrics";
+            metricsUrl = "http://127.0.0.2:9586/metrics";
             interfaces = ["wg-home"];
           }
           && lib.all (a: a.assertion) custom.assertions;
-        message = "custom statusFile must write under the requested /etc subpath";
+        message = "custom statusFile, listenAddress, and withRemoteIp must be applied and pass assertions";
       }
       {
-        name = "invalid-status-file-fails-assertion";
-        assertion = lib.any (a: !a.assertion && lib.hasInfix "wireguard-status.statusFile" a.message) invalid.assertions;
-        message = "statusFile outside /etc/ must trigger a failing wireguard-status assertion";
+        name = "invalid-status-files-fail-assertion-cleanly";
+        assertion = lib.all (entry:
+          lib.any (a: !a.assertion && lib.hasInfix "wireguard-status.statusFile" a.message) entry.cfg.assertions
+          && !(builtins.hasAttr (lib.removePrefix "/etc/" entry.path) entry.cfg.environment.etc))
+        invalidConfigs;
+        message = "invalid statusFile paths (outside /etc/, empty, traversal, or trailing/double slashes) must fail assertion without emitting an environment.etc entry";
       }
       {
         name = "disabled-leaves-exporter-and-etc-unset";

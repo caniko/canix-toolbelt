@@ -5,7 +5,11 @@
 }: let
   cfg = config.canix-toolbelt.networking.wireguard-status;
   statusTarget = lib.removePrefix "/etc/" cfg.statusFile;
-  validStatusFile = lib.hasPrefix "/etc/" cfg.statusFile && statusTarget != "";
+  statusSegments = lib.splitString "/" statusTarget;
+  validStatusFile =
+    lib.hasPrefix "/etc/" cfg.statusFile
+    && statusTarget != ""
+    && !(lib.any (seg: seg == "" || seg == "." || seg == "..") statusSegments);
 in {
   options.canix-toolbelt.networking.wireguard-status = {
     enable = lib.mkEnableOption "the declarative WireGuard status exporter";
@@ -45,7 +49,7 @@ in {
     assertions = [
       {
         assertion = validStatusFile;
-        message = "canix-toolbelt.networking.wireguard-status.statusFile must be a non-empty path under /etc/ (got ${cfg.statusFile}).";
+        message = "canix-toolbelt.networking.wireguard-status.statusFile must be a normalized path under /etc/ without empty, '.' or '..' segments (got ${cfg.statusFile}).";
       }
     ];
 
