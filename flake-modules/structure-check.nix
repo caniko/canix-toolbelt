@@ -45,6 +45,9 @@
   in {
     options.canix-toolbelt.structure-check = {
       enable = lib.mkEnableOption "boundary-ownership check";
+      includeHidden = lib.mkEnableOption "scanning hidden files and directories";
+      noIgnore = lib.mkEnableOption "scanning files normally excluded by ripgrep ignore rules";
+      reportAll = lib.mkEnableOption "reporting all failing rules instead of stopping at the first failure";
 
       src = lib.mkOption {
         type = lib.types.path;
@@ -92,7 +95,7 @@
 
     config = lib.mkIf cfg.enable {
       checks.${cfg.name} = mkStructureCheck {inherit pkgs;} {
-        inherit (cfg) name src rules;
+        inherit (cfg) name src rules includeHidden noIgnore reportAll;
       };
     };
   });

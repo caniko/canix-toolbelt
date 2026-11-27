@@ -42,7 +42,9 @@ all-features = true
 [features]
 default = []
 cli = ["dep:clap", "dep:signal-hook", "review", "qualification-cli", "caddy-plugins"]
-caddy-plugins = ["dep:ureq"]
+attic = ["dep:anyhow", "dep:harbor-cache", "dep:nix-manager-core", "dep:toml_edit"]
+browser-gpu-guard = ["dep:clap", "dep:nix", "nix/poll", "rustix/process"]
+caddy-plugins = ["dep:rnix", "dep:rowan", "dep:ureq"]
 review = ["dep:ureq", "dep:sha2", "dep:fs2", "dep:url", "dep:chrono", "dep:zeroize", "rustix/net"]
 build-train = ["fleetix/build-train-cli"]
 direct-network = ["rustix/event", "rustix/net", "rustix/process", "dep:nix"]
@@ -59,6 +61,11 @@ required-features = ["cli"]
 name = "canix-toolbelt-direct-network"
 path = "src/bin/direct-network.rs"
 required-features = ["cli", "direct-network"]
+
+[[bin]]
+name = "browser-gpu-guard"
+path = "src/bin/browser-gpu-guard.rs"
+required-features = ["browser-gpu-guard"]
 
 [[example]]
 name = "orchestration_shadow"
@@ -83,6 +90,14 @@ chrono = { version = "0.4", default-features = false, features = ["std"], option
 zeroize = { version = "1", optional = true }
 tempfile = { version = "3", optional = true }
 tar = { version = "0.4", default-features = false, optional = true }
+anyhow = { version = "1", optional = true }
+harbor-cache = { version = "0.1.1", optional = true }
+toml_edit = { version = "0.22", optional = true }
+rnix = { version = "0.12", optional = true }
+rowan = { version = "0.15", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+nix-manager-core = { version = "0.4.9", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -269,6 +269,9 @@
             project-tree-eval = import ./nixos-tests/project-tree-eval.nix {inherit pkgs;};
             host-selection-eval = import ./nixos-tests/host-selection-eval.nix {inherit pkgs;};
             host-profile-eval = import ./nixos-tests/host-profile-eval.nix {inherit pkgs;};
+            rust-housekeeping-eval = import ./nixos-tests/rust-housekeeping-eval.nix {inherit pkgs;};
+            browser-containment-eval = import ./nixos-tests/browser-containment-eval.nix {inherit pkgs;};
+            attic-cache-client-eval = import ./nixos-tests/attic-cache-client-eval.nix {inherit pkgs;};
             wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
             wg-home-shared-eval = import ./nixos-tests/wg-home-shared-eval.nix {inherit pkgs;};
             ssh-aliases-eval = import ./nixos-tests/ssh-aliases-eval.nix {inherit pkgs;};
@@ -308,6 +311,10 @@
         packages.canix-toolbelt-direct-network = import ./nix/package.nix {
           inherit pkgs;
           directNetwork = true;
+        };
+        packages.canix-toolbelt-browser-gpu-guard = import ./nix/package.nix {
+          inherit pkgs;
+          browserGpuGuard = true;
         };
         packages.canix-toolbelt-build-train = import ./nix/package.nix {
           inherit pkgs;

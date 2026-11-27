@@ -8,6 +8,8 @@ pub mod fork;
 #[cfg(feature = "qualification")]
 pub mod qualification;
 
+#[cfg(feature = "attic")]
+pub mod attic;
 #[cfg(all(unix, feature = "build-train"))]
 pub mod build_train;
 #[cfg(feature = "caddy-plugins")]

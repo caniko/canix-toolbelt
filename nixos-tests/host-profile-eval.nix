@@ -47,6 +47,11 @@ in
         message = "desktop host facts must derive from its registry entry";
       }
       {
+        name = "projects-root";
+        assertion = hub.projectsRoot == "/srv/flake/projects" && desk.projectsRoot == null;
+        message = "projectsRoot must derive from flakeRoot, not dataRoot";
+      }
+      {
         name = "unknown-host";
         assertion = !(builtins.tryEval (profile "ghost" "x86_64-linux").deviceType).success;
         message = "an unregistered host must fail evaluation";
