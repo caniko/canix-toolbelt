@@ -90,14 +90,14 @@ fn utf8_byte_limits_and_frame_bounds_apply_before_effects() {
     assert!(decode(&serde_json::to_vec(&value).unwrap()).is_ok());
     assert!(decode(&vec![b' '; 65537]).is_err());
     assert!(decode(b"\xff").is_err());
-    assert!(decode(&[b'['; 65536]).is_err());
+    assert!(decode(&vec![b'['; 65_536]).is_err());
 }
 
 fn message(name: &str) -> Message {
     let mut value = fixtures()["messages"][name].clone();
     match name {
         "describe" => {
-            value["body"]["expectedImplementation"]["schemaDigest"] = SCHEMA_DIGEST.into()
+            value["body"]["expectedImplementation"]["schemaDigest"] = SCHEMA_DIGEST.into();
         }
         "capabilities" => value["body"]["implementation"]["schemaDigest"] = SCHEMA_DIGEST.into(),
         _ => {}
@@ -200,7 +200,7 @@ fn every_implementation_field_and_mandatory_guarantee_is_bound() {
             "{missing:?}"
         );
     }
-    let mut wrong = response.clone();
+    let mut wrong = response;
     let Body::Capabilities(capabilities) = &mut wrong.body else {
         panic!()
     };

@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    ArtifactIndex, BTreeMap, Deserialize, File, Inventory, InventorySpec, Path, PathBuf, Serialize,
+    contained, fingerprint, fs, invalid, inventory, io, read_json, relative, sha256_file,
+    write_json,
+};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -203,10 +207,17 @@ fn capture(request: &RunRequest) -> io::Result<(Composition, BTreeMap<String, In
     ))
 }
 
+#[cfg(unix)]
+fn child_pid(child: &Child) -> Option<rustix::process::Pid> {
+    i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+}
+
 fn stop(child: &mut Child) -> io::Result<()> {
     #[cfg(unix)]
     {
-        if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+        if let Some(pid) = child_pid(child) {
             // The child owns a fresh process group; stop descendants, too.
             let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
         }
@@ -231,7 +242,7 @@ fn wait(
         }
         if let Some(status) = child.try_wait()? {
             #[cfg(unix)]
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+            if let Some(pid) = child_pid(child) {
                 if rustix::process::test_kill_process_group(pid).is_ok() {
                     stop(child)?;
                     return Ok((RunStatus::Failed, status.code()));

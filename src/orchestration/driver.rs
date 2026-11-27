@@ -10,7 +10,7 @@ use std::{
     io,
 };
 
-/// A decoded OpenCode response. A 404 remains distinct from transport failure.
+/// A decoded `OpenCode` response. A 404 remains distinct from transport failure.
 pub struct Reply {
     /// Native HTTP status.
     pub status: u16,
@@ -749,7 +749,10 @@ pub struct CycleReport {
 
 /// Observe, reconcile and admit one bounded slice. The caller owns the writer lease
 /// and source refresh. A read-only cycle cannot write state or dispatch inputs.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the public cycle API and its explicit clock and dispatch inputs"
+)]
 pub fn cycle(
     manifest: &Manifest,
     policy: &Policy,
@@ -784,9 +787,7 @@ pub fn cycle(
                 || !message_id(&pending["body"]["id"])
                 || pending["body"]["delivery"] != "steer"
                 || !message_id(&pending["physicalMessageID"])
-                || !pending["preparedAt"]
-                    .as_str()
-                    .is_some_and(|at| !at.is_empty()))
+                || pending["preparedAt"].as_str().is_none_or(str::is_empty))
         {
             return Err(invalid("malformed retained pending compaction"));
         }

@@ -121,11 +121,7 @@ fn run(cli: Cli) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let result = canix_toolbelt::qualification::cli::dispatch(command, &cancelled)?;
             serde_json::to_writer_pretty(std::io::stdout().lock(), &result.value)?;
             println!();
-            return Ok(std::process::ExitCode::from(if result.passed {
-                0
-            } else {
-                1
-            }));
+            return Ok(std::process::ExitCode::from(u8::from(!result.passed)));
         }
         #[cfg(all(unix, feature = "build-train"))]
         Command::BuildTrain(command) => {

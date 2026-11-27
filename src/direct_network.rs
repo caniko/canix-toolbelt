@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::IpAddr;
@@ -20,7 +21,7 @@ use std::time::{Duration, Instant};
 /// Fallible direct-network operations with underlying I/O diagnostics.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 /// Reserved packet mark; never matches a whole UID or a desktop application slice.
-pub const MARK: u32 = 0xca010000;
+pub const MARK: u32 = 0xca01_0000;
 const TABLES: [u32; 2] = [51821, 51822];
 // This daemon's explicit route namespace, including its unreachable fallback.
 // Untagged routes from older versions are never silently adopted.
@@ -45,7 +46,7 @@ pub struct Policy {
     pub ip: String,
     /// Absolute nft executable.
     pub nft: String,
-    /// Absolute NetworkManager CLI executable.
+    /// Absolute `NetworkManager` CLI executable.
     pub nmcli: String,
     /// Absolute systemctl executable.
     pub systemctl: String,
@@ -56,13 +57,13 @@ pub struct Policy {
     pub dns_cgroup: Option<String>,
     /// UIDs permitted to request readiness (this does not exempt their traffic).
     pub allowed_users: Vec<u32>,
-    /// Additional direct interfaces, such as a fleet WireGuard interface.
+    /// Additional direct interfaces, such as a fleet `WireGuard` interface.
     pub direct_interfaces: Vec<String>,
     /// Explicit public DNS servers, in addition to current uplink DNS.
     pub dns_servers: Vec<String>,
     /// Domain-specific direct DNS servers, independent of the desktop DNS configuration.
     pub dns_zones: BTreeMap<String, String>,
-    /// Discover DNS from physical NetworkManager uplinks.
+    /// Discover DNS from physical `NetworkManager` uplinks.
     pub network_manager_dns: bool,
 }
 
@@ -502,7 +503,7 @@ fn active_cgroups(policy: &Policy) -> BTreeMap<String, u64> {
         .filter_map(|path| {
             fs::metadata(Path::new("/sys/fs/cgroup").join(path))
                 .ok()
-                .filter(|metadata| metadata.is_dir())
+                .filter(fs::Metadata::is_dir)
                 .map(|metadata| (path.clone(), metadata.ino()))
         })
         .collect()
@@ -516,13 +517,13 @@ fn nft_rules(
 ) -> String {
     let mut text = String::new();
     if exists {
-        text.push_str(&format!("delete table inet {NFT_TABLE}\n"));
+        writeln!(text, "delete table inet {NFT_TABLE}").unwrap();
     }
     let dns_path = policy
         .dns_cgroup
         .as_ref()
         .filter(|path| paths.contains(path));
-    text.push_str(&format!("table inet {NFT_TABLE} {{\n chain dns_zone {{\n type filter hook output priority raw; policy accept;\n"));
+    writeln!(text, "table inet {NFT_TABLE} {{\n chain dns_zone {{\n type filter hook output priority raw; policy accept;").unwrap();
     // UDP conntrack belongs to a tuple, not a socket/cgroup. Classify DNS from
     // the current socket before lookup so a new desktop socket cannot inherit
     // a closed enrolled socket's DNAT mapping, or suppress later interception.
@@ -532,65 +533,69 @@ fn nft_rules(
         // DNS QR bit distinguishes listener responses even when both ports
         // overlap an upstream socket; check it before the upstream exemption.
         for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
-            text.push_str(&format!(
-                "meta mark {{ 0, {MARK} }} {address} udp sport 5354 @th,80,8 & 0x80 == 0x80 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE} return\n"
-            ));
+            writeln!(text, "meta mark {{ 0, {MARK} }} {address} udp sport 5354 @th,80,8 & 0x80 == 0x80 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE} return").unwrap();
         }
-        text.push_str(&format!(
-            "udp dport 53 socket cgroupv2 level {level} \"{path}\" return\n"
-        ));
+        writeln!(
+            text,
+            "udp dport 53 socket cgroupv2 level {level} \"{path}\" return"
+        )
+        .unwrap();
     } else if policy.dns_cgroup.is_none() {
         // Packet-rule compatibility only: native readiness still rejects a
         // missing resolver identity. This reply socket must carry SO_MARK.
         for address in ["ip saddr 127.0.0.54", "ip6 saddr ::1"] {
-            text.push_str(&format!(
-                "meta mark {MARK} {address} udp sport 5354 ct zone set {DNS_ZONE}\n"
-            ));
+            writeln!(
+                text,
+                "meta mark {MARK} {address} udp sport 5354 ct zone set {DNS_ZONE}"
+            )
+            .unwrap();
         }
     }
-    text.push_str(&format!(
-        "meta mark {MARK} udp dport 53 ct zone set {DNS_ZONE}\n"
-    ));
+    writeln!(text, "meta mark {MARK} udp dport 53 ct zone set {DNS_ZONE}").unwrap();
     for path in paths {
         let level = path.split('/').count();
-        text.push_str(&format!(
-            "meta mark 0 udp dport 53 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE}\n"
-        ));
+        writeln!(text, "meta mark 0 udp dport 53 socket cgroupv2 level {level} \"{path}\" ct zone set {DNS_ZONE}").unwrap();
     }
     text.push_str(" }\n chain output {\n type route hook output priority mangle; policy accept;\n");
     // Passive TCP handshakes may be emitted from request sockets without the
     // listener's cgroup metadata. Restore the enrolled incoming flow's mark.
-    text.push_str(&format!(
-        "meta l4proto tcp meta mark 0 ct mark {MARK} meta mark set {MARK}\n"
-    ));
+    writeln!(
+        text,
+        "meta l4proto tcp meta mark 0 ct mark {MARK} meta mark set {MARK}"
+    )
+    .unwrap();
     for path in paths {
         let level = path.split('/').count();
         // Respect explicitly marked sockets used by other VPN/proxy engines.
-        text.push_str(&format!(
-            "meta mark 0 socket cgroupv2 level {level} \"{path}\" meta mark set {MARK}\n"
-        ));
+        writeln!(
+            text,
+            "meta mark 0 socket cgroupv2 level {level} \"{path}\" meta mark set {MARK}"
+        )
+        .unwrap();
     }
-    text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain incoming {{\n type filter hook prerouting priority mangle; policy accept;\n meta mark 0 ct mark {MARK} meta mark set {MARK}\n"));
+    writeln!(text, "meta mark {MARK} ct mark set {MARK}\n }}\n chain incoming {{\n type filter hook prerouting priority mangle; policy accept;\n meta mark 0 ct mark {MARK} meta mark set {MARK}").unwrap();
     for path in paths {
         let level = path.split('/').count();
-        text.push_str(&format!(
-            "meta mark 0 socket cgroupv2 level {level} \"{path}\" counter meta mark set {MARK}\n"
-        ));
+        writeln!(
+            text,
+            "meta mark 0 socket cgroupv2 level {level} \"{path}\" counter meta mark set {MARK}"
+        )
+        .unwrap();
     }
-    text.push_str(&format!("meta mark {MARK} ct mark set {MARK}\n }}\n chain dns {{\n type nat hook output priority dstnat; policy accept;\n"));
+    writeln!(text, "meta mark {MARK} ct mark set {MARK}\n }}\n chain dns {{\n type nat hook output priority dstnat; policy accept;").unwrap();
     if let Some(path) = dns_path {
-        text.push_str(&format!(
-            "socket cgroupv2 level {} \"{path}\" return\n",
+        writeln!(
+            text,
+            "socket cgroupv2 level {} \"{path}\" return",
             path.split('/').count()
-        ));
+        )
+        .unwrap();
     }
-    text.push_str(&format!("meta mark {MARK} meta l4proto {{ tcp, udp }} th dport 53 dnat ip to 127.0.0.54:5354\n meta mark {MARK} meta l4proto {{ tcp, udp }} th dport 53 dnat ip6 to [::1]:5354\n }}\n chain source {{\n type nat hook postrouting priority srcnat; policy accept;\n"));
+    writeln!(text, "meta mark {MARK} meta l4proto {{ tcp, udp }} th dport 53 dnat ip to 127.0.0.54:5354\n meta mark {MARK} meta l4proto {{ tcp, udp }} th dport 53 dnat ip6 to [::1]:5354\n }}\n chain source {{\n type nat hook postrouting priority srcnat; policy accept;").unwrap();
     for device in devices {
         // A new socket may initially choose the VPN/dummy address. Preserve
         // established conntrack mappings; normalize new direct flows only.
-        text.push_str(&format!(
-            "meta mark {MARK} oifname \"{device}\" masquerade\n"
-        ));
+        writeln!(text, "meta mark {MARK} oifname \"{device}\" masquerade").unwrap();
     }
     text.push_str("}\n}\n");
     text
@@ -604,23 +609,27 @@ fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
     // remain checked before the owned-only flush and after this batch.
     let operation = if family == "-6" { "append" } else { "add" };
     for route in routes {
-        text.push_str(&format!(
+        write!(
+            text,
             "route {operation} table {table} {} proto {ROUTE_PROTOCOL}",
             route.destination
-        ));
+        )
+        .unwrap();
         if let Some(gateway) = &route.gateway {
-            text.push_str(&format!(" via {gateway}"));
+            write!(text, " via {gateway}").unwrap();
         }
         if let Some(source) = &route.source {
-            text.push_str(&format!(" src {source}"));
+            write!(text, " src {source}").unwrap();
         }
-        text.push_str(&format!(
+        write!(
+            text,
             " scope {} metric {}",
             route.scope.as_str(),
             route.metric
-        ));
+        )
+        .unwrap();
         if route.nexthops.is_empty() {
-            text.push_str(&format!(" dev {}", route.device));
+            write!(text, " dev {}", route.device).unwrap();
             if route.onlink {
                 text.push_str(" onlink");
             }
@@ -628,9 +637,9 @@ fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
             for hop in &route.nexthops {
                 text.push_str(" nexthop");
                 if let Some(gateway) = &hop.gateway {
-                    text.push_str(&format!(" via {gateway}"));
+                    write!(text, " via {gateway}").unwrap();
                 }
-                text.push_str(&format!(" dev {} weight {}", hop.device, hop.weight));
+                write!(text, " dev {} weight {}", hop.device, hop.weight).unwrap();
                 if hop.onlink {
                     text.push_str(" onlink");
                 }
@@ -639,9 +648,12 @@ fn route_batch(routes: &[Route], table: u32, family: &str) -> String {
         text.push('\n');
     }
     // Never fall through to the VPN when the direct uplink has no route.
-    text.push_str(&format!(
-        "route add unreachable default table {table} proto {ROUTE_PROTOCOL} metric 4294967295\n"
-    ));
+    writeln!(
+        text,
+        "route add unreachable default table {table} proto {ROUTE_PROTOCOL} metric {}",
+        u32::MAX
+    )
+    .unwrap();
     text
 }
 
@@ -940,12 +952,12 @@ fn dns_servers(policy: &Policy, devices: &BTreeSet<String>, links: &Value) -> Re
             }
         }
     }
-    let mut text = servers
-        .iter()
-        .map(|s| format!("server={s}\n"))
-        .collect::<String>();
+    let mut text = String::new();
+    for server in servers {
+        writeln!(text, "server={server}").unwrap();
+    }
     for (zone, server) in &policy.dns_zones {
-        text.push_str(&format!("server=/{zone}/{server}\n"));
+        writeln!(text, "server=/{zone}/{server}").unwrap();
     }
     Ok(text)
 }
@@ -981,9 +993,11 @@ fn sync_dns_servers_with(
             .write(true)
             .create(true)
             .mode(0o644)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
-            )
+            .custom_flags(i32::from_ne_bytes(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                    .bits()
+                    .to_ne_bytes(),
+            ))
             .open(&temp)?;
         let metadata = file.metadata()?;
         if !metadata.is_file()
@@ -1082,7 +1096,7 @@ fn reconcile(policy: &Policy, state: &mut State) -> Result<()> {
             Some(&nft_rules(policy, &paths, &devices, present)),
         )?;
         state.cgroups = cgroups;
-        state.devices = devices.clone();
+        state.devices.clone_from(&devices);
         state.nft_present = true;
     }
     let servers = dns_servers(policy, &devices, &links)?;
@@ -1264,10 +1278,10 @@ mod tests {
         // Write from a child process: a write descriptor held here leaks into
         // children that concurrent tests fork, until they exec, and executing
         // the script while any writer remains fails with ETXTBSY.
-        let mut writer = std::process::Command::new("/bin/sh")
+        let mut writer = Command::new("/bin/sh")
             .args(["-c", "cat > \"$1\" && chmod 700 \"$1\"", "sh"])
             .arg(path)
-            .stdin(std::process::Stdio::piped())
+            .stdin(Stdio::piped())
             .spawn()
             .unwrap();
         writer

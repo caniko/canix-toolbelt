@@ -68,6 +68,10 @@ fn canonical_numbers(value: &Value) -> bool {
     }
 }
 
+fn limit(value: &Value) -> usize {
+    usize::try_from(value.as_u64().unwrap_or(0)).unwrap_or(usize::MAX)
+}
+
 fn matches(value: &Value, definition: &Value) -> bool {
     if let Some(name) = definition.as_str() {
         return if name == "bool" {
@@ -87,10 +91,10 @@ fn matches(value: &Value, definition: &Value) -> bool {
             .is_some_and(|text| match definition["format"].as_str() {
                 Some("opaque") => {
                     !text.is_empty()
-                        && text.len() <= definition["maxBytes"].as_u64().unwrap_or(0) as usize
+                        && text.len() <= limit(&definition["maxBytes"])
                         && !text.chars().any(char::is_control)
                 }
-                Some("sha256") | Some("git-revision") => {
+                Some("sha256" | "git-revision") => {
                     let length = if definition["format"] == "sha256" {
                         64
                     } else {
@@ -101,7 +105,7 @@ fn matches(value: &Value, definition: &Value) -> bool {
                             .bytes()
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 }
-                Some("uint64") | Some("generation") => text.parse::<u64>().is_ok_and(|number| {
+                Some("uint64" | "generation") => text.parse::<u64>().is_ok_and(|number| {
                     number.to_string() == text
                         && (definition["format"] != "generation" || number > 0)
                 }),
@@ -136,7 +140,7 @@ fn matches(value: &Value, definition: &Value) -> bool {
     }
     if let Some(item) = definition.get("items") {
         return value.as_array().is_some_and(|items| {
-            items.len() <= definition["maxItems"].as_u64().unwrap_or(0) as usize
+            items.len() <= limit(&definition["maxItems"])
                 && items.iter().all(|value| matches(value, item))
                 && (definition["unique"] != true
                     || items
@@ -160,7 +164,7 @@ fn validate(value: &Value) -> Result<(), ProtocolError> {
 
 /// Decode a canonical bounded message. Transport must bound reads before calling.
 pub fn decode(bytes: &[u8]) -> Result<Message, ProtocolError> {
-    if bytes.len() > schema()["maxFrameBytes"].as_u64().unwrap_or(0) as usize {
+    if bytes.len() > limit(&schema()["maxFrameBytes"]) {
         return Err(rejected(ErrorCode::InvalidFrame));
     }
     let value: Value =
@@ -183,7 +187,7 @@ pub fn encode(message: &Message) -> Result<Vec<u8>, ProtocolError> {
     validate(&value)?;
     let bytes =
         serde_json::to_vec(&canonical(&value)).map_err(|_| rejected(ErrorCode::InvalidFrame))?;
-    if bytes.len() > schema()["maxFrameBytes"].as_u64().unwrap_or(0) as usize {
+    if bytes.len() > limit(&schema()["maxFrameBytes"]) {
         return Err(rejected(ErrorCode::InvalidFrame));
     }
     Ok(bytes)

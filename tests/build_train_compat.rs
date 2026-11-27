@@ -1,18 +1,22 @@
 #![cfg(all(unix, feature = "build-train"))]
 
 use canix_toolbelt::build_train::{Connection, Service, policy_identity};
+use fleetix::build_train::native::{
+    Connection as NativeConnection, Service as NativeService,
+    policy_identity as native_policy_identity,
+};
 
 #[test]
 fn native_contracts_share_fleetix_types_and_preserve_historical_policy() {
     let service: Service =
         serde_json::from_str(include_str!("fixtures/build-train-service.json")).unwrap();
-    let native: fleetix::build_train::native::Service = service.clone();
+    let native: NativeService = service.clone();
     assert_eq!(
         policy_identity(&service).unwrap(),
         service.coordinator.policy
     );
     assert_eq!(
-        fleetix::build_train::native::policy_identity(&native).unwrap(),
+        native_policy_identity(&native).unwrap(),
         service.coordinator.policy
     );
     let policy = service.coordinator.policy.clone();
@@ -23,7 +27,7 @@ fn native_contracts_share_fleetix_types_and_preserve_historical_policy() {
         preparation_dir: "/var/lib/fleetix-train/preparation".into(),
         gc_roots: service.native.gc_roots,
     };
-    let native: fleetix::build_train::native::Connection = connection;
+    let native: NativeConnection = connection;
     assert_eq!(native.client().policy, policy);
 }
 

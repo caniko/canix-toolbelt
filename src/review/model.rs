@@ -182,7 +182,7 @@ impl Default for Policy {
             schema_version: 1,
             provider: "greptile".into(),
             transport: "github-comment".into(),
-            reviewer_id: 165735046,
+            reviewer_id: 165_735_046,
             required_checks: vec![],
         }
     }

@@ -284,9 +284,9 @@ pub fn ensure_once<F: Forge, P: Provider + ?Sized>(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.mode(0o600).custom_flags(i32::from_ne_bytes(
+            rustix::fs::OFlags::NOFOLLOW.bits().to_ne_bytes(),
+        ));
     }
     let (mut lock, fresh_lock) = match options.open(&lock_path) {
         Ok(lock) => (lock, true),

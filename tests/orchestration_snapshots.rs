@@ -358,10 +358,6 @@ fn github_rejects_truncated_history_and_check_nodes() {
 #[test]
 fn forgejo_revalidates_every_published_scheduling_field() {
     for field in ["mergeable", "draft"] {
-        let mut transport = Forge {
-            calls: vec![],
-            inconsistent: false,
-        };
         struct Moving<'a> {
             inner: &'a mut Forge,
             field: &'a str,
@@ -381,6 +377,10 @@ fn forgejo_revalidates_every_published_scheduling_field() {
                 Ok(value)
             }
         }
+        let mut transport = Forge {
+            calls: vec![],
+            inconsistent: false,
+        };
         assert!(
             forgejo(
                 &mut Moving {
@@ -399,10 +399,6 @@ fn forgejo_revalidates_every_published_scheduling_field() {
 
 #[test]
 fn forgejo_rejects_history_without_declared_transport_totals() {
-    let transport = Forge {
-        calls: vec![],
-        inconsistent: false,
-    };
     struct Bare(Forge);
     impl ForgeRest for Bare {
         fn get(&mut self, host: &str, path: &str) -> io::Result<ForgeResponse> {
@@ -411,6 +407,10 @@ fn forgejo_rejects_history_without_declared_transport_totals() {
             Ok(response)
         }
     }
+    let transport = Forge {
+        calls: vec![],
+        inconsistent: false,
+    };
     assert!(
         forgejo(
             &mut Bare(transport),
@@ -730,7 +730,7 @@ fn github_revalidates_check_contexts_beyond_the_initial_page() {
                 101
             );
         }
-        assert!(transport.0.is_empty());
+        assert_eq!(transport.0, Vec::<Value>::new());
     }
 }
 
@@ -1090,7 +1090,7 @@ fn forge_review(review: Value, inline: Value) -> ForgeScript {
         ("repos/owner/repo/pulls/1".into(), forge_pull()),
         (
             "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
-            json!([review]),
+            Value::Array(vec![review]),
         ),
         (
             "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
@@ -1139,7 +1139,7 @@ fn forgejo_requires_declared_complete_inline_comment_counts() {
         assert_eq!(result.is_ok(), should_pass);
         if let Ok(snapshot) = result {
             assert_eq!(snapshot["inlineComments"].as_array().unwrap().len(), 2);
-            assert!(transport.0.is_empty());
+            assert_eq!(transport.0, []);
         }
     }
 }
@@ -1231,7 +1231,7 @@ fn forgejo_rejects_inline_identity_replay_across_distinct_reviews() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("inline comment identity"));
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, []);
 }
 
 #[test]
@@ -1253,7 +1253,7 @@ fn forgejo_requires_a_valid_update_identity_before_collecting_history() {
         )
         .unwrap_err();
         assert!(error.to_string().contains("update identity"));
-        assert!(transport.0.is_empty());
+        assert_eq!(transport.0, []);
     }
     let mut pull = forge_pull();
     pull.as_object_mut().unwrap().remove("updated_at");
@@ -1286,7 +1286,7 @@ fn github_inline_identities_must_be_unique_across_distinct_threads() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("inline comment identity"));
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, Vec::<Value>::new());
 }
 
 #[test]
@@ -1303,7 +1303,7 @@ fn forgejo_requires_base_revision_and_branch_identity_before_collecting_history(
             )
             .unwrap_err();
             assert!(error.to_string().contains("base identity"));
-            assert!(transport.0.is_empty());
+            assert_eq!(transport.0, []);
         }
     }
 }
@@ -1326,7 +1326,7 @@ fn forgejo_rechecks_single_page_ci_after_the_final_pull_observation() {
             .to_string()
             .contains("check rollup moved after history")
     );
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, []);
 }
 
 #[test]
@@ -1481,13 +1481,11 @@ fn forgejo_accepts_exactly_2000_history_rows_with_an_empty_sentinel_page() {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
         }
         if count <= 2000 {
-            assert!(
-                transport.0.is_empty(),
-                "{count}: boundary page was not inspected"
-            );
+            assert_eq!(transport.0, [], "{count}: boundary page was not inspected");
         } else {
-            assert!(
-                !transport.0.is_empty(),
+            assert_ne!(
+                transport.0,
+                [],
                 "oversized declared total must reject before further pages"
             );
         }
@@ -1527,7 +1525,7 @@ fn github_preserves_explicit_native_nulls_and_pending_checks() {
         snapshot["checks"]["contexts"]["nodes"][0]["status"],
         "QUEUED"
     );
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, Vec::<Value>::new());
 }
 
 #[test]
@@ -1690,14 +1688,6 @@ fn forgejo_rejects_incomplete_or_moving_declared_history_counts() {
         (101, 100, 100),
         (2001, 2001, 100),
     ] {
-        let mut script = forge_review(forge_review_row(1, 1), json!([forge_inline(10, 1)]));
-        let path = "repos/owner/repo/pulls/1/reviews";
-        script.1.insert(path.into(), total);
-        script.0[1].1 = json!(
-            (0..first_len)
-                .map(|id| forge_review_row(id + 1, 0))
-                .collect::<Vec<_>>()
-        );
         struct MovingCount {
             inner: ForgeScript,
             second_total: u64,
@@ -1713,6 +1703,14 @@ fn forgejo_rejects_incomplete_or_moving_declared_history_counts() {
                 self.inner.get(host, path)
             }
         }
+        let mut script = forge_review(forge_review_row(1, 1), json!([forge_inline(10, 1)]));
+        let path = "repos/owner/repo/pulls/1/reviews";
+        script.1.insert(path.into(), total);
+        script.0[1].1 = json!(
+            (0..first_len)
+                .map(|id| forge_review_row(id + 1, 0))
+                .collect::<Vec<_>>()
+        );
         let mut transport = MovingCount {
             inner: script,
             second_total,

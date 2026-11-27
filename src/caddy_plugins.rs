@@ -683,7 +683,7 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
             ..Refresh::default()
         });
     }
-    let mut updated = raw.clone();
+    let mut rewritten = raw.clone();
     let mut resolved_by_version = BTreeMap::new();
     let resolved = if let Some(versions) = version_hashes {
         let system = nix.system()?;
@@ -697,19 +697,19 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
         }
         replacements.sort_unstable_by_key(|(range, _)| std::cmp::Reverse(range.start));
         for (range, hash) in replacements {
-            updated.replace_range(range, &hash);
+            rewritten.replace_range(range, &hash);
         }
         None
     } else {
         let resolved = resolve_hash(&root, &plugins, nix)?;
-        updated = set_plugins_hash(&updated, &resolved.hash).0;
+        rewritten = set_plugins_hash(&rewritten, &resolved.hash).0;
         Some(resolved)
     };
     for (module, old, new) in &updates {
-        updated = bump_version(&updated, module, old, new);
+        rewritten = bump_version(&rewritten, module, old, new);
     }
-    if updated != raw {
-        fs::write(&file, updated)?;
+    if rewritten != raw {
+        fs::write(&file, rewritten)?;
     }
     Ok(Refresh {
         plugins,
@@ -762,12 +762,12 @@ mod tests {
             extract_plugins(raw, Path::new("x.nix"))[0].module,
             "github.com/owner/parent/sub"
         );
-        assert!(
+        assert_eq!(
             extract_plugins(
                 r#"caddy.plugins = ["github.com/no-version" "x@y"];"#,
                 Path::new("x.nix")
-            )
-            .is_empty()
+            ),
+            []
         );
         // Only the plugin list counts; other module strings and quotes are ignored.
         let raw = "# \"github.com/c@v9\" \"quote\ncaddy.plugins\n  =\n  [ \"github.com/a@v1\" ];\nx = \"github.com/b@v2\";";
@@ -843,11 +843,11 @@ mod tests {
 
     #[test]
     fn extracts_got_hashes() {
-        let stderr = r#"error: hash mismatch in fixed-output derivation '/nix/store/aaa-go-modules.drv':
+        let stderr = r"error: hash mismatch in fixed-output derivation '/nix/store/aaa-go-modules.drv':
          specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
             got:    sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
             got:    sha256-aaa+bbb/ccc=
-"#;
+";
         assert_eq!(
             extract_got_hashes(stderr),
             [
@@ -855,7 +855,10 @@ mod tests {
                 "sha256-aaa+bbb/ccc="
             ]
         );
-        assert!(extract_got_hashes("nothing matches here\n").is_empty());
+        assert_eq!(
+            extract_got_hashes("nothing matches here\n"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -931,6 +934,32 @@ mod tests {
 
     #[test]
     fn refreshes_nested_hashes_with_their_own_caddy_versions() {
+        struct Versioned;
+        impl Nix for Versioned {
+            fn system(&mut self) -> Result<String> {
+                Ok("x86_64-linux".into())
+            }
+            fn probe(&mut self, expr: &str) -> Result<String> {
+                assert!(expr.contains("github.com/example/plugin@v1"));
+                let suffix = if expr.contains("\"2.11.7\"") {
+                    "7"
+                } else {
+                    assert!(expr.contains("\"2.11.9\""));
+                    "9"
+                };
+                Ok(format!("got: sha256-NEW{suffix}="))
+            }
+            fn realize(&mut self, expr: &str) -> Result<String> {
+                let suffix = if expr.contains("\"2.11.7\"") {
+                    "7"
+                } else {
+                    assert!(expr.contains("\"2.11.9\""));
+                    "9"
+                };
+                assert!(expr.contains(&format!("sha256-NEW{suffix}=")));
+                Ok(format!("/nix/store/vendor{suffix}"))
+            }
+        }
         let dir = tempfile::tempdir().unwrap();
         assert!(
             Command::new("git")
@@ -975,34 +1004,8 @@ mod tests {
             )
         );
 
-        struct Versioned;
-        impl Nix for Versioned {
-            fn system(&mut self) -> Result<String> {
-                Ok("x86_64-linux".into())
-            }
-            fn probe(&mut self, expr: &str) -> Result<String> {
-                assert!(expr.contains("github.com/example/plugin@v1"));
-                let suffix = if expr.contains("\"2.11.7\"") {
-                    "7"
-                } else {
-                    assert!(expr.contains("\"2.11.9\""));
-                    "9"
-                };
-                Ok(format!("got: sha256-NEW{suffix}="))
-            }
-            fn realize(&mut self, expr: &str) -> Result<String> {
-                let suffix = if expr.contains("\"2.11.7\"") {
-                    "7"
-                } else {
-                    assert!(expr.contains("\"2.11.9\""));
-                    "9"
-                };
-                assert!(expr.contains(&format!("sha256-NEW{suffix}=")));
-                Ok(format!("/nix/store/vendor{suffix}"))
-            }
-        }
         let dry = refresh(dir.path(), &mut Versioned, true, true).unwrap();
-        assert!(dry.resolved_by_version.is_empty());
+        assert_eq!(dry.resolved_by_version, BTreeMap::new());
         assert_eq!(fs::read_to_string(&path).unwrap(), source);
         let done = refresh(dir.path(), &mut Versioned, true, false).unwrap();
         assert!(done.resolved.is_none());
@@ -1037,7 +1040,7 @@ mod tests {
                     .status()
                     .unwrap()
                     .success()
-            )
+            );
         };
         git(&["init", "-q"]);
         fs::write(dir.path().join("caddy.nix"), SAMPLE_TLS).unwrap();
@@ -1051,7 +1054,7 @@ mod tests {
         );
         let done = refresh(dir.path(), &mut Fake, true, false).unwrap();
         assert_eq!(done.resolved.unwrap().store_path, "/nix/store/x-vendor");
-        assert!(done.updates.is_empty());
+        assert_eq!(done.updates, []);
         assert!(
             fs::read_to_string(dir.path().join("caddy.nix"))
                 .unwrap()

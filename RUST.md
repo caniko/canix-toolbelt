@@ -61,7 +61,7 @@ forges and transports fail explicitly.
 Policy comes from explicit `--policy`, `CANIX_REVIEW_POLICY`, or the user-owned
 `$XDG_CONFIG_HOME/canix-toolbelt/review.pkl`; otherwise the built-in Greptile
 policy applies. The schema is `runtime/ReviewPolicy.pkl`. PR source branches
-do not supply policy. Credentials come from GH_TOKEN/GITHUB_TOKEN or the
+do not supply policy. Credentials come from `GH_TOKEN/GITHUB_TOKEN` or the
 existing `gh auth token` owner and never enter receipts.
 
 Every finding blocks until fixed in a freshly reviewed revision or dispositioned

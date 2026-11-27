@@ -4,6 +4,7 @@
 //! binaries, connect to endpoints, or open referenced secret files.
 
 use miette::IntoDiagnostic;
+use pklx::pklr::EvalOptions;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -77,7 +78,7 @@ impl RuntimeManifest {
 
     /// Evaluate a manifest using the caller's async runtime.
     pub async fn load_from_async(path: &Path) -> Result<Self, LoadError> {
-        pklx::eval_to_typed(path, Default::default())
+        pklx::eval_to_typed(path, EvalOptions::default())
             .await
             .map_err(|source| LoadError {
                 path: path.to_owned(),
@@ -94,7 +95,7 @@ pub(crate) fn load_pkl_sync<T: DeserializeOwned>(path: &Path) -> miette::Result<
     }
     tokio::runtime::Runtime::new()
         .into_diagnostic()?
-        .block_on(pklx::eval_to_typed(path, Default::default()))
+        .block_on(pklx::eval_to_typed(path, EvalOptions::default()))
 }
 
 /// An evaluator or deserialization failure with its source manifest path.

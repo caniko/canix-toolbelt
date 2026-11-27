@@ -4,6 +4,7 @@ use canix_toolbelt::operator::{OperatorConfig, Outcome, ServiceManager, Stage, S
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    os::unix::fs::PermissionsExt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,6 +12,10 @@ use std::{
 };
 
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The test mock toggles independent service failure modes"
+)]
 struct Services {
     calls: Vec<String>,
     failures: BTreeMap<String, usize>,
@@ -87,7 +92,7 @@ impl ServiceManager for Services {
         Ok(StageResult {
             success,
             result: if success { "success" } else { "exit-code" }.into(),
-            exit_status: if success { 0 } else { 1 },
+            exit_status: i32::from(!success),
         })
     }
 }
@@ -168,7 +173,7 @@ fn interruption_resumes_checkpoints_and_rejects_changed_contract() {
     ] {
         let mut refused = Services::default();
         assert!(run(&changed, &mut refused, &AtomicBool::new(false)).is_err());
-        assert!(refused.calls.is_empty());
+        assert_eq!(refused.calls, Vec::<String>::new());
         assert_eq!(
             std::fs::read(config.state_dir.join("state.json")).unwrap(),
             original
@@ -315,7 +320,6 @@ fn terminal_leftover_requests_do_not_create_another_run() {
         std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
         // Metadata maintenance is not a new request (ctime is deliberately
         // excluded from the persisted identity).
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&config.request_path, std::fs::Permissions::from_mode(0o600))
             .unwrap();
         let mut resumed = Services::default();
@@ -323,7 +327,7 @@ fn terminal_leftover_requests_do_not_create_another_run() {
             run(&config, &mut resumed, &AtomicBool::new(false)).unwrap(),
             outcome
         );
-        assert!(resumed.calls.is_empty());
+        assert_eq!(resumed.calls, Vec::<String>::new());
         let after: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(before["run_id"], after["run_id"]);
@@ -392,7 +396,7 @@ fn stale_cancelled_request_cannot_replay_stages() {
     std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
     let mut resumed = Services::default();
     run(&config, &mut resumed, &AtomicBool::new(false)).unwrap();
-    assert!(resumed.calls.is_empty());
+    assert_eq!(resumed.calls, Vec::<String>::new());
     assert!(!config.request_path.exists());
     let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(before["run_id"], after["run_id"]);
@@ -476,7 +480,7 @@ fn legacy_interrupted_state_is_preserved_without_running_new_units() {
     std::fs::write(&path, legacy).unwrap();
     let mut services = Services::default();
     assert!(run(&config, &mut services, &AtomicBool::new(false)).is_err());
-    assert!(services.calls.is_empty());
+    assert_eq!(services.calls, Vec::<String>::new());
     assert_eq!(std::fs::read(path).unwrap(), legacy);
     assert!(config.request_path.exists());
 }

@@ -18,7 +18,8 @@ fn custody_enrolls_every_ci_job_and_build_group() {
         .filter_map(|line| line.trim().strip_prefix("- group: \""))
         .map(|line| line.strip_suffix('"').unwrap())
         .collect();
-    assert!(!ci_jobs.is_empty() && !groups.is_empty());
+    assert_ne!(ci_jobs, Vec::<&str>::new());
+    assert_ne!(groups, Vec::<&str>::new());
     let custody = SIMIT
         .split_once("[ci.custody]")
         .unwrap()

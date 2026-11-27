@@ -68,7 +68,7 @@ pub struct StageResult {
     pub success: bool,
     /// systemd Result property.
     pub result: String,
-    /// systemd ExecMainStatus property.
+    /// systemd `ExecMainStatus` property.
     pub exit_status: i32,
 }
 
@@ -87,7 +87,8 @@ pub trait ServiceManager {
 #[derive(Serialize, Deserialize)]
 struct State {
     run_id: String,
-    state: String,
+    #[serde(rename = "state")]
+    phase: String,
     result: String,
     #[serde(default)]
     config: Option<OperatorConfig>,
@@ -337,8 +338,8 @@ pub fn run_with_ready(
         Some(state)
             if requested.is_some()
                 && (state.restoring
-                    || matches!(state.state.as_str(), "running" | "interrupted")
-                    || (matches!(state.state.as_str(), "succeeded" | "failed" | "cancelled")
+                    || matches!(state.phase.as_str(), "running" | "interrupted")
+                    || (matches!(state.phase.as_str(), "succeeded" | "failed" | "cancelled")
                         && (state.request_identity.is_none()
                             || state.request_identity == requested))) =>
         {
@@ -361,7 +362,7 @@ pub fn run_with_ready(
             durable_dir(&run_dir)?;
             State {
                 run_id,
-                state: "running".into(),
+                phase: "running".into(),
                 result: "running".into(),
                 config: Some(config.clone()),
                 completed: vec![],
@@ -379,7 +380,7 @@ pub fn run_with_ready(
         }
     };
     let restore_only =
-        state.restoring || matches!(state.state.as_str(), "succeeded" | "failed" | "cancelled");
+        state.restoring || matches!(state.phase.as_str(), "succeeded" | "failed" | "cancelled");
     // Reboot recovery must not rewrite the marker. Its persisted inode/time
     // identity distinguishes leftover terminal intent from a new touch/replacement.
     if requested.is_none() {
@@ -387,7 +388,7 @@ pub fn run_with_ready(
     }
     state.request_identity = request_identity(&config.request_path)?;
     if !restore_only {
-        state.state = "running".into();
+        state.phase = "running".into();
         state.result = "running".into();
     }
     save(config, &mut state)?;
@@ -430,9 +431,10 @@ pub fn run_with_ready(
             if cancelled.load(Ordering::SeqCst) {
                 return Ok(Outcome::Interrupted);
             }
-            state.current_stage = stage.name.clone();
-            state.current_unit = stage.unit.clone();
-            state.current_index = index as i64;
+            state.current_stage.clone_from(&stage.name);
+            state.current_unit.clone_from(&stage.unit);
+            state.current_index = i64::try_from(index)
+                .map_err(|_| invalid("stage index exceeds the journal range"))?;
             if state.completed.contains(&stage.name) {
                 event(config, &state, "skipped", 0, "success", 0)?;
                 continue;
@@ -443,7 +445,7 @@ pub fn run_with_ready(
                 if cancelled.load(Ordering::SeqCst) {
                     return Ok(Outcome::Interrupted);
                 }
-                state.current_unit = stage.unit.clone();
+                state.current_unit.clone_from(&stage.unit);
                 save(config, &mut state)?;
                 let result = services
                     .start(&stage.unit, cancelled)
@@ -501,7 +503,7 @@ pub fn run_with_ready(
     // Retain both fences and worker ownership if stage termination is uncertain.
     if !state.current_unit.is_empty() && !state.completed.contains(&state.current_stage) {
         if let Err(error) = stop_confirmed(services, &state.current_unit) {
-            state.state = "interrupted".into();
+            state.phase = "interrupted".into();
             save(config, &mut state)?;
             return Err(error);
         }
@@ -536,7 +538,7 @@ pub fn run_with_ready(
         Ok(outcome) if recovery_error.is_none() => *outcome,
         _ => Outcome::Interrupted,
     };
-    state.state = match outcome {
+    state.phase = match outcome {
         Outcome::Succeeded => "succeeded",
         Outcome::Failed => "failed",
         Outcome::Interrupted => "interrupted",
@@ -545,7 +547,7 @@ pub fn run_with_ready(
     .into();
     state.restoring = recovery_error.is_some();
     if !state.restoring {
-        state.result = state.state.clone();
+        state.result.clone_from(&state.phase);
     }
     save(config, &mut state)?;
     let events = fs::read_to_string(
@@ -594,7 +596,7 @@ pub fn cancel(config: &OperatorConfig) -> io::Result<()> {
                 "cannot cancel with unrecovered workers or an unconfirmed stage",
             ));
         }
-        state.state = "cancelled".into();
+        state.phase = "cancelled".into();
         state.result = "cancelled".into();
         save(config, &mut state)?;
     }

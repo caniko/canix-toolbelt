@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    error::Error,
     fs::File,
     io::{self, Read, Write},
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
@@ -268,7 +269,6 @@ fn require_exchange_nonce(batch: &Batch) -> io::Result<()> {
 }
 
 fn batch_digest(batch: &Batch) -> io::Result<String> {
-    bounded_encoding(batch)?;
     struct HashWriter(Sha256);
     impl Write for HashWriter {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -279,6 +279,7 @@ fn batch_digest(batch: &Batch) -> io::Result<String> {
             Ok(())
         }
     }
+    bounded_encoding(batch)?;
     let mut writer = HashWriter(Sha256::new());
     serde_json::to_writer(&mut writer, batch).map_err(|error| invalid(error.to_string()))?;
     Ok(format!("{:x}", writer.0.finalize()))
@@ -389,9 +390,6 @@ fn collect_with(
     cursor: &[String],
     directory_observed: &mut impl FnMut(&Path),
 ) -> io::Result<Batch> {
-    for path in allowed {
-        relative(path, std::slice::from_ref(path))?;
-    }
     struct Selection<'a> {
         known: &'a BTreeMap<String, String>,
         cursor: &'a [String],
@@ -432,7 +430,7 @@ fn collect_with(
             .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "worktrees")))
             || !matches!(kind, FileType::Directory | FileType::RegularFile)
             || (kind == FileType::RegularFile
-                && (meta.st_size < 0 || meta.st_size as u64 > FILE_LIMIT))
+                && !u64::try_from(meta.st_size).is_ok_and(|size| size <= FILE_LIMIT))
         {
             batch.omitted.push(name);
         } else if kind == FileType::Directory {
@@ -537,6 +535,9 @@ fn collect_with(
             return Err(invalid("evidence inventory exceeds its bound"));
         }
         Ok(())
+    }
+    for path in allowed {
+        relative(path, std::slice::from_ref(path))?;
     }
     let mut batch = Batch::default();
     let root = open_directory(root)?;
@@ -832,12 +833,12 @@ impl std::fmt::Display for CheckoutTraversal {
     }
 }
 
-impl std::error::Error for CheckoutTraversal {}
+impl Error for CheckoutTraversal {}
 
 fn blocked_traversal(error: &io::Error) -> bool {
     error
         .get_ref()
-        .is_some_and(|cause| cause.is::<CheckoutTraversal>())
+        .is_some_and(<dyn Error + Send + Sync + 'static>::is::<CheckoutTraversal>)
         || matches!(error.raw_os_error(), Some(code) if code == rustix::io::Errno::NOTDIR.raw_os_error() || code == rustix::io::Errno::LOOP.raw_os_error())
 }
 
@@ -940,8 +941,7 @@ fn receiver_hash_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Receive
         Err(error) => return Err(error.into()),
     };
     if FileType::from_raw_mode(meta.st_mode) != FileType::RegularFile
-        || meta.st_size < 0
-        || meta.st_size as u64 > FILE_LIMIT
+        || !u64::try_from(meta.st_size).is_ok_and(|size| size <= FILE_LIMIT)
     {
         return Ok(Receiver::Foreign);
     }
@@ -1236,11 +1236,11 @@ fn apply_locked_with(
             receipt.conflicts.push(item.path.clone());
             continue;
         }
-        if !pinned.matches(&item.sha256) {
-            write_with(&parent, name, &item.bytes, &item.sha256, sync)?;
-        } else {
+        if pinned.matches(&item.sha256) {
             // Byte equality after a failed rename fsync is not durability.
             sync(&parent)?;
+        } else {
+            write_with(&parent, name, &item.bytes, &item.sha256, sync)?;
         }
         receipt
             .accepted
@@ -1443,10 +1443,10 @@ mod tests {
         fs::write(source.path().join("evidence/a"), b"new").unwrap();
         let transition = collect(source.path(), &allowed, &known).unwrap();
         let mut fail_after_retirement = |parent: &File| {
-            if !target.path().join("evidence/a").exists() {
-                Err(io::Error::other("injected post-rmdir fsync failure"))
-            } else {
+            if target.path().join("evidence/a").exists() {
                 parent.sync_all()
+            } else {
+                Err(io::Error::other("injected post-rmdir fsync failure"))
             }
         };
         assert!(
