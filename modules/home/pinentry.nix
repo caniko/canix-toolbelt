@@ -33,10 +33,11 @@ in {
       example = [["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=3" "-o" "ServerAliveInterval=10" "-S" "none" "me@laptop" "--" "canix-toolbelt-pinentry"]];
       description = ''
         Commands that reach another host's router, tried in order; `--serve`
-        is appended. A desktop or headless request whose local seat is locked
-        or absent prompts on the first peer whose graphical seat is active and
-        unlocked (an attached Zellij session there, else Qt). The PIN returns
-        over the command's stdout to this host's agent and card.
+        is appended. A desktop or headless request whose local seat is locked,
+        powered off, or absent prompts on the first peer whose graphical seat
+        is active, unlocked, and powered on (Qt on its user manager's display,
+        else an attached Zellij session). The PIN returns over the command's
+        stdout to this host's agent and card.
       '';
     };
     packages = lib.mkOption {

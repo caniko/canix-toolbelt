@@ -210,6 +210,17 @@ fn only_an_active_unlocked_local_graphical_seat_is_in_use() {
 }
 
 #[test]
+fn wlopm_marks_a_seat_absent_only_when_every_reported_output_is_off() {
+    assert_eq!(displays_powered_on("eDP-1 off\n"), Some(false));
+    assert_eq!(displays_powered_on("DP-1 off\nHDMI-A-1 off\n"), Some(false));
+    assert_eq!(displays_powered_on("DP-1 on\n"), Some(true));
+    assert_eq!(displays_powered_on("eDP-1 off\nDP-1 on\n"), Some(true));
+    assert_eq!(displays_powered_on(""), None);
+    assert_eq!(displays_powered_on("\n  \n"), None);
+    assert_eq!(displays_powered_on("off\n"), None);
+}
+
+#[test]
 fn attached_clients_yield_their_focused_terminal_pane() {
     let clients = "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         plugin_2       N/A\n2         terminal_17    nu\n";
     assert_eq!(client_pane(clients), Some(17));

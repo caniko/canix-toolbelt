@@ -92,18 +92,20 @@ Peers apply only to requests that have no origin to prompt on: desktop
 requests and requests with neither a display nor a terminal (marker
 `canix-pinentry-v1:headless`). Zellij and terminal requests keep their origin.
 A seat is in use while the user's logind display session is local, active and
-unlocked; the screen locker must maintain `LockedHint`.
+unlocked, and on Wayland when `wlopm` does not report all outputs powered off;
+the screen locker must maintain `LockedHint`.
 
 | Local seat | Desktop request | Headless request |
 | --- | --- | --- |
 | In use | Local Qt | Local prompt as a peer would show it |
-| Locked, absent or unknown | First peer in use, else local Qt | First peer in use, else terminal |
+| Locked, display off, absent or unknown | First peer in use, else local Qt | First peer in use, else terminal |
 
-A serving peer with an attached Zellij client opens the floating PIN pane next
-to that client's focused pane; otherwise it shows Qt on its user manager's
-display. A peer that is unreachable or locked declines before sending its
-Assuan `OK` greeting, so the next peer receives an untouched request. Any other
-first line, such as a login banner, also declines.
+A serving peer shows Qt on its user manager's display so the dialog surfaces
+over desktop applications; when the user manager has no graphical display, it
+falls back to a floating PIN pane next to an attached Zellij client's focused
+pane. A peer that is unreachable, locked or powered off declines before sending
+its Assuan `OK` greeting, so the next peer receives an untouched request. Any
+other first line, such as a login banner, also declines.
 Zellij does not say where a client is attached from, so a client attached to
 the peer over SSH from elsewhere also receives the pane.
 A peer that sends no greeting within 20 seconds is stopped and skipped the
