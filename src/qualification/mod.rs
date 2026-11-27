@@ -66,7 +66,7 @@ pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
 pub fn sha256_file(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
-    let mut buffer = [0; 65536];
+    let mut buffer = vec![0; 65_536];
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
@@ -79,18 +79,18 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
 
 /// Stable pretty JSON bytes, with two-space indentation and a final newline.
 pub fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(invalid_json)?;
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| invalid_json(&error))?;
     bytes.push(b'\n');
     Ok(bytes)
 }
 
-pub(crate) fn invalid_json(error: serde_json::Error) -> io::Error {
+pub(crate) fn invalid_json(error: &serde_json::Error) -> io::Error {
     invalid(error.to_string())
 }
 
 /// Load a typed JSON document without interpreting any embedded commands.
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
-    serde_json::from_reader(File::open(path)?).map_err(invalid_json)
+    serde_json::from_reader(File::open(path)?).map_err(|error| invalid_json(&error))
 }
 
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
@@ -158,7 +158,7 @@ fn collect(root: &Path, path: &Path, files: &mut BTreeMap<String, SourceFile>) -
         }
         return Ok(());
     }
-    if !resolved.is_file() && !(metadata.file_type().is_symlink() && resolved.is_dir()) {
+    if !(resolved.is_file() || metadata.file_type().is_symlink() && resolved.is_dir()) {
         return Err(invalid(format!(
             "not a regular source file: {}",
             path.display()

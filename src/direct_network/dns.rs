@@ -261,7 +261,7 @@ fn listener_inode(
         // in either family too. Reject aliases before filtering exact listeners
         // or MainPID ownership; established TCP connections are not listeners.
         let normalized_ip = match local.0 {
-            IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(local.0),
+            IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(local.0, IpAddr::V4),
             IpAddr::V4(_) => local.0,
         };
         if local.1 == PORT
@@ -407,6 +407,7 @@ pub(super) fn observe(policy: &Policy, cgroups: &BTreeMap<String, u64>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::io::Write;
     use std::os::unix::fs::symlink;
 
@@ -429,11 +430,18 @@ mod tests {
     fn row_at(address: IpAddr, udp: bool, inode: u64) -> String {
         let v6 = address.is_ipv6();
         let ip = match address {
-            IpAddr::V6(address) => address
-                .octets()
-                .chunks(4)
-                .map(|s| format!("{:08X}", u32::from_ne_bytes(s.try_into().unwrap())))
-                .collect::<String>(),
+            IpAddr::V6(address) => {
+                let mut text = String::with_capacity(32);
+                for chunk in address.octets().chunks(4) {
+                    write!(
+                        text,
+                        "{:08X}",
+                        u32::from_ne_bytes(chunk.try_into().unwrap())
+                    )
+                    .unwrap();
+                }
+                text
+            }
             IpAddr::V4(address) => format!("{:08X}", u32::from_ne_bytes(address.octets())),
         };
         format!(
@@ -490,6 +498,12 @@ mod tests {
 
     #[test]
     fn socket_stream_bounds_rows_and_rejects_errors_after_a_valid_listener() {
+        struct FailedRead;
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("lost socket table evidence"))
+            }
+        }
         let owned = BTreeSet::from([123]);
         let valid = row(false, true, 123);
         for capacity in [1, 7, 8192] {
@@ -502,16 +516,10 @@ mod tests {
         let unrelated = row(false, true, 999).replace(":14EA", ":BEEF");
         let oversized = valid.clone()
             + unrelated.lines().nth(1).unwrap()
-            + &" ".repeat(SOCKET_ROW_LIMIT as usize)
+            + &" ".repeat(usize::try_from(SOCKET_ROW_LIMIT).unwrap())
             + "\n";
         assert!(listener_inode(&oversized, false, true, &owned).is_err());
 
-        struct FailedRead;
-        impl Read for FailedRead {
-            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("lost socket table evidence"))
-            }
-        }
         let reader = BufReader::new(valid.as_bytes().chain(FailedRead));
         assert!(super::listener_inode(reader, false, true, &owned).is_err());
     }
@@ -595,7 +603,7 @@ mod tests {
                        enrolled: &BTreeMap<String, u64>,
                        proc: &Path,
                        cgroups: &Path| {
-            super::capture(properties, policy, enrolled, proc, cgroups, 1001)
+            capture(properties, policy, enrolled, proc, cgroups, 1001)
         };
         let credentials = "Uid:\t1001\t1001\t1001\t1001\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\n";
         fs::write(proc.join("42/status"), credentials).unwrap();
@@ -645,7 +653,7 @@ mod tests {
             let noise = noise.lines().nth(1).unwrap().to_owned() + "\n";
             let mut file = std::io::BufWriter::new(fs::File::create(&path).unwrap());
             file.write_all(b"header\n").unwrap();
-            for _ in 0..(8 * 1024 * 1024 / noise.len() + 1) {
+            for _ in 0..=(8 * 1024 * 1024 / noise.len()) {
                 file.write_all(noise.as_bytes()).unwrap();
             }
             // Put the required listener at EOF, after more than 8 MiB of peers.

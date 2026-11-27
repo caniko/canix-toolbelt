@@ -30,7 +30,7 @@ pub struct CommonArgs {
     /// PR URL; otherwise resolve exactly one PR for the current GitHub branch
     #[arg(long)]
     pub pr: Option<String>,
-    /// Explicit consumer-owned JSON/Pkl policy (or CANIX_REVIEW_POLICY)
+    /// Explicit consumer-owned JSON/Pkl policy (or `CANIX_REVIEW_POLICY`)
     #[arg(long)]
     pub policy: Option<PathBuf>,
     /// Durable user-owned state directory
@@ -98,24 +98,23 @@ pub fn github_from_environment() -> Result<GitHub, Error> {
     let token = std::env::var("GH_TOKEN")
         .or_else(|_| std::env::var("GITHUB_TOKEN"))
         .ok();
-    let token = match token {
-        Some(token) => token,
-        None => {
-            let output = Command::new("gh").args(["auth", "token", "--hostname", "github.com"]).output()
-                .map_err(|_| Error("GitHub authentication missing: provision GH_TOKEN/GITHUB_TOKEN or gh auth login".into()))?;
-            if !output.status.success() {
-                return Err(Error(
-                    "GitHub authentication missing: run gh auth login".into(),
-                ));
-            }
-            let mut bytes = zeroize::Zeroizing::new(output.stdout);
-            let token = std::str::from_utf8(&bytes)
-                .map_err(|_| Error("GitHub credential is not UTF-8".into()))?
-                .trim()
-                .to_owned();
-            bytes.clear();
-            token
+    let token = if let Some(token) = token {
+        token
+    } else {
+        let output = Command::new("gh").args(["auth", "token", "--hostname", "github.com"]).output()
+            .map_err(|_| Error("GitHub authentication missing: provision GH_TOKEN/GITHUB_TOKEN or gh auth login".into()))?;
+        if !output.status.success() {
+            return Err(Error(
+                "GitHub authentication missing: run gh auth login".into(),
+            ));
         }
+        let mut bytes = zeroize::Zeroizing::new(output.stdout);
+        let token = std::str::from_utf8(&bytes)
+            .map_err(|_| Error("GitHub credential is not UTF-8".into()))?
+            .trim()
+            .to_owned();
+        bytes.clear();
+        token
     };
     GitHub::new(token)
 }
@@ -208,8 +207,12 @@ impl Forge for ReviewOnly<'_> {
 }
 
 /// Execute the routine flow. Returns structured evidence without merging.
-pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result<Outcome, Error> {
-    let policy = policy_from_environment(args.policy.clone())?;
+pub fn ensure(
+    mut args: CommonArgs,
+    allow_submit: bool,
+    review_only: bool,
+) -> Result<Outcome, Error> {
+    let policy = policy_from_environment(args.policy.take())?;
     let mut github = github_from_environment()?.with_deadline(Duration::from_secs(
         if args.timeout_seconds == 0 {
             60
@@ -218,7 +221,7 @@ pub fn ensure(args: CommonArgs, allow_submit: bool, review_only: bool) -> Result
         },
     ));
     let pr = resolve_pr(&args, &github)?;
-    let path = state_dir(args.state_dir.clone())?;
+    let path = state_dir(args.state_dir)?;
     let mut provider = github_provider(github.clone(), &policy)?;
     if let Some(expected) = &args.expected_head {
         if &github.candidate(&pr)?.head != expected {

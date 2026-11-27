@@ -4,6 +4,7 @@ use canix_toolbelt::operator::{OperatorConfig, Outcome, ServiceManager, Stage, S
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    os::unix::fs::PermissionsExt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,6 +12,10 @@ use std::{
 };
 
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The test mock toggles independent service failure modes"
+)]
 struct Services {
     calls: Vec<String>,
     failures: BTreeMap<String, usize>,
@@ -87,7 +92,7 @@ impl ServiceManager for Services {
         Ok(StageResult {
             success,
             result: if success { "success" } else { "exit-code" }.into(),
-            exit_status: if success { 0 } else { 1 },
+            exit_status: i32::from(!success),
         })
     }
 }
@@ -315,7 +320,6 @@ fn terminal_leftover_requests_do_not_create_another_run() {
         std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
         // Metadata maintenance is not a new request (ctime is deliberately
         // excluded from the persisted identity).
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&config.request_path, std::fs::Permissions::from_mode(0o600))
             .unwrap();
         let mut resumed = Services::default();

@@ -1,7 +1,10 @@
 //! Coverage applicability over sealed receipts. Provider custody is separate:
 //! callers obtain the expected report/receipt hashes through their trusted forge
 //! observer, never from the bundle being verified.
-use super::*;
+use super::{
+    ArtifactIndex, BTreeMap, Composition, Deserialize, Path, Serialize, invalid, io, read_json,
+    sha256_file, verify_seal,
+};
 use std::collections::BTreeSet;
 
 /// Hosted evidence cannot describe live production acceptance.
@@ -128,13 +131,13 @@ pub fn verify_coverage(
     required_receipts: &ArtifactIndex,
     report_sha256: &str,
 ) -> io::Result<CoverageVerification> {
+    const REPORT: &str = "artifacts/coverage.json";
     if expected.schema_version != 1 || expected.obligations.is_empty() {
         return Err(invalid(
             "coverage requires version 1 and nonempty obligations",
         ));
     }
     let seal = verify_seal(directory, &expected.composition, required_receipts)?;
-    const REPORT: &str = "artifacts/coverage.json";
     if seal.artifacts.get(REPORT).map(String::as_str) != Some(report_sha256)
         || sha256_file(&directory.join(REPORT))? != report_sha256
     {

@@ -121,10 +121,10 @@ fn head_branch(dir: &Path) -> Option<String> {
 
 /// Inspect one fork checkout.
 pub fn inspect(dir: &Path, fetch: bool) -> ForkStatus {
-    let name = dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| dir.display().to_string());
+    let name = dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     if !dir.join(".git").exists() {
         return ForkStatus::problem(&name, "not a Git checkout");
     }
@@ -198,7 +198,7 @@ fn fork_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
         std::fs::read_dir(root).map_err(|error| format!("{}: {error}", root.display()))?;
     let mut directories = entries
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .map(|entry| entry.path())
         .collect::<Vec<PathBuf>>();
     directories.sort();
@@ -275,7 +275,7 @@ pub fn update(dir: &Path) -> ForkUpdate {
         Ok(false) => return skip("uncommitted changes".to_owned()),
         Err(error) => return skip(error),
     }
-    let Some(reference) = status.upstream_ref.clone() else {
+    let Some(reference) = status.upstream_ref else {
         return skip("no upstream default branch".to_owned());
     };
     match git(dir, &["merge", "--ff-only", "--quiet", &reference]) {

@@ -13,7 +13,7 @@ fn standalone_cli_loads_manifest_without_external_programs() {
         .arg(&path)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{:?}", output);
+    assert!(output.status.success(), "{output:?}");
     let manifest: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(manifest["endpoints"]["api"]["port"], 8032);
     assert_eq!(

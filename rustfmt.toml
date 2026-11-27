@@ -1,0 +1,2 @@
+# Match treefmt's Rust style without changing the crate's language edition.
+style_edition = "2024"

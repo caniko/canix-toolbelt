@@ -112,8 +112,8 @@ impl BrowserGpuGuardCmd {
             let started = Instant::now();
             let host = HostSample::read(procfs);
             let pressure = sustained(&mut stage2, host.breach(), self.sustained_samples);
-            let procs = processes(procfs, uid)?;
-            let groups = self.sample(procfs, &procs, pressure, uid);
+            let inventory = processes(procfs, uid)?;
+            let groups = self.sample(procfs, &inventory, pressure, uid);
 
             cooldown.retain(|_, last: &mut Instant| {
                 last.elapsed() < Duration::from_secs(self.cooldown_secs)
@@ -178,13 +178,16 @@ impl BrowserGpuGuardCmd {
     fn sample(
         &self,
         procfs: &Path,
-        procs: &BTreeMap<i32, Proc>,
+        inventory: &BTreeMap<i32, Proc>,
         pressure: bool,
         uid: u32,
     ) -> BTreeMap<Target, Group> {
         let mut groups = BTreeMap::<_, Group>::new();
         let mut isolated = BTreeMap::new();
-        for process in procs.values().filter(|p| p.tracked(procs.get(&p.parent))) {
+        for process in inventory
+            .values()
+            .filter(|p| p.tracked(inventory.get(&p.parent)))
+        {
             let dir = procfs.join(process.id.pid.to_string()).join("fd");
             let total = fs::read_dir(&dir)
                 .ok()
@@ -196,14 +199,16 @@ impl BrowserGpuGuardCmd {
             let isolated = *isolated.entry(process.cgroup.as_str()).or_insert_with(|| {
                 user_unit(&process.cgroup, uid).is_some()
                     && exclusive_unit(Path::new(CGROUPFS), &process.cgroup, |pid| {
-                        procs.get(&pid).is_some_and(|member| {
+                        inventory.get(&pid).is_some_and(|member| {
                             member.cgroup == process.cgroup
-                                && member.tracked(procs.get(&member.parent))
+                                && member.tracked(inventory.get(&member.parent))
                         })
                     })
                     .is_some()
             });
-            let group = groups.entry(process.target(procs, isolated)).or_default();
+            let group = groups
+                .entry(process.target(inventory, isolated))
+                .or_default();
             group.members.push(process.id);
             group.total += total.unwrap_or(0);
             group.dmabuf += dmabuf.unwrap_or(0);
@@ -430,6 +435,10 @@ fn leaf_unit(cgroup: &str) -> Option<&str> {
     .then_some(unit)
 }
 
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "systemd unit type suffixes are case-sensitive, not file extensions"
+)]
 fn user_unit(cgroup: &str, uid: u32) -> Option<&str> {
     let rest = cgroup.strip_prefix(&format!("/user.slice/user-{uid}.slice/user@{uid}.service/"))?;
     let unit = leaf_unit(rest)?;
@@ -471,7 +480,7 @@ impl Proc {
             return None;
         }
         let parent = stat.next()?.parse().ok()?;
-        let start = stat.nth(17)?.parse().ok()?;
+        let start_ticks = stat.nth(17)?.parse().ok()?;
         let status = read("status")?;
         let mut ids = field(&status, "Uid")?.split_whitespace();
         if ids.next()?.parse::<u32>().ok()? != uid || ids.next()?.parse::<u32>().ok()? != uid {
@@ -485,7 +494,10 @@ impl Proc {
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
         Some(Self {
-            id: ProcId { pid, start },
+            id: ProcId {
+                pid,
+                start: start_ticks,
+            },
             parent,
             comm,
             exe,
@@ -498,7 +510,7 @@ impl Proc {
 
     fn excluded(&self) -> bool {
         self.id.pid <= 1
-            || self.id.pid as u32 == std::process::id()
+            || u32::try_from(self.id.pid) == Ok(std::process::id())
             || [&self.comm, &self.exe, &self.cgroup]
                 .iter()
                 .any(|name| protected_name(name))
@@ -666,7 +678,8 @@ fn wait(pins: &[Pin]) {
         .collect();
     let started = Instant::now();
     while !pending.is_empty() && started.elapsed() < GRACE {
-        let remaining_ms = GRACE.saturating_sub(started.elapsed()).as_millis() as u16;
+        let remaining_ms =
+            u16::try_from(GRACE.saturating_sub(started.elapsed()).as_millis()).unwrap_or(u16::MAX);
         match poll(&mut pending, remaining_ms) {
             Ok(_) => pending.retain(|fd| fd.revents().is_some_and(|events| events.is_empty())),
             Err(nix::errno::Errno::EINTR) => (),
@@ -698,7 +711,7 @@ mod tests {
             Self {
                 id: ProcId {
                     pid,
-                    start: pid as u64,
+                    start: u64::try_from(pid).unwrap(),
                 },
                 parent,
                 comm: comm.into(),
@@ -716,7 +729,7 @@ mod tests {
              SwapTotal: 999 kB\nSwapFree: 201 kB\nShmem: 301 kB\n",
         )
         .unwrap();
-        assert_eq!((mem.total, mem.available, mem.shmem), (8192000, 101, 301));
+        assert_eq!((mem.total, mem.available, mem.shmem), (8_192_000, 101, 301));
         assert_eq!((mem.swap_total, mem.swap_free), (999, 201));
         assert!(Meminfo::parse("MemTotal: 1024 kB\n").is_none());
         assert_eq!(
@@ -880,7 +893,7 @@ mod tests {
             group(10, 11, 1),
         ];
         let winner = candidates.iter().max_by_key(|group| group.risk()).unwrap();
-        assert!(std::ptr::eq(winner, &candidates[3]));
+        assert!(std::ptr::eq(winner, &raw const candidates[3]));
     }
 
     #[test]
@@ -903,7 +916,7 @@ mod tests {
     fn stage2_reads_below_prefilter_and_pid_fallback_groups_only_tracked_members() {
         let procfs = tempfile::tempdir().unwrap();
         let cgroup = "/session-5.scope";
-        let procs = BTreeMap::from([
+        let inventory = BTreeMap::from([
             (50, Proc::fixture(50, 1, "floorp", cgroup)),
             (51, Proc::fixture(51, 50, "RDD Process", cgroup)),
             (52, Proc::fixture(52, 50, "obs", cgroup)),
@@ -915,16 +928,19 @@ mod tests {
 
         let mut args = defaults();
         args.dmabuf_limit = 1;
-        let normal = args.sample(procfs.path(), &procs, false, 1000);
-        let pressure = args.sample(procfs.path(), &procs, true, 1000);
-        let target = procs[&50].target(&procs, false);
+        let normal = args.sample(procfs.path(), &inventory, false, 1000);
+        let pressure = args.sample(procfs.path(), &inventory, true, 1000);
+        let target = inventory[&50].target(&inventory, false);
         assert_eq!(normal.len(), 1);
         assert_eq!(normal[&target].total, 2);
         assert_eq!(normal[&target].dmabuf, 0);
         assert!(!normal[&target].fd_breach);
         assert_eq!(pressure[&target].dmabuf, 1);
         assert!(pressure[&target].fd_breach);
-        assert_eq!(pressure[&target].members, [procs[&50].id, procs[&51].id]);
+        assert_eq!(
+            pressure[&target].members,
+            [inventory[&50].id, inventory[&51].id]
+        );
     }
 
     #[test]

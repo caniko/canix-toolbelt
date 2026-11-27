@@ -26,6 +26,10 @@ impl Drop for FixtureFence {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The mock independently injects transport and persistence failures"
+)]
 struct Fixture {
     hosts: BTreeMap<String, Value>,
     inbox: BTreeMap<String, Vec<Value>>,
@@ -170,7 +174,7 @@ impl Adapter for Fixture {
                     self.mirror_inbox = true;
                 } else {
                     self.inbox
-                        .entry(id.clone())
+                        .entry(id)
                         .or_default()
                         .push(json!({"id":"msg_queued_late","type":"user"}));
                 }
@@ -939,7 +943,7 @@ fn malformed_retained_compactions_fail_before_journal_publication_or_dispatch() 
 fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.ambiguous = true;
-    assert!(
+    assert_eq!(
         cycle(
             &manifest,
             &policy,
@@ -947,13 +951,13 @@ fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate(
             &mut state,
             &mut fixture,
             "2026-10-08T00:00:00Z",
-            1791417600,
+            1_791_417_600,
             true
         )
         .unwrap()
         .errors
-        .len()
-            == 1
+        .len(),
+        1
     );
     let pending = state["packets"]["1"]["pending"].clone();
     assert!(pending["body"]["model"].is_null());
@@ -965,7 +969,7 @@ fn lost_response_then_inbox_receipt_preserves_exact_admission_without_duplicate(
         &mut state,
         &mut fixture,
         "2026-10-08T00:00:01Z",
-        1791417601,
+        1_791_417_601,
         true,
     )
     .unwrap();
@@ -989,7 +993,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
         &mut state,
         &mut fixture,
         "2026-10-08T00:00:00Z",
-        1791417600,
+        1_791_417_600,
         true,
     )
     .unwrap();
@@ -998,7 +1002,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
     let body = state["packets"]["1"]["pending"]["body"].clone();
     fixture.recent.insert(
         0,
-        json!({"id":"intervening-idle","type":"idle","time":{"created":1791419100000i64}}),
+        json!({"id":"intervening-idle","type":"idle","time":{"created":1_791_419_100_000i64}}),
     );
     fixture.reject_prompt = false;
     cycle(
@@ -1008,7 +1012,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
         &mut state,
         &mut fixture,
         "2026-10-08T01:00:00Z",
-        1791421200,
+        1_791_421_200,
         true,
     )
     .unwrap();
@@ -1022,7 +1026,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
         &mut state,
         &mut fixture,
         "2026-10-08T01:00:01Z",
-        1791421201,
+        1_791_421_201,
         true,
     )
     .unwrap();
@@ -1034,7 +1038,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
         "stale idle must not trigger another prompt"
     );
     fixture.recent[0] =
-        json!({"id":"after-delivery-idle","type":"idle","time":{"created":1791421202000i64}});
+        json!({"id":"after-delivery-idle","type":"idle","time":{"created":1_791_421_202_000i64}});
     cycle(
         &manifest,
         &policy,
@@ -1042,7 +1046,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
         &mut state,
         &mut fixture,
         "2026-10-08T01:06:00Z",
-        1791421560,
+        1_791_421_560,
         true,
     )
     .unwrap();
@@ -1281,7 +1285,7 @@ fn changed_model_or_context_ceiling_cannot_admit_work() {
     );
     fixture.changed_model = false;
     fixture.recent = vec![
-        json!({"id":"msg_physical","type":"assistant","time":{"created":1000},"tokens":{"input":299999,"cache":{"read":1,"write":0}}}),
+        json!({"id":"msg_physical","type":"assistant","time":{"created":1000},"tokens":{"input":299_999,"cache":{"read":1,"write":0}}}),
     ];
     assert!(
         cycle(
@@ -1335,7 +1339,7 @@ fn cache_write_only_contexts_compact_or_refuse_at_the_hard_ceiling() {
 fn context_compaction_uses_one_durable_id_before_continuation() {
     let (manifest, policy, expected, mut state, mut fixture) = setup();
     fixture.recent = vec![
-        json!({"id":"msg_physical","type":"assistant","time":{"created":1000},"tokens":{"input":180000,"cache":{"read":0,"write":0}}}),
+        json!({"id":"msg_physical","type":"assistant","time":{"created":1000},"tokens":{"input":180_000,"cache":{"read":0,"write":0}}}),
     ];
     cycle(
         &manifest,
@@ -1366,7 +1370,7 @@ fn context_compaction_uses_one_durable_id_before_continuation() {
     fixture.inbox.clear();
     let completed =
         json!({"id":id,"type":"compaction","status":"completed","time":{"created":2000}});
-    fixture.messages.insert(id.clone(), completed.clone());
+    fixture.messages.insert(id, completed.clone());
     fixture.recent.insert(0, completed);
     cycle(
         &manifest,

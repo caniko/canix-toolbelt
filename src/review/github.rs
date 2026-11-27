@@ -1288,11 +1288,15 @@ mod tests {
         checks: Vec<Value>,
         statuses: Vec<Value>,
     ) -> (GitHub, thread::JoinHandle<()>) {
+        let mut protection = json!({"required_status_checks":{}});
+        protection["required_status_checks"]["checks"] = Value::Array(required);
+        let mut runs = json!({});
+        runs["check_runs"] = Value::Array(checks);
         server(vec![
-            (200, json!({"required_status_checks":{"checks":required}})),
-            (200, json!({"check_runs":checks})),
+            (200, protection),
+            (200, runs),
             (200, json!({"merge_commit_sha":null})),
-            (200, json!(statuses)),
+            (200, Value::Array(statuses)),
         ])
     }
 
@@ -1477,7 +1481,9 @@ mod tests {
         json!({"id":12, "body":format!("{REQUEST_MARKER}{} -->", serde_json::to_string(&intent()).unwrap()), "html_url":"https://github.com/example/project/pull/12#issuecomment-12", "created_at":"2026-10-03T12:00:00Z", "user":{"login":"writer"}})
     }
     fn parent(head: String, submitted: &str) -> Value {
-        json!({"id":42, "commit_id":head, "state":"COMMENTED", "body":"", "submitted_at":submitted, "html_url":"https://github.com/example/project/pull/12#pullrequestreview-42", "user":{"id":165735046, "type":"Bot"}})
+        let mut review = json!({"id":42, "state":"COMMENTED", "body":"", "submitted_at":submitted, "html_url":"https://github.com/example/project/pull/12#pullrequestreview-42", "user":{"id":165_735_046, "type":"Bot"}});
+        review["commit_id"] = Value::String(head);
+        review
     }
 
     #[test]
@@ -1547,7 +1553,7 @@ mod tests {
 
     #[test]
     fn provider_issue_comment_feedback_is_not_silently_omitted() {
-        let summary = json!({"id":19,"body":"Unresolved race found in the review summary", "created_at":"2026-10-03T11:59:00Z", "updated_at":"2026-10-03T12:01:00Z", "user":{"id":165735046}, "html_url":"https://github.com/example/project/pull/12#issuecomment-19"});
+        let summary = json!({"id":19,"body":"Unresolved race found in the review summary", "created_at":"2026-10-03T11:59:00Z", "updated_at":"2026-10-03T12:01:00Z", "user":{"id":165_735_046}, "html_url":"https://github.com/example/project/pull/12#issuecomment-19"});
         let (github, handle) = server(vec![
             (200, json!([parent("a".repeat(40), "2026-10-03T12:01:00Z")])),
             (200, json!([marker_comment(), summary])),
@@ -1583,7 +1589,7 @@ mod tests {
             (200, json!({"permission":"write"})),
             (
                 200,
-                json!([{"id":17,"body":"Check this race","path":"src/lib.rs","line":null,"original_line":12,"commit_id":"c".repeat(40),"html_url":"https://github.com/example/project/pull/12#discussion_r17","user":{"id":165735046}}]),
+                json!([{"id":17,"body":"Check this race","path":"src/lib.rs","line":null,"original_line":12,"commit_id":"c".repeat(40),"html_url":"https://github.com/example/project/pull/12#discussion_r17","user":{"id":165_735_046}}]),
             ),
         ]);
         let review = GreptileGitHub::new(github)

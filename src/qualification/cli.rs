@@ -1,6 +1,11 @@
 //! Shared command arguments and value-returning dispatch; frontends own output and exit policy.
 
-use super::*;
+use super::{
+    Composition, InventorySpec, PathBuf, RunStatus, Serialize, execute, export_source, fs,
+    git_inventory_spec, graph, invalid_json, inventory, io, read_json, seal, sha256_file,
+    verify_coverage, verify_index, verify_legacy_archive, verify_legacy_run, verify_run,
+    verify_seal, verify_source_archive,
+};
 use clap::Subcommand;
 use std::sync::atomic::AtomicBool;
 
@@ -11,7 +16,7 @@ pub enum QualificationCommand {
     VerifyCoverage {
         /// Portable seal directory containing artifacts/coverage.json
         directory: PathBuf,
-        /// Independently selected CoverageRequirements JSON
+        /// Independently selected `CoverageRequirements` JSON
         #[arg(long)]
         expected: PathBuf,
         /// Exact required gate-to-receipt hash index from provider custody
@@ -38,7 +43,7 @@ pub enum QualificationCommand {
     },
     /// Execute an explicit argument vector with source/input-bound logs and a finite deadline
     Run {
-        /// RunRequest JSON
+        /// `RunRequest` JSON
         #[arg(long)]
         request: PathBuf,
         /// New evidence directory (parent must exist)
@@ -63,7 +68,7 @@ pub enum QualificationCommand {
         /// Artifact root
         #[arg(long)]
         root: PathBuf,
-        /// ArtifactIndex JSON
+        /// `ArtifactIndex` JSON
         #[arg(long)]
         index: PathBuf,
     },
@@ -86,7 +91,7 @@ pub enum QualificationCommand {
     },
     /// Export deterministic selected source bytes to a new tar archive
     ExportSource {
-        /// InventorySpec JSON
+        /// `InventorySpec` JSON
         #[arg(long)]
         request: PathBuf,
         /// New tar archive
@@ -111,7 +116,7 @@ pub enum QualificationCommand {
     },
     /// Verify all required gates and seal a new portable handoff
     Seal {
-        /// SealRequest JSON
+        /// `SealRequest` JSON
         #[arg(long)]
         request: PathBuf,
         /// New handoff directory
@@ -141,7 +146,7 @@ pub struct CommandResult {
 
 fn result(value: &impl Serialize, passed: bool) -> io::Result<CommandResult> {
     Ok(CommandResult {
-        value: serde_json::to_value(value).map_err(invalid_json)?,
+        value: serde_json::to_value(value).map_err(|error| invalid_json(&error))?,
         passed,
     })
 }

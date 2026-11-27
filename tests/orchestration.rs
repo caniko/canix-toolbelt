@@ -1,7 +1,7 @@
 #![cfg(all(unix, feature = "orchestration"))]
 use canix_toolbelt::orchestration::*;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn manifest() -> Manifest {
     serde_json::from_value(json!({"assignedPRCount":2,"baselineAssignedPRCount":2,
@@ -24,7 +24,14 @@ fn registered_state(manifest: &Manifest, prs: Value) -> Value {
         packet.number.to_string(),
         json!({"sessionID":packet.session_id,"ownerHost":packet.owner_host,"prs":packet.prs}),
     )).collect();
-    json!({"prs":prs,"packets":packets})
+    Value::Object(
+        [
+            ("prs".into(), prs),
+            ("packets".into(), Value::Object(packets)),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 #[test]
@@ -269,8 +276,8 @@ fn finished_rejects_imported_terminal_flags_with_a_retained_waiting_obligation()
     let manifest = manifest();
     let mut state = json!({"prs":{},"packets":{}});
     let active = BTreeMap::from([
-        ("builder".into(), Default::default()),
-        ("mobile".into(), Default::default()),
+        ("builder".into(), BTreeSet::new()),
+        ("mobile".into(), BTreeSet::new()),
     ]);
     for packet in &manifest.packets {
         let number = packet.number.to_string();
@@ -567,9 +574,9 @@ fn ready_for_work_cannot_close_a_terminal_packet_before_its_continuation_is_deli
         let active = BTreeMap::from([("builder".into(), [].into())]);
         assert!(!finished(&manifest, &state, &active, true));
         // Completion independently rejects an imported stale terminal flag.
-        let mut stale = state.clone();
-        stale["packets"]["1"]["terminal"] = json!(true);
-        assert!(!finished(&manifest, &stale, &active, true));
+        let mut imported = state.clone();
+        imported["packets"]["1"]["terminal"] = json!(true);
+        assert!(!finished(&manifest, &imported, &active, true));
         let body = prepare(
             &mut state,
             &manifest.packets[0],
@@ -604,22 +611,22 @@ fn ready_for_work_cannot_close_a_terminal_packet_before_its_continuation_is_deli
 #[test]
 fn idle_recovery_uses_a_delivered_boundary_with_millisecond_precision() {
     let mut ps = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z","deliveredAt":"2026-10-08T01:00:00.900Z","observationVersion":"source"});
-    let idle = json!({"id":"old-idle","time":{"created":1791421200899i64}});
-    assert!(!record_idle_recovery(&mut ps, &idle, 1791421800));
+    let idle = json!({"id":"old-idle","time":{"created":1_791_421_200_899i64}});
+    assert!(!record_idle_recovery(&mut ps, &idle, 1_791_421_800));
     assert!(ps["idleRecovery"].is_null());
-    let idle = json!({"id":"new-idle","time":{"created":1791421200901i64}});
-    assert!(record_idle_recovery(&mut ps, &idle, 1791421800));
-    assert!(!record_idle_recovery(&mut ps, &idle, 1791421801));
+    let idle = json!({"id":"new-idle","time":{"created":1_791_421_200_901i64}});
+    assert!(record_idle_recovery(&mut ps, &idle, 1_791_421_800));
+    assert!(!record_idle_recovery(&mut ps, &idle, 1_791_421_801));
 
     let mut delayed = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z","deliveredSubmissionAttemptAt":"2026-10-08T01:00:00.900Z","deliveredAt":"2026-10-08T01:05:00Z","observationVersion":"source"});
     assert!(
-        record_idle_recovery(&mut delayed, &idle, 1791421800),
+        record_idle_recovery(&mut delayed, &idle, 1_791_421_800),
         "an idle after actual submission remains usable despite delayed receipt reconciliation"
     );
     let mut legacy =
         json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00Z"});
     assert!(
-        !record_idle_recovery(&mut legacy, &idle, 1791421800),
+        !record_idle_recovery(&mut legacy, &idle, 1_791_421_800),
         "preparation alone cannot authorize idle recovery"
     );
 }
@@ -646,7 +653,7 @@ fn old_audit_cannot_absorb_edited_feedback_or_a_new_linked_repair() {
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
-        .unwrap()
+        .unwrap();
     };
     refresh_state(&manifest, &mut state);
     assert_eq!(state["packets"]["1"]["terminal"], true);
@@ -683,21 +690,22 @@ fn fairness_serves_first_current_goal_then_oldest_repeat() {
 #[test]
 fn waiting_followups_and_idle_recovery_are_clock_injected_and_bounded() {
     let mut ps = json!({"version":"v","deliveredVersion":"v","deliveredPreparedAt":"2026-10-08T00:00:00+00:00","deliveredAt":"2026-10-08T00:00:00+00:00","observationVersion":"source","workerStatus":{"eventVersion":"v","status":"waiting","retryAfterSeconds":900}});
-    assert!(!schedule_recheck(&mut ps, &policy(), 1791418000));
-    assert!(schedule_recheck(&mut ps, &policy(), 1791419000));
+    assert!(!schedule_recheck(&mut ps, &policy(), 1_791_418_000));
+    assert!(schedule_recheck(&mut ps, &policy(), 1_791_419_000));
     let before = ps["recheckVersion"].clone();
-    assert!(!schedule_recheck(&mut ps, &policy(), 1791419001));
+    assert!(!schedule_recheck(&mut ps, &policy(), 1_791_419_001));
     assert_eq!(ps["recheckVersion"], before);
-    let mut idle = json!({"id":"idle1","outcome":"succeeded","time":{"created":1791417610000i64}});
-    assert!(!record_idle_recovery(&mut ps, &idle, 1791419000));
+    let mut idle =
+        json!({"id":"idle1","outcome":"succeeded","time":{"created":1_791_417_610_000i64}});
+    assert!(!record_idle_recovery(&mut ps, &idle, 1_791_419_000));
     ps["workerStatus"] = Value::Null;
     for id in ["idle1", "idle2", "idle3"] {
         idle["id"] = json!(id);
-        assert!(record_idle_recovery(&mut ps, &idle, 1791419000));
-        assert!(!record_idle_recovery(&mut ps, &idle, 1791419001));
+        assert!(record_idle_recovery(&mut ps, &idle, 1_791_419_000));
+        assert!(!record_idle_recovery(&mut ps, &idle, 1_791_419_001));
     }
     idle["id"] = json!("idle4");
-    assert!(!record_idle_recovery(&mut ps, &idle, 1791419000));
+    assert!(!record_idle_recovery(&mut ps, &idle, 1_791_419_000));
     assert!(ps["continuationBlocker"].is_object());
 }
 
@@ -942,7 +950,10 @@ fn refresh_retains_scope_across_restart_and_rejects_dropped_owners_or_assignment
 }
 
 fn delivered_state(pr: Value, manifest: &Manifest) -> (Value, Value) {
-    let mut state = registered_state(manifest, json!({"one":pr}));
+    let mut state = registered_state(
+        manifest,
+        Value::Object([("one".into(), pr)].into_iter().collect()),
+    );
     refresh(
         manifest,
         &mut state,
@@ -1446,12 +1457,12 @@ fn stale_nonwaiting_reports_cannot_suppress_a_current_waiting_recheck() {
     .unwrap();
     assert_eq!(state["packets"]["1"]["waitingReportPending"], true);
     for status in ["complete", "ready_for_work", "closed"] {
-        let stale = json!({"schemaVersion":1,"packet":1,"eventVersion":"older","status":status,"nextAction":"obsolete"});
+        let obsolete_report = json!({"schemaVersion":1,"packet":1,"eventVersion":"older","status":status,"nextAction":"obsolete"});
         refresh(
             &manifest,
             &mut state,
             &policy,
-            &BTreeMap::from([(1, stale)]),
+            &BTreeMap::from([(1, obsolete_report)]),
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -1556,7 +1567,7 @@ fn incomplete_producer_evidence_cannot_certify_terminal_or_progress_audits() {
     let active = BTreeMap::from([("builder".into(), [].into()), ("mobile".into(), [].into())]);
     for evidence in [
         BTreeMap::new(),
-        BTreeMap::from([(2, "".into())]),
+        BTreeMap::from([(2, String::new())]),
         BTreeMap::from([(2, "  ".into())]),
     ] {
         let state = fully_audited_state(&manifest, &evidence);
@@ -1972,7 +1983,7 @@ fn legacy_journal_import_cannot_reassign_retained_prs_between_existing_owners() 
     let original = manifest();
     let mut legacy = json!({"prs":{"one":{"url":"one","state":"OPEN"},"two":{"url":"two","state":"OPEN"}},"packets":{"1":{"sessionID":"ses_one","ownerHost":"builder","prs":["one"]},"2":{"sessionID":"ses_two","ownerHost":"mobile","prs":["two"]}}});
     let before = legacy.clone();
-    let mut reassigned = original.clone();
+    let mut reassigned = original;
     reassigned.packets[0].prs = vec!["two".into()];
     reassigned.packets[1].prs = vec!["one".into()];
     assert!(

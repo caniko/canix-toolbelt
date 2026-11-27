@@ -1,6 +1,6 @@
 //! Cargo metadata comparison. Target expressions describe graph edges, not target compilation.
 
-use super::*;
+use super::{BTreeMap, Deserialize, Serialize, invalid, invalid_json, io};
 use std::collections::{BTreeSet, VecDeque};
 
 /// Stable package identity including its distribution source.
@@ -77,7 +77,8 @@ pub struct Delta {
 impl Metadata {
     /// Parse metadata with a complete resolve graph. Missing and ambiguous nodes fail closed.
     pub fn parse(bytes: &[u8]) -> io::Result<Self> {
-        let document: Document = serde_json::from_slice(bytes).map_err(invalid_json)?;
+        let document: Document =
+            serde_json::from_slice(bytes).map_err(|error| invalid_json(&error))?;
         let resolve = document
             .resolve
             .ok_or_else(|| invalid("Cargo metadata has no resolve graph"))?;

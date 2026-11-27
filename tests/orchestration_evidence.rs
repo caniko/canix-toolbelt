@@ -81,7 +81,7 @@ fn tampered_payload_or_unowned_path_cannot_be_applied() {
     let mut tampered = batch.clone();
     tampered.files[0].bytes.push(0);
     assert!(apply(target.path(), &allowed, &tampered).is_err());
-    tampered = batch.clone();
+    tampered = batch;
     tampered.files[0].path = "../escape".into();
     assert!(apply(target.path(), &allowed, &tampered).is_err());
     assert!(!target.path().join("handoff").exists());
@@ -314,7 +314,7 @@ fn overlapping_roots_have_the_same_unique_budget_as_one_root() {
     for index in 0..6 {
         fs::write(
             source.path().join(format!("evidence/reports/{index}")),
-            vec![index as u8; 2 * 1024 * 1024],
+            vec![u8::try_from(index).unwrap(); 2 * 1024 * 1024],
         )
         .unwrap();
     }
@@ -1075,7 +1075,7 @@ fn invalid_retained_batches_reject_before_retry_without_checkpoint_mutation() {
         match invalid {
             "count" => serialized["pending"]["files"] = serde_json::json!(vec![file; 10001]),
             "digest" => {
-                serialized["pending"]["files"][0]["sha256"] = serde_json::json!("0".repeat(64))
+                serialized["pending"]["files"][0]["sha256"] = serde_json::json!("0".repeat(64));
             }
             "path" => serialized["pending"]["files"][0]["path"] = serde_json::json!("../outside"),
             "ancestor" => {

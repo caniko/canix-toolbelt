@@ -83,7 +83,7 @@ fn every_original_method_requires_executed_passing_coverage() {
         q::verify_coverage(&root.path().join("sealed"), &required, &receipts, &hash).unwrap();
     assert_eq!(verified.methods_verified, 174);
     assert_eq!(verified.obligations_verified, 1);
-    let mut missing = required.clone();
+    let mut missing = required;
     missing
         .obligations
         .get_mut("postgres-parity")
@@ -134,7 +134,7 @@ fn coverage_cannot_reselect_its_composition_gates_or_trusted_digest() {
         .inputs
         .insert("consumer-contract".into(), "0".repeat(64));
     assert!(q::verify_coverage(&root.path().join("sealed"), &changed, &receipts, &hash).is_err());
-    let mut empty = required.clone();
+    let mut empty = required;
     empty.obligations.clear();
     assert!(q::verify_coverage(&root.path().join("sealed"), &empty, &receipts, &hash).is_err());
 }

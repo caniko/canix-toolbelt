@@ -358,10 +358,6 @@ fn github_rejects_truncated_history_and_check_nodes() {
 #[test]
 fn forgejo_revalidates_every_published_scheduling_field() {
     for field in ["mergeable", "draft"] {
-        let mut transport = Forge {
-            calls: vec![],
-            inconsistent: false,
-        };
         struct Moving<'a> {
             inner: &'a mut Forge,
             field: &'a str,
@@ -381,6 +377,10 @@ fn forgejo_revalidates_every_published_scheduling_field() {
                 Ok(value)
             }
         }
+        let mut transport = Forge {
+            calls: vec![],
+            inconsistent: false,
+        };
         assert!(
             forgejo(
                 &mut Moving {
@@ -399,10 +399,6 @@ fn forgejo_revalidates_every_published_scheduling_field() {
 
 #[test]
 fn forgejo_rejects_history_without_declared_transport_totals() {
-    let transport = Forge {
-        calls: vec![],
-        inconsistent: false,
-    };
     struct Bare(Forge);
     impl ForgeRest for Bare {
         fn get(&mut self, host: &str, path: &str) -> io::Result<ForgeResponse> {
@@ -411,6 +407,10 @@ fn forgejo_rejects_history_without_declared_transport_totals() {
             Ok(response)
         }
     }
+    let transport = Forge {
+        calls: vec![],
+        inconsistent: false,
+    };
     assert!(
         forgejo(
             &mut Bare(transport),
@@ -1090,7 +1090,7 @@ fn forge_review(review: Value, inline: Value) -> ForgeScript {
         ("repos/owner/repo/pulls/1".into(), forge_pull()),
         (
             "repos/owner/repo/pulls/1/reviews?limit=100&page=1".into(),
-            json!([review]),
+            Value::Array(vec![review]),
         ),
         (
             "repos/owner/repo/issues/1/comments?limit=100&page=1".into(),
@@ -1690,14 +1690,6 @@ fn forgejo_rejects_incomplete_or_moving_declared_history_counts() {
         (101, 100, 100),
         (2001, 2001, 100),
     ] {
-        let mut script = forge_review(forge_review_row(1, 1), json!([forge_inline(10, 1)]));
-        let path = "repos/owner/repo/pulls/1/reviews";
-        script.1.insert(path.into(), total);
-        script.0[1].1 = json!(
-            (0..first_len)
-                .map(|id| forge_review_row(id + 1, 0))
-                .collect::<Vec<_>>()
-        );
         struct MovingCount {
             inner: ForgeScript,
             second_total: u64,
@@ -1713,6 +1705,14 @@ fn forgejo_rejects_incomplete_or_moving_declared_history_counts() {
                 self.inner.get(host, path)
             }
         }
+        let mut script = forge_review(forge_review_row(1, 1), json!([forge_inline(10, 1)]));
+        let path = "repos/owner/repo/pulls/1/reviews";
+        script.1.insert(path.into(), total);
+        script.0[1].1 = json!(
+            (0..first_len)
+                .map(|id| forge_review_row(id + 1, 0))
+                .collect::<Vec<_>>()
+        );
         let mut transport = MovingCount {
             inner: script,
             second_total,

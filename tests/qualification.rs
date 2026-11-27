@@ -2,6 +2,8 @@
 
 use canix_toolbelt::qualification::{self as q, InventorySpec};
 use std::fs;
+#[cfg(unix)]
+use std::{collections::BTreeMap, sync::atomic::AtomicBool};
 use tempfile::tempdir;
 
 #[test]
@@ -84,11 +86,11 @@ fn run_fixture(script: &str, timeout_seconds: u64) -> (tempfile::TempDir, q::Rec
         .into(),
         inputs: [("lock".into(), root.path().join("input"))].into(),
         command: vec!["/bin/sh".into(), "-c".into(), script.into()],
-        environment: Default::default(),
-        tools: Default::default(),
+        environment: BTreeMap::new(),
+        tools: BTreeMap::new(),
         timeout_seconds,
     };
-    let receipt = q::execute(&request, &root.path().join("run"), &Default::default()).unwrap();
+    let receipt = q::execute(&request, &root.path().join("run"), &AtomicBool::new(false)).unwrap();
     (root, receipt)
 }
 
@@ -101,7 +103,7 @@ fn receipt_accepts_only_completed_unchanged_execution_and_verified_logs() {
         q::verify_run(&root.path().join("run"), Some(&receipt.composition)).unwrap(),
         receipt
     );
-    let mut other = receipt.composition.clone();
+    let mut other = receipt.composition;
     other.inputs.insert("lock".into(), "0".repeat(64));
     assert!(q::verify_run(&root.path().join("run"), Some(&other)).is_err());
     fs::write(root.path().join("run/stdout.log"), b"tampered").unwrap();
@@ -128,8 +130,8 @@ fn failure_source_change_input_change_and_timeout_are_never_acceptance() {
 fn cancellation_and_existing_attempt_fail_closed() {
     let (root, receipt) = run_fixture("true", 5);
     let request: q::RunRequest = q::read_json(&root.path().join("run/request.json")).unwrap();
-    assert!(q::execute(&request, &root.path().join("run"), &Default::default()).is_err());
-    let cancel = std::sync::atomic::AtomicBool::new(true);
+    assert!(q::execute(&request, &root.path().join("run"), &AtomicBool::new(false)).is_err());
+    let cancel = AtomicBool::new(true);
     let cancelled = q::execute(&request, &root.path().join("cancelled"), &cancel).unwrap();
     assert_eq!(cancelled.status, q::RunStatus::Cancelled);
     assert_ne!(receipt.status, cancelled.status);
@@ -376,7 +378,7 @@ fn version_one_archives_keep_target_content_hash_semantics() {
 fn seals_require_matching_compositions_and_preserve_the_gate_set() {
     let (root, receipt) = run_fixture("true", 5);
     let request = q::SealRequest {
-        composition: receipt.composition.clone(),
+        composition: receipt.composition,
         gates: [("required".into(), root.path().join("run"))].into(),
         expected_receipts: [(
             "required".into(),
@@ -430,7 +432,7 @@ fn seal_cannot_substitute_a_different_passing_attempt_for_the_selected_gate() {
         composition: receipt.composition,
         gates: [("required".into(), root.path().join("run"))].into(),
         expected_receipts: [("required".into(), "0".repeat(64))].into(),
-        artifacts: Default::default(),
+        artifacts: BTreeMap::new(),
     };
     assert!(q::seal(&request, &root.path().join("wrong-attempt")).is_err());
 }

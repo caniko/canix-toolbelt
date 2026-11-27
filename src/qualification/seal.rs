@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    ArtifactIndex, BTreeMap, Component, Composition, Deserialize, Digest, File, Inventory,
+    InventorySpec, Path, PathBuf, Read, Serialize, Sha256, SourceFile, contained, fs, invalid,
+    inventory, io, path_text, read_json, relative, sha256_file, verify_index, verify_run,
+    write_json,
+};
 
 /// Required gates and named artifacts for a portable qualification handoff.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -309,7 +314,7 @@ fn archive_inventory(archive: &Path, version: u32) -> io::Result<BTreeMap<String
             }
             Some(link)
         } else if kind.is_file() {
-            let mut buffer = [0; 65536];
+            let mut buffer = vec![0; 65_536];
             loop {
                 let n = entry.read(&mut buffer)?;
                 if n == 0 {

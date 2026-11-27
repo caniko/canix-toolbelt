@@ -187,7 +187,7 @@ impl Manifest {
         let mut coverage = Coverage::default();
         for packet in &self.packets {
             for url in &packet.prs {
-                let status = state["prs"][url]["state"].as_str().unwrap_or("UNKNOWN");
+                let label = state["prs"][url]["state"].as_str().unwrap_or("UNKNOWN");
                 let (count, states) = if packet.linked_repairs.contains(url) {
                     (&mut coverage.repair_count, &mut coverage.repair_states)
                 } else if packet.linked_releases.contains(url) {
@@ -196,7 +196,7 @@ impl Manifest {
                     (&mut coverage.baseline_count, &mut coverage.baseline_states)
                 };
                 *count += 1;
-                *states.entry(status.to_owned()).or_default() += 1;
+                *states.entry(label.to_owned()).or_default() += 1;
             }
         }
         Ok(coverage)
@@ -290,15 +290,15 @@ pub fn digest(value: &Value) -> String {
                 let scientific = format!("{number:e}");
                 let (mantissa, exponent) = scientific.split_once('e').expect("scientific number");
                 let exponent: i32 = exponent.parse().expect("formatted exponent");
-                if !(-4..16).contains(&exponent) {
-                    format!("{mantissa}e{exponent:+03}")
-                } else {
+                if (-4..16).contains(&exponent) {
                     let text = number.to_string();
                     if text.contains('.') {
                         text
                     } else {
                         format!("{text}.0")
                     }
+                } else {
+                    format!("{mantissa}e{exponent:+03}")
                 }
             }
             _ => value.to_string(),
@@ -332,8 +332,8 @@ pub fn event_version(pr: &Value) -> String {
         .into_iter()
         .flatten()
         .filter(|(key, _)| {
-            !ignored.contains(&key.as_str())
-                && !(terminal && terminal_ignored.contains(&key.as_str()))
+            !(ignored.contains(&key.as_str())
+                || terminal && terminal_ignored.contains(&key.as_str()))
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
@@ -523,11 +523,9 @@ fn journal_packet(state: &mut Value, number: u32) -> Result<&mut Value, String> 
     if !entry["pending"].is_null()
         && (!entry["pending"].is_object()
             || !entry["pending"]["body"].is_object()
-            || ["version", "goalPolicy", "preparedAt"].iter().any(|key| {
-                !entry["pending"][key]
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty())
-            })
+            || ["version", "goalPolicy", "preparedAt"]
+                .iter()
+                .any(|key| entry["pending"][key].as_str().is_none_or(str::is_empty))
             || ["observationVersion", "progressVersion"]
                 .iter()
                 .any(|key| !entry["pending"][key].is_null() && !entry["pending"][key].is_string())
@@ -1161,9 +1159,7 @@ pub fn prepare(
     if !needs_wake(ps) || text.trim().is_empty() {
         return Err("owner has no unadmitted event or continuation text is empty".into());
     }
-    if !ps["version"]
-        .as_str()
-        .is_some_and(|version| !version.is_empty())
+    if ps["version"].as_str().is_none_or(str::is_empty)
         || policy.goal_policy.is_empty()
         || at.is_empty()
     {
@@ -1322,7 +1318,9 @@ impl Lease {
             .write(true)
             .create(true)
             .truncate(false)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .custom_flags(i32::from_ne_bytes(
+                rustix::fs::OFlags::NOFOLLOW.bits().to_ne_bytes(),
+            ))
             .mode(0o600)
             .open(path)?;
         if !file.metadata()?.is_file() {
