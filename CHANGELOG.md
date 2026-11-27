@@ -1,12 +1,16 @@
 # Changelog
 
-All notable Rust library and CLI changes are documented here. Nix module history
-is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable Rust library, CLI, and Nix module changes are documented here.
+This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
 ### Changed
 
+- Consume fleetix 0.17.0. Its build-train types are re-exported, so this is a
+  breaking release (0.13.0).
+- Resolve nested Caddy plugin hashes against their pinned Caddy versions
+  ([#108](https://github.com/caniko/canix-toolbelt/pull/108)).
 - Consume fleetix 0.16.0. Its build-train types are re-exported, so this is a
   breaking release (0.12.0). fleetix 0.16 adds `fleetix::oauth_client`
   (Google OAuth client validation, resolution, Bitwarden rbw retrieval,
@@ -36,6 +40,12 @@ is recorded in Git. This file follows [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Ship the Linux `browser-gpu-guard` binary and expose Attic token diagnostics,
+  config editing, and signing-key drift checks
+  ([#108](https://github.com/caniko/canix-toolbelt/pull/108)).
+- Export reusable NixOS modules for browser containment, Attic cache clients,
+  and Rust housekeeping, and expose the projects root in the host profile
+  ([#108](https://github.com/caniko/canix-toolbelt/pull/108)).
 - Caddy service registry `authPolicy` accepts `type = "forwardAuth"` providers.
   Such routes render Caddy's `forward_auth` semantics -- a fail-closed auth
   proxy whose 2xx responses fall through to the route's handlers -- instead of

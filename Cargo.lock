@@ -268,7 +268,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "canix-toolbelt"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -363,6 +363,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -780,9 +781,9 @@ dependencies = [
 
 [[package]]
 name = "fleetix"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b7d5fac1e48dff736becd15f41df0bdeb3e9fa45500cb5a81651888e50b9eb7"
+checksum = "1bdba7f810a0ee13a5f4806fdab85d137c03c48186d986fe251f145214029ef1"
 dependencies = [
  "chrono",
  "clap",
