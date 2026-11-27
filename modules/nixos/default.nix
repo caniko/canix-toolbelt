@@ -84,6 +84,7 @@
   vpn-dns = ./networking/vpn-dns.nix;
   wg-home-client = ./networking/wg-home-client.nix;
   wg-home-shared = ./networking/wg-home-shared.nix;
+  wireguard-status = ./networking/wireguard-status.nix;
   vpn-netns = ./networking/vpn-netns.nix;
 
   # GPU — backends
