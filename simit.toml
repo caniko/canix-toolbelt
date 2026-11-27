@@ -35,6 +35,7 @@ nix_builds = [
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.browser-containment-eval",
   ".#checks.x86_64-linux.headroom-eval",
   ".#checks.x86_64-linux.agent-safety-eval",
   ".#checks.x86_64-linux.agent-safety-home-eval",
@@ -71,6 +72,7 @@ nix_builds = [
   ".#checks.x86_64-linux.gatus-publisher-eval",
   ".#checks.x86_64-linux.garage-buckets-registry-eval",
   ".#checks.x86_64-linux.attic-projects-registry-eval",
+  ".#checks.x86_64-linux.attic-cache-client-eval",
   ".#checks.x86_64-linux.automation-presets-eval",
   ".#checks.x86_64-linux.kanidm-preset-eval",
   ".#checks.x86_64-linux.rauthy-preset-eval",
@@ -93,6 +95,7 @@ nix_builds = [
   ".#checks.x86_64-linux.nexus-profiles",
   ".#checks.x86_64-linux.pre-commit",
   ".#checks.x86_64-linux.profile-transition-check",
+  ".#checks.x86_64-linux.rust-housekeeping-eval",
   ".#checks.x86_64-linux.treefmt",
 ]
 with_msrv = true
@@ -176,6 +179,7 @@ agents = [
   ".#checks.x86_64-linux.browser-connection-eval",
   ".#checks.x86_64-linux.browser-connection-runtime",
   ".#checks.x86_64-linux.browser-connection-smoke",
+  ".#checks.x86_64-linux.browser-containment-eval",
   ".#checks.x86_64-linux.headroom-eval",
   ".#checks.x86_64-linux.agent-safety-eval",
   ".#checks.x86_64-linux.agent-safety-home-eval",
@@ -216,6 +220,7 @@ services = [
   ".#checks.x86_64-linux.gatus-publisher-eval",
   ".#checks.x86_64-linux.garage-buckets-registry-eval",
   ".#checks.x86_64-linux.attic-projects-registry-eval",
+  ".#checks.x86_64-linux.attic-cache-client-eval",
   ".#checks.x86_64-linux.automation-presets-eval",
   ".#checks.x86_64-linux.kanidm-preset-eval",
   ".#checks.x86_64-linux.rauthy-preset-eval",
@@ -240,6 +245,7 @@ platform = [
   ".#checks.x86_64-linux.nexus-profiles",
   ".#checks.x86_64-linux.pre-commit",
   ".#checks.x86_64-linux.profile-transition-check",
+  ".#checks.x86_64-linux.rust-housekeeping-eval",
   ".#checks.x86_64-linux.treefmt",
 ]
 
