@@ -360,7 +360,7 @@ fn fresh_read_only_visit_allows_one_later_ensure() {
         false,
     )
     .unwrap();
-    assert!(provider.attempts.is_empty());
+    assert_eq!(provider.attempts.len(), 0);
     ensure_once(&mut forge, &mut provider, &policy, &url, state.path(), true).unwrap();
     ensure_once(&mut forge, &mut provider, &policy, &url, state.path(), true).unwrap();
     assert_eq!(provider.attempts.len(), 1);
@@ -426,7 +426,7 @@ fn missing_legacy_history_is_not_certified_as_a_fresh_read_only_visit() {
         }
     }
     assert!(ensure_once(&mut forge, &mut provider, &policy, &url, state.path(), true).is_err());
-    assert!(provider.attempts.is_empty());
+    assert_eq!(provider.attempts.len(), 0);
 }
 
 struct DefinitiveRejection {

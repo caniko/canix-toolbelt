@@ -730,7 +730,7 @@ fn github_revalidates_check_contexts_beyond_the_initial_page() {
                 101
             );
         }
-        assert!(transport.0.is_empty());
+        assert_eq!(transport.0, Vec::<Value>::new());
     }
 }
 
@@ -1139,7 +1139,7 @@ fn forgejo_requires_declared_complete_inline_comment_counts() {
         assert_eq!(result.is_ok(), should_pass);
         if let Ok(snapshot) = result {
             assert_eq!(snapshot["inlineComments"].as_array().unwrap().len(), 2);
-            assert!(transport.0.is_empty());
+            assert_eq!(transport.0, []);
         }
     }
 }
@@ -1231,7 +1231,7 @@ fn forgejo_rejects_inline_identity_replay_across_distinct_reviews() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("inline comment identity"));
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, []);
 }
 
 #[test]
@@ -1253,7 +1253,7 @@ fn forgejo_requires_a_valid_update_identity_before_collecting_history() {
         )
         .unwrap_err();
         assert!(error.to_string().contains("update identity"));
-        assert!(transport.0.is_empty());
+        assert_eq!(transport.0, []);
     }
     let mut pull = forge_pull();
     pull.as_object_mut().unwrap().remove("updated_at");
@@ -1286,7 +1286,7 @@ fn github_inline_identities_must_be_unique_across_distinct_threads() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("inline comment identity"));
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, Vec::<Value>::new());
 }
 
 #[test]
@@ -1303,7 +1303,7 @@ fn forgejo_requires_base_revision_and_branch_identity_before_collecting_history(
             )
             .unwrap_err();
             assert!(error.to_string().contains("base identity"));
-            assert!(transport.0.is_empty());
+            assert_eq!(transport.0, []);
         }
     }
 }
@@ -1326,7 +1326,7 @@ fn forgejo_rechecks_single_page_ci_after_the_final_pull_observation() {
             .to_string()
             .contains("check rollup moved after history")
     );
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, []);
 }
 
 #[test]
@@ -1481,13 +1481,11 @@ fn forgejo_accepts_exactly_2000_history_rows_with_an_empty_sentinel_page() {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
         }
         if count <= 2000 {
-            assert!(
-                transport.0.is_empty(),
-                "{count}: boundary page was not inspected"
-            );
+            assert_eq!(transport.0, [], "{count}: boundary page was not inspected");
         } else {
-            assert!(
-                !transport.0.is_empty(),
+            assert_ne!(
+                transport.0,
+                [],
                 "oversized declared total must reject before further pages"
             );
         }
@@ -1527,7 +1525,7 @@ fn github_preserves_explicit_native_nulls_and_pending_checks() {
         snapshot["checks"]["contexts"]["nodes"][0]["status"],
         "QUEUED"
     );
-    assert!(transport.0.is_empty());
+    assert_eq!(transport.0, Vec::<Value>::new());
 }
 
 #[test]

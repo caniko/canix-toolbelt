@@ -762,12 +762,12 @@ mod tests {
             extract_plugins(raw, Path::new("x.nix"))[0].module,
             "github.com/owner/parent/sub"
         );
-        assert!(
+        assert_eq!(
             extract_plugins(
                 r#"caddy.plugins = ["github.com/no-version" "x@y"];"#,
                 Path::new("x.nix")
-            )
-            .is_empty()
+            ),
+            []
         );
         // Only the plugin list counts; other module strings and quotes are ignored.
         let raw = "# \"github.com/c@v9\" \"quote\ncaddy.plugins\n  =\n  [ \"github.com/a@v1\" ];\nx = \"github.com/b@v2\";";
@@ -855,7 +855,10 @@ mod tests {
                 "sha256-aaa+bbb/ccc="
             ]
         );
-        assert!(extract_got_hashes("nothing matches here\n").is_empty());
+        assert_eq!(
+            extract_got_hashes("nothing matches here\n"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1002,7 +1005,7 @@ mod tests {
         );
 
         let dry = refresh(dir.path(), &mut Versioned, true, true).unwrap();
-        assert!(dry.resolved_by_version.is_empty());
+        assert_eq!(dry.resolved_by_version, BTreeMap::new());
         assert_eq!(fs::read_to_string(&path).unwrap(), source);
         let done = refresh(dir.path(), &mut Versioned, true, false).unwrap();
         assert!(done.resolved.is_none());
@@ -1051,7 +1054,7 @@ mod tests {
         );
         let done = refresh(dir.path(), &mut Fake, true, false).unwrap();
         assert_eq!(done.resolved.unwrap().store_path, "/nix/store/x-vendor");
-        assert!(done.updates.is_empty());
+        assert_eq!(done.updates, []);
         assert!(
             fs::read_to_string(dir.path().join("caddy.nix"))
                 .unwrap()

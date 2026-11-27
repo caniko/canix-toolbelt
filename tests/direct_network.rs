@@ -350,10 +350,9 @@ fn destination_rewrites_reject_eligible_routes_and_each_multipath_hop() {
             {"dev":"enp1s0"}
         ]}),
     ] {
-        assert!(
-            select_routes(&policy(), &links, &serde_json::json!([route]))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            []
         );
     }
 }
@@ -378,11 +377,7 @@ fn single_path_flags_reject_authored_pervasive_and_malformed_values() {
                 {"dev":"enp1s0"}, {"dev":"wg-proton"}
             ]}
         ]);
-        assert!(
-            select_routes(&policy(), &links, &omitted)
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(select_routes(&policy(), &links, &omitted).unwrap(), []);
     }
 }
 
@@ -461,10 +456,9 @@ fn route_metrics_reject_eligible_snapshots_instead_of_changing_path_semantics() 
             {"dev":"wg-proton","gateway":"198.51.100.1"}
         ]}),
     ] {
-        assert!(
-            select_routes(&policy(), &links, &serde_json::json!([route]))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            []
         );
     }
 }
@@ -507,10 +501,9 @@ fn ttl_propagation_rejects_eligible_routes_without_blocking_omitted_paths() {
             ]}),
         ] {
             route["ttl-propogate"] = propagation.clone();
-            assert!(
-                select_routes(&policy(), &links, &serde_json::json!([route]))
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+                []
             );
         }
     }
@@ -545,10 +538,9 @@ fn route_lifetimes_reject_eligible_snapshots_instead_of_becoming_permanent() {
             {"dev":"wg-proton","gateway":"fe80::2"}
         ]}),
     ] {
-        assert!(
-            select_routes(&policy(), &links, &serde_json::json!([route]))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            []
         );
     }
 }
@@ -578,11 +570,7 @@ fn source_selectors_cannot_become_source_unconditional_or_connected_routes() {
     let routes = serde_json::json!([{"dst":"default","from":"2001:db8:1::/64","nexthops":[
         {"dev":"enp1s0","gateway":"fe80::1"}, {"dev":"wg-proton","gateway":"fe80::2"}
     ]}]);
-    assert!(
-        select_routes(&policy(), &links, &routes)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(select_routes(&policy(), &links, &routes).unwrap(), []);
     // Preferred source is a different attribute, not a packet-source selector.
     let routes = serde_json::json!([{"dst":"default","prefsrc":"2001:db8:1::1","nexthops":[
         {"dev":"enp1s0","gateway":"fe80::1","weight":2}
@@ -620,10 +608,9 @@ fn referenced_nexthops_cannot_be_rewritten_as_ordinary_inline_ecmp() {
             {"dev":"enp1s0","gateway":"192.0.2.1"}, {"dev":"wg-proton","gateway":"198.51.100.1"}
         ]}),
     ] {
-        assert!(
-            select_routes(&policy(), &links, &serde_json::json!([route]))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            []
         );
     }
 }
@@ -651,10 +638,9 @@ fn nondefault_ecmp_scope_is_rejected_instead_of_becoming_universe_scoped() {
         assert!(error.to_string().contains("scope"));
     }
     route["nexthops"][1]["dev"] = serde_json::json!("wg-proton");
-    assert!(
-        select_routes(&policy(), &links, &serde_json::json!([route]))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+        []
     );
     let connected = serde_json::json!([{"dst":"192.0.2.0/24","dev":"enp1s0","scope":"link"}]);
     assert!(select_routes(&policy(), &links, &connected).unwrap()[0].local);
@@ -708,11 +694,7 @@ fn tos_selectors_reject_eligible_routes_instead_of_widening_their_match() {
         {"dev":"enp1s0","gateway":"192.0.2.1"},
         {"dev":"wg-proton","gateway":"198.51.100.1"}
     ]}]);
-    assert!(
-        select_routes(&policy(), &links, &routes)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(select_routes(&policy(), &links, &routes).unwrap(), []);
 }
 
 #[test]
@@ -755,11 +737,7 @@ fn nondefault_or_malformed_ipv6_preferences_reject_without_changing_the_uplink()
         {"dev":"enp1s0","gateway":"fe80::1"},
         {"dev":"wg-proton","gateway":"fe80::2"}
     ]}]);
-    assert!(
-        select_routes(&policy(), &links, &routes)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(select_routes(&policy(), &links, &routes).unwrap(), []);
 }
 
 #[test]
@@ -797,10 +775,9 @@ fn route_and_nexthop_realms_reject_eligible_snapshots_without_losing_classificat
             {"dev":"wg-proton","gateway":"198.51.100.1","flow":{"to":"1"}}
         ]}),
     ] {
-        assert!(
-            select_routes(&policy(), &links, &serde_json::json!([route]))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            select_routes(&policy(), &links, &serde_json::json!([route])).unwrap(),
+            []
         );
     }
 }
@@ -902,9 +879,5 @@ fn cross_family_via_rejects_eligible_routes_instead_of_becoming_connected() {
         {"dev":"enp1s0","gateway":"192.0.2.1"},
         {"dev":"wg-proton","via":{"family":"inet6","host":"fe80::1"}}
     ]}]);
-    assert!(
-        select_routes(&policy(), &links, &routes)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(select_routes(&policy(), &links, &routes).unwrap(), []);
 }

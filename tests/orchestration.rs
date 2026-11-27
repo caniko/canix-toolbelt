@@ -410,10 +410,11 @@ fn host_capacity_and_pending_inputs_bound_admission() {
         2
     );
     states["2"]["pending"] = json!({"body":{"id":"pending"}});
-    assert!(
+    assert_eq!(
         select(&manifest, &states, &active, &policy())
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
     assert!(select(&manifest, &states, &BTreeMap::new(), &policy()).is_err());
 }

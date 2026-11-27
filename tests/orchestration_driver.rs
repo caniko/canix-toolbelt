@@ -3,7 +3,10 @@
 use canix_toolbelt::orchestration::{Manifest, Policy, driver::*};
 use serde_json::{Value, json};
 use std::{cell::Cell, rc::Rc};
-use std::{collections::BTreeMap, io};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 struct FixtureFence {
     held: Rc<Cell<bool>>,
@@ -341,8 +344,8 @@ fn malformed_pending_prompt_metadata_fails_before_observation_or_reconciliation(
                 "accepted malformed pending {field}"
             );
             assert_eq!(state, original);
-            assert!(fixture.requests.is_empty());
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.requests, Vec::<String>::new());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
             assert!(
                 canix_toolbelt::orchestration::prepare(
                     &mut state,
@@ -389,7 +392,7 @@ fn unregistered_active_sessions_cannot_release_campaign_capacity() {
         );
         assert_eq!(state, original);
         assert_eq!(fixture.saved, original);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
         assert!(!fixture.fence_held.get());
     }
 }
@@ -405,7 +408,7 @@ fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
             ];
             let observation = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
             assert!(observation.occupied["destination"].contains(&1));
-            assert!(observation.active["destination"].is_empty());
+            assert_eq!(observation.active["destination"], BTreeSet::new());
             assert_eq!(
                 observation.in_progress_compactions[&1]["id"],
                 "msg_external_compaction"
@@ -421,16 +424,16 @@ fn untracked_in_progress_compactions_reserve_capacity_without_dispatch() {
                 true,
             )
             .unwrap();
-            assert!(report.errors.is_empty());
-            assert!(report.selected.is_empty());
+            assert_eq!(report.errors, Vec::<String>::new());
+            assert_eq!(report.selected, Vec::<u32>::new());
             assert!(report.occupied["destination"].contains(&1));
             assert!(state["packets"]["1"]["pendingCompaction"].is_null());
             assert!(state["packets"]["1"]["pending"].is_null());
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
             fixture.recent[0]["status"] = json!("completed");
             let fresh = observe(&manifest, &policy, &expected, &mut fixture).unwrap();
             assert!(!fresh.occupied["destination"].contains(&1));
-            assert!(fresh.in_progress_compactions.is_empty());
+            assert_eq!(fresh.in_progress_compactions, BTreeMap::new());
         }
     }
 }
@@ -463,7 +466,7 @@ fn final_observation_revalidates_every_native_compaction_reservation() {
                 "{error}"
             );
             assert_eq!(state, before);
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
         }
     }
 }
@@ -493,7 +496,7 @@ fn final_observation_revalidates_completed_context_reset_evidence() {
         );
         assert_eq!(state, before);
         assert_eq!(fixture.saved, before);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
     let (manifest, policy, expected, _, mut fixture) = setup();
     fixture.recent = vec![
@@ -530,7 +533,7 @@ fn completed_owner_turn_cannot_hide_changed_physical_context_during_observation(
         );
         assert_eq!(state, before);
         assert_eq!(fixture.saved, before);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -555,7 +558,7 @@ fn completed_turn_during_trailing_activity_cannot_use_an_unfenced_context_witnes
     );
     assert_eq!(state, before);
     assert_eq!(fixture.saved, before);
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert!(
         !fixture.fence_held.get(),
         "failed observation retained the fence"
@@ -577,7 +580,7 @@ fn native_fence_excludes_trailing_turns_and_survives_through_dispatch() {
         true,
     )
     .unwrap();
-    assert!(result.errors.is_empty());
+    assert_eq!(result.errors, Vec::<String>::new());
     assert!(fixture.prevented_turn);
     assert_eq!(fixture.submissions.len(), 1);
     assert!(
@@ -601,9 +604,9 @@ fn native_fence_loss_before_dispatch_preserves_replay_without_provider_effects()
         true,
     )
     .unwrap();
-    assert!(!result.errors.is_empty());
+    assert_ne!(result.errors, Vec::<String>::new());
     assert!(state["packets"]["1"]["pending"].is_object());
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert!(!fixture.fence_held.get());
 }
 
@@ -623,9 +626,9 @@ fn native_fence_loss_after_compaction_checkpoint_cannot_submit() {
         true,
     )
     .unwrap();
-    assert!(!result.errors.is_empty());
+    assert_ne!(result.errors, Vec::<String>::new());
     assert!(state["packets"]["1"]["pendingCompaction"].is_object());
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert!(!fixture.fence_held.get());
 }
 
@@ -683,11 +686,11 @@ fn terminal_compactions_cannot_hide_older_native_reservations() {
                         true,
                     )
                     .unwrap();
-                    assert!(report.errors.is_empty());
+                    assert_eq!(report.errors, Vec::<String>::new());
                     assert!(report.occupied["destination"].contains(&1));
                     assert_eq!(report.in_progress_compactions[&1]["id"], "msg_external");
-                    assert!(report.selected.is_empty());
-                    assert!(fixture.submissions.is_empty());
+                    assert_eq!(report.selected, Vec::<u32>::new());
+                    assert_eq!(fixture.submissions, Vec::<Value>::new());
                 }
             }
         }
@@ -753,8 +756,9 @@ fn completion_of_an_old_compaction_cannot_release_a_new_physical_context() {
         true,
     )
     .unwrap();
-    assert!(
-        fixture.submissions.is_empty(),
+    assert_eq!(
+        fixture.submissions,
+        Vec::<Value>::new(),
         "old compaction released a still-oversized new context"
     );
     assert!(state["packets"]["1"]["pending"].is_null());
@@ -800,7 +804,7 @@ fn old_compaction_at_the_exact_threshold_preserves_a_retained_continuation() {
         true,
     )
     .unwrap();
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert_eq!(state["packets"]["1"]["pending"]["body"], body);
     cycle(
         &manifest,
@@ -900,8 +904,8 @@ fn queued_compactions_remain_healthy_waits_without_new_dispatch() {
         true,
     )
     .unwrap();
-    assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(result.errors, Vec::<String>::new());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert_eq!(state["packets"]["1"]["pendingCompaction"], original);
 }
 
@@ -933,7 +937,7 @@ fn malformed_retained_compactions_fail_before_journal_publication_or_dispatch() 
             )
             .is_err()
         );
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
         assert_eq!(state, original);
         assert_eq!(fixture.saved, saved);
     }
@@ -998,7 +1002,7 @@ fn idle_before_a_delayed_retry_cannot_consume_recovery_after_receipt_reconciliat
     )
     .unwrap();
     assert_eq!(first.errors.len(), 1);
-    assert!(fixture.inbox.is_empty());
+    assert_eq!(fixture.inbox, BTreeMap::new());
     let body = state["packets"]["1"]["pending"]["body"].clone();
     fixture.recent.insert(
         0,
@@ -1073,7 +1077,7 @@ fn active_mirror_and_queued_input_block_admission() {
         )
         .is_err()
     );
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     fixture.hosts.insert("source".into(), json!({}));
     fixture.mirror_inbox = true;
     assert!(
@@ -1104,8 +1108,8 @@ fn active_mirror_and_queued_input_block_admission() {
         true,
     )
     .unwrap();
-    assert!(report.selected.is_empty());
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(report.selected, Vec::<u32>::new());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1126,7 +1130,7 @@ fn activity_starting_during_inbox_collection_cannot_admit_a_second_input() {
         )
         .is_err()
     );
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     assert_eq!(fixture.saved, original);
 }
 
@@ -1164,7 +1168,7 @@ fn omitted_attachment_fields_cannot_acknowledge_added_capabilities() {
                 "unexpected {key} in receipt (inbox={in_inbox})"
             );
             assert_eq!(state["packets"]["1"]["pending"]["body"], body);
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
         }
     }
 }
@@ -1190,7 +1194,7 @@ fn explicit_empty_receipt_attachments_match_an_omitted_body() {
     .unwrap();
     assert!(state["packets"]["1"]["pending"].is_null());
     assert_eq!(state["packets"]["1"]["deliveredVersion"], "old");
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1210,7 +1214,7 @@ fn persistence_failure_cannot_submit_and_shadow_cannot_write() {
         )
         .is_err()
     );
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
     let original = state.clone();
     cycle(
         &manifest,
@@ -1224,7 +1228,7 @@ fn persistence_failure_cannot_submit_and_shadow_cannot_write() {
     )
     .unwrap();
     assert_eq!(state, original);
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1263,7 +1267,7 @@ fn transcript_receipt_without_session_id_is_adopted_but_edited_body_is_rejected(
     .unwrap();
     assert!(state["packets"]["1"]["pending"].is_null());
     assert_eq!(state["packets"]["1"]["deliveredVersion"], "old");
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1300,7 +1304,7 @@ fn changed_model_or_context_ceiling_cannot_admit_work() {
         )
         .is_err()
     );
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1322,7 +1326,7 @@ fn cache_write_only_contexts_compact_or_refuse_at_the_hard_ceiling() {
         );
         if tokens == 300_000 {
             assert!(result.is_err());
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
         } else {
             result.unwrap();
             assert_eq!(fixture.submissions.len(), 1);
@@ -1415,7 +1419,7 @@ fn hidden_physical_context_still_compacts_or_rejects_the_ceiling() {
         );
         if tokens == 300_000 {
             assert!(result.unwrap_err().to_string().contains("context ceiling"));
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
         } else {
             result.unwrap();
             assert_eq!(fixture.submissions.len(), 1);
@@ -1458,7 +1462,7 @@ fn unknown_or_malformed_usage_cannot_admit_or_publish_state() {
             );
             assert_eq!(state, original);
             assert_eq!(fixture.saved, original);
-            assert!(fixture.submissions.is_empty());
+            assert_eq!(fixture.submissions, Vec::<Value>::new());
         }
     }
     for recent in [vec![], vec![assistant("msg_no_usage", 1000, 0)]] {
@@ -1478,7 +1482,7 @@ fn unknown_or_malformed_usage_cannot_admit_or_publish_state() {
         .unwrap_err();
         assert!(error.to_string().contains("physical context is unknown"));
         assert_eq!(state, original);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -1540,7 +1544,7 @@ fn only_valid_completed_compaction_releases_observed_context() {
             )
             .is_err()
         );
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -1567,7 +1571,7 @@ fn context_message_ids_cannot_alias_assistant_and_completed_compaction_history()
     );
     assert_eq!(state, before);
     assert_eq!(fixture.saved, before);
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1597,7 +1601,7 @@ fn unknown_pending_compaction_status_reports_malformed_evidence_without_dispatch
             "malformed compaction looked like a healthy wait"
         );
         assert_eq!(state["packets"]["1"]["pendingCompaction"], pending);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -1649,7 +1653,7 @@ fn physical_context_search_exhaustion_is_bounded_and_never_zero() {
         4
     );
     assert_eq!(state, original);
-    assert!(fixture.submissions.is_empty());
+    assert_eq!(fixture.submissions, Vec::<Value>::new());
 }
 
 #[test]
@@ -1673,7 +1677,7 @@ fn inputs_queued_during_context_collection_invalidate_owner_and_mirror_observati
         );
         assert_eq!(state, original);
         assert_eq!(fixture.saved, original);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -1695,7 +1699,7 @@ fn session_policy_changes_after_continuation_cannot_submit_a_prompt() {
         .unwrap();
         assert_eq!(report.errors.len(), 1);
         assert!(report.errors[0].contains("selectors changed"));
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
         assert!(state["packets"]["1"]["pending"].is_object());
         assert_eq!(state, fixture.saved);
     }
@@ -1733,7 +1737,7 @@ fn duplicate_inbox_receipts_cannot_acknowledge_or_dispatch_in_either_order() {
         );
         assert_eq!(state, original);
         assert_eq!(fixture.saved, original);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }
 
@@ -1776,6 +1780,6 @@ fn later_receipt_failure_cannot_persist_an_earlier_acknowledgement() {
         );
         assert_eq!(state, original);
         assert_eq!(fixture.saved, original);
-        assert!(fixture.submissions.is_empty());
+        assert_eq!(fixture.submissions, Vec::<Value>::new());
     }
 }

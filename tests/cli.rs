@@ -31,6 +31,6 @@ fn standalone_cli_failure_has_no_json_on_stdout() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"");
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing.pkl"));
 }

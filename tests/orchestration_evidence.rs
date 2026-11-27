@@ -49,7 +49,7 @@ fn acknowledged_receiver_deletion_remains_a_conflict() {
     assert!(update.files[0].expected.is_some());
     let receipt = apply(target.path(), &allowed, &update).unwrap();
     assert_eq!(receipt.conflicts, vec!["evidence/receipt"]);
-    assert!(receipt.accepted.is_empty());
+    assert_eq!(receipt.accepted, BTreeMap::new());
     assert!(!target.path().join("evidence/receipt").exists());
 }
 
@@ -103,7 +103,7 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
         .unwrap();
     let allowed = vec![PathBuf::from("evidence")];
     let batch = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
-    assert!(batch.files.is_empty());
+    assert_eq!(batch.files.len(), 0);
     assert_eq!(batch.omitted.len(), 3);
     symlink(source.path(), target.path().join("evidence")).unwrap();
     let mut batch = batch;
@@ -113,7 +113,7 @@ fn symlinks_checkouts_and_large_files_remain_host_local() {
         .files;
     let receipt = apply(target.path(), &allowed, &batch).unwrap();
     assert_eq!(receipt.conflicts, vec!["evidence/good"]);
-    assert!(receipt.accepted.is_empty());
+    assert_eq!(receipt.accepted, BTreeMap::new());
     assert!(
         target
             .path()
@@ -191,8 +191,8 @@ fn acknowledged_source_exclusion_keeps_receiver_and_other_artifacts(kind: &str) 
                     .iter()
                     .any(|root| std::path::Path::new(path).starts_with(root))
             );
-            assert!(batch.delete.is_empty());
-            assert!(batch.prune.is_empty());
+            assert_eq!(batch.delete.len(), 0);
+            assert_eq!(batch.prune, Vec::<String>::new());
             assert!(
                 !batch
                     .files
@@ -225,7 +225,7 @@ fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
         let first = collect(source.path(), &allowed, &BTreeMap::new()).unwrap();
         let known = apply(target.path(), &allowed, &first).unwrap().accepted;
         let verified = collect(source.path(), &allowed, &known).unwrap();
-        assert!(verified.files.is_empty());
+        assert_eq!(verified.files.len(), 0);
         assert_eq!(verified.verify.len(), 1);
         assert_eq!(
             apply(target.path(), &allowed, &verified).unwrap().accepted,
@@ -238,7 +238,7 @@ fn unchanged_acknowledged_files_are_verified_without_retransmitting_bytes() {
         }
         let receipt = apply(target.path(), &allowed, &verified).unwrap();
         assert_eq!(receipt.conflicts, vec!["handoff"]);
-        assert!(receipt.accepted.is_empty());
+        assert_eq!(receipt.accepted, BTreeMap::new());
         if delete {
             assert!(!target.path().join("handoff").exists());
         } else {
@@ -269,7 +269,7 @@ fn authoritative_deletions_remove_only_acknowledged_receiver_bytes() {
         let receipt = apply(target.path(), &allowed, &deletion).unwrap();
         if foreign {
             assert_eq!(receipt.conflicts, vec!["evidence/receipt"]);
-            assert!(receipt.removed.is_empty());
+            assert_eq!(receipt.removed, BTreeMap::new());
             assert_eq!(
                 fs::read(target.path().join("evidence/receipt")).unwrap(),
                 b"independent"
@@ -381,8 +381,9 @@ fn file_to_directory_transition_requires_a_retained_deletion_before_descendants(
         fs::create_dir(source.path().join("evidence/a")).unwrap();
         fs::write(source.path().join("evidence/a/b"), b"new descendant").unwrap();
         let transition = collect(source.path(), &allowed, &known).unwrap();
-        assert!(
-            transition.files.is_empty(),
+        assert_eq!(
+            transition.files.len(),
+            0,
             "descendant must wait for deletion receipt"
         );
         assert_eq!(transition.delete.len(), 1);
@@ -392,17 +393,18 @@ fn file_to_directory_transition_requires_a_retained_deletion_before_descendants(
         }
         let receipt = apply(target.path(), &allowed, &transition).unwrap();
         if foreign {
-            assert!(receipt.removed.is_empty());
+            assert_eq!(receipt.removed, BTreeMap::new());
             assert_eq!(receipt.conflicts, vec!["evidence/a"]);
             assert_eq!(
                 fs::read(target.path().join("evidence/a")).unwrap(),
                 b"foreign bytes"
             );
-            assert!(
+            assert_eq!(
                 collect(source.path(), &allowed, &known)
                     .unwrap()
                     .files
-                    .is_empty()
+                    .len(),
+                0
             );
         } else {
             assert_eq!(receipt.removed, known);
@@ -439,7 +441,7 @@ fn directory_to_file_transition_stages_descendant_removal_before_replacement() {
     fs::write(source.path().join("evidence/a"), b"replacement file").unwrap();
     let transition = collect(source.path(), &allowed, &known)
         .expect("regular ancestor must stage descendant deletion");
-    assert!(transition.files.is_empty());
+    assert_eq!(transition.files.len(), 0);
     assert_eq!(transition.delete.len(), 1);
     let receipt = apply(target.path(), &allowed, &transition).unwrap();
     assert_eq!(receipt.removed, known);
@@ -559,8 +561,8 @@ fn directory_retirement_preserves_foreign_content_and_retains_retry_identities()
         }
         let transition = collect(source.path(), &allowed, &known).unwrap();
         let receipt = apply(target.path(), &allowed, &transition).unwrap();
-        assert!(receipt.removed.is_empty());
-        assert!(receipt.pruned.is_empty());
+        assert_eq!(receipt.removed, BTreeMap::new());
+        assert_eq!(receipt.pruned, Vec::<String>::new());
         assert!(receipt.conflicts.contains(&"evidence/a".into()));
         assert!(receipt.accepted.contains_key("evidence/unrelated"));
         assert!(foreign_path.exists());
@@ -631,7 +633,7 @@ fn blocked_receiver_ancestors_are_conflicts_for_writes_verifies_and_deletions() 
             assert!(receipt.conflicts.contains(&"evidence/nested/a".into()));
             assert!(receipt.accepted.contains_key("evidence/independent"));
             assert!(!receipt.accepted.contains_key("evidence/nested/a"));
-            assert!(receipt.removed.is_empty());
+            assert_eq!(receipt.removed, BTreeMap::new());
             if kind == "file" {
                 assert_eq!(fs::read(path).unwrap(), b"foreign ancestor");
             } else if kind == "symlink" {
@@ -669,10 +671,10 @@ fn oversized_directory_transitions_drain_acknowledged_descendants_in_bounded_exc
     fs::write(source.path().join("evidence/a"), b"new file").unwrap();
     for count in [5000, 0] {
         let batch = exchange.prepare(source.path(), &allowed).unwrap();
-        assert!(batch.files.is_empty());
+        assert_eq!(batch.files.len(), 0);
         assert!(batch.delete.len() <= 10000);
         let receipt = apply(target.path(), &allowed, batch).unwrap();
-        assert!(receipt.conflicts.is_empty());
+        assert_eq!(receipt.conflicts, Vec::<String>::new());
         exchange.acknowledge(&receipt).unwrap();
         assert_eq!(exchange.known().len(), count);
         if count > 0 {

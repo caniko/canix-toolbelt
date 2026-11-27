@@ -157,7 +157,7 @@ fn cargo_graph_reports_target_kinds_and_shortest_workspace_paths() {
     assert_eq!(parents[0].parent, "derive");
     assert_eq!(parents[0].path, ["app@1.0.0", "derive@1.0.0"]);
     assert_eq!(parents[0].dependency_kinds[0]["target"], "cfg(windows)");
-    assert!(graph.parents("ttf-parser", None).unwrap().is_empty());
+    assert_eq!(graph.parents("ttf-parser", None).unwrap(), []);
     let mut broken = metadata;
     broken["resolve"]["nodes"][1]["deps"][0]["pkg"] = "unknown".into();
     assert!(q::graph::Metadata::parse(&serde_json::to_vec(&broken).unwrap()).is_err());

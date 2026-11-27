@@ -1170,7 +1170,7 @@ mod tests {
         ]);
         let blockers = github.checks(&current, &Policy::default()).unwrap();
         handle.join().unwrap();
-        assert!(blockers.is_empty(), "{blockers:?}");
+        assert_eq!(blockers, Vec::<String>::new());
     }
 
     fn native_merge_replies(ci: &str, required_review: bool) -> Vec<(u16, Value)> {
@@ -1328,7 +1328,7 @@ mod tests {
             let blockers = github.checks_required(&candidate(), &[], false).unwrap();
             handle.join().unwrap();
             if conclusion == Some("success") {
-                assert!(blockers.is_empty(), "{blockers:?}");
+                assert_eq!(blockers, Vec::<String>::new());
             } else if conclusion.is_none() {
                 assert!(
                     blockers.iter().any(|b| b.contains("no CI qualification")),
@@ -1658,11 +1658,9 @@ mod tests {
             (200, json!({"merge_commit_sha":null})),
             (200, json!([])),
         ]);
-        assert!(
-            !github
-                .checks(&candidate(), &Policy::default())
-                .unwrap()
-                .is_empty()
+        assert_ne!(
+            github.checks(&candidate(), &Policy::default()).unwrap(),
+            Vec::<String>::new()
         );
         handle.join().unwrap();
     }
@@ -1712,11 +1710,9 @@ mod tests {
             (200, json!([])),
             (200, json!([])),
         ]);
-        assert!(
-            !github
-                .checks(&candidate(), &Policy::default())
-                .unwrap()
-                .is_empty()
+        assert_ne!(
+            github.checks(&candidate(), &Policy::default()).unwrap(),
+            Vec::<String>::new()
         );
         handle.join().unwrap();
     }
