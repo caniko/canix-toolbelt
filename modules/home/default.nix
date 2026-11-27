@@ -20,6 +20,8 @@
   project-tree = ./project-tree.nix;
   browser-connection = ./browser-connection.nix;
   pinentry = ./pinentry.nix;
+  agenix-once = ./agenix-once.nix;
+  rustdesk-client = ./rustdesk-client.nix;
   opencode-environment = ./opencode-environment.nix;
   opencode-jev = ./opencode-jev.nix;
   headroom = ./headroom.nix;

@@ -25,6 +25,7 @@ nix_builds = [
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#checks.x86_64-linux.execution-protocol",
+  ".#checks.x86_64-linux.agenix-once-eval",
   ".#opencode-browser-adapter",
   ".#opencode-with-claude",
   ".#checks.x86_64-linux.opencode-claude-eval",
@@ -52,6 +53,7 @@ nix_builds = [
   ".#checks.x86_64-linux.public-edge-eval",
   ".#checks.x86_64-linux.wg-home-endpoint-selection",
   ".#checks.x86_64-linux.wg-home-shared-eval",
+  ".#checks.x86_64-linux.wireguard-status-eval",
   ".#checks.x86_64-linux.cloud-host-eval",
   ".#checks.x86_64-linux.cloud-host-install-bios",
   ".#checks.x86_64-linux.cloud-host-install-uefi",
@@ -80,6 +82,7 @@ nix_builds = [
   ".#checks.x86_64-linux.site-helpers-eval",
   ".#checks.x86_64-linux.structure-check",
   ".#checks.x86_64-linux.project-tree-eval",
+  ".#checks.x86_64-linux.rustdesk-client-eval",
   ".#checks.x86_64-linux.activation-contracts-eval",
   ".#checks.x86_64-linux.recoverable-deployment-eval",
   ".#checks.x86_64-linux.check-helpers",
@@ -167,6 +170,7 @@ core = [
   ".#checks.x86_64-linux.resumable-operator-eval",
   ".#checks.x86_64-linux.resumable-operator-runtime",
   ".#checks.x86_64-linux.execution-protocol",
+  ".#checks.x86_64-linux.agenix-once-eval",
 ]
 agents = [
   ".#opencode-browser-adapter",
@@ -198,6 +202,7 @@ network = [
   ".#checks.x86_64-linux.public-edge-eval",
   ".#checks.x86_64-linux.wg-home-endpoint-selection",
   ".#checks.x86_64-linux.wg-home-shared-eval",
+  ".#checks.x86_64-linux.wireguard-status-eval",
   ".#checks.x86_64-linux.cloud-host-eval",
   ".#checks.x86_64-linux.cloud-host-install-bios",
   ".#checks.x86_64-linux.cloud-host-install-uefi",
@@ -228,6 +233,7 @@ services = [
   ".#checks.x86_64-linux.site-helpers-eval",
   ".#checks.x86_64-linux.structure-check",
   ".#checks.x86_64-linux.project-tree-eval",
+  ".#checks.x86_64-linux.rustdesk-client-eval",
 ]
 platform = [
   ".#checks.x86_64-linux.activation-contracts-eval",

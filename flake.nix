@@ -274,6 +274,9 @@
             attic-cache-client-eval = import ./nixos-tests/attic-cache-client-eval.nix {inherit pkgs;};
             wg-home-endpoint-selection = import ./nixos-tests/wg-home-endpoint-selection.nix {inherit pkgs;};
             wg-home-shared-eval = import ./nixos-tests/wg-home-shared-eval.nix {inherit pkgs;};
+            wireguard-status-eval = import ./nixos-tests/wireguard-status-eval.nix {inherit pkgs;};
+            rustdesk-client-eval = import ./nixos-tests/rustdesk-client-eval.nix {inherit inputs pkgs;};
+            agenix-once-eval = import ./nixos-tests/agenix-once-eval.nix {inherit pkgs;};
             ssh-aliases-eval = import ./nixos-tests/ssh-aliases-eval.nix {inherit pkgs;};
             service-topology-v2-eval = import ./nixos-tests/service-topology-v2-eval.nix {inherit inputs pkgs;};
             automation-presets-eval = import ./nixos-tests/automation-presets-eval.nix {inherit pkgs;};
