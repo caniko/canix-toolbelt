@@ -312,6 +312,10 @@
           inherit pkgs;
           directNetwork = true;
         };
+        packages.canix-toolbelt-browser-gpu-guard = import ./nix/package.nix {
+          inherit pkgs;
+          browserGpuGuard = true;
+        };
         packages.canix-toolbelt-build-train = import ./nix/package.nix {
           inherit pkgs;
           buildTrain = true;

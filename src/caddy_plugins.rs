@@ -1,8 +1,8 @@
 //! Caddy plugin version and `pluginsHash` refresh for Nix flakes.
 //!
-//! The consumer flake declares `caddy.plugins = [ "github.com/OWNER/REPO@VERSION" ]`
-//! and `caddy.pluginsHash = "sha256-..."` in one Nix file and exposes the
-//! `caddy-helpers` flake module's `legacyPackages.<system>.caddyPluginsVendorFor`.
+//! Dotted declarations use the consumer's `caddyPluginsVendorFor` helper.
+//! Nested Caddy declarations can instead key `pluginsHash` by Caddy version;
+//! each hash is resolved against that version from the consumer's nixpkgs pins.
 //! A refresh forces the vendor fixed-output derivation with a fake hash, reads
 //! the `got:` hash, realizes the vendor output with it and edits the source.
 //!
@@ -10,6 +10,8 @@
 //! evaluation leases, build bounds and GC roots. Publication stays with the
 //! caller: [`Resolved::store_path`] is the realized vendor output to upload.
 
+use rnix::ast::{AttrSet, AttrpathValue, Expr, HasEntry, InterpolPart, Str};
+use rowan::ast::AstNode;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::ops::Range;
@@ -61,7 +63,7 @@ pub struct NixCommand;
 impl NixCommand {
     fn build(expr: &str, extra: &[&str]) -> Result<std::process::Output> {
         Ok(Command::new("nix")
-            .args(["build", "--impure", "--no-link"])
+            .args(["build", "--no-update-lock-file", "--impure", "--no-link"])
             .args(extra)
             .args(["--expr", expr])
             .output()?)
@@ -73,6 +75,7 @@ impl Nix for NixCommand {
         let output = Command::new("nix")
             .args([
                 "eval",
+                "--no-update-lock-file",
                 "--impure",
                 "--raw",
                 "--expr",
@@ -175,8 +178,106 @@ fn assignment_values(source: &str, name: &str, open: char, close: char) -> Vec<R
         .collect()
 }
 
-/// Extract `"github.com/...@version"` literals from `caddy.plugins = [ ... ]` lists.
+fn nested_caddy(source: &str) -> Vec<AttrSet> {
+    let root = rnix::Root::parse(source);
+    if !root.errors().is_empty() {
+        return Vec::new();
+    }
+    root.syntax()
+        .descendants()
+        .filter_map(AttrpathValue::cast)
+        .filter_map(|entry| {
+            let attr = entry.attrpath()?.attrs().last()?;
+            match (attr.syntax().text().to_string().as_str(), entry.value()?) {
+                ("caddy", Expr::AttrSet(set)) => Some(set),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn nested_fields<'a>(sets: &'a [AttrSet], key: &'a str) -> impl Iterator<Item = Expr> + 'a {
+    sets.iter()
+        .flat_map(HasEntry::attrpath_values)
+        .filter_map(move |entry| {
+            (entry.attrpath()?.syntax().text() == key).then(|| entry.value())?
+        })
+}
+
+fn plain_string(string: &Str) -> Option<String> {
+    match string.normalized_parts().as_slice() {
+        [InterpolPart::Literal(value)] => Some(value.clone()),
+        [] => Some(String::new()),
+        _ => None,
+    }
+}
+
+fn nested_plugin_strings(sets: &[AttrSet]) -> impl Iterator<Item = Str> + '_ {
+    nested_fields(sets, "plugins")
+        .filter_map(|expr| match expr {
+            Expr::List(list) => Some(list.items()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|expr| match expr {
+            Expr::Str(string) => Some(string),
+            _ => None,
+        })
+}
+
+fn string_range(string: &Str) -> Range<usize> {
+    let span = string.syntax().text_range();
+    usize::from(span.start())..usize::from(span.end())
+}
+
+fn nested_version_hashes(expr: Expr) -> Option<BTreeMap<String, Range<usize>>> {
+    let set = match expr {
+        Expr::AttrSet(set) => set,
+        Expr::Select(select) => match select.expr()? {
+            Expr::AttrSet(set) => set,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let mut ranges = BTreeMap::new();
+    for entry in set.entries() {
+        let rnix::ast::Entry::AttrpathValue(entry) = entry else {
+            return None;
+        };
+        let attrpath = entry.attrpath()?;
+        let mut attrs = attrpath.attrs();
+        let (Some(rnix::ast::Attr::Str(key)), None, Some(Expr::Str(value))) =
+            (attrs.next(), attrs.next(), entry.value())
+        else {
+            return None;
+        };
+        let version = plain_string(&key)?;
+        if version.split('.').count() != 3
+            || !version
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            || !plain_string(&value)?.starts_with("sha256-")
+            || ranges.insert(version, string_range(&value)).is_some()
+        {
+            return None;
+        }
+    }
+    (!ranges.is_empty()).then_some(ranges)
+}
+
+/// Extract `"github.com/...@version"` literals from dotted and nested Caddy lists.
 pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
+    let nested = nested_caddy(source);
+    let nested_plugins = nested_plugin_strings(&nested)
+        .filter_map(|string| plain_string(&string))
+        .filter_map(|literal| {
+            let (module, version) = literal.split_once('@')?;
+            (module.starts_with("github.com/") && !version.is_empty()).then(|| Plugin {
+                file: file.to_path_buf(),
+                module: module.to_string(),
+                version: version.to_string(),
+            })
+        });
     let source = &mask_comments(source);
     assignment_values(source, PLUGINS_MARKER, '[', ']')
         .into_iter()
@@ -193,13 +294,16 @@ pub fn extract_plugins(source: &str, file: &Path) -> Vec<Plugin> {
                     })
                 })
         })
+        .chain(nested_plugins)
         .collect()
 }
 
 /// Replace complete `"module@old"` literals with `"module@new"`, only inside
-/// `caddy.plugins = [ ... ]` lists.
+/// dotted and nested Caddy plugin lists.
 pub fn bump_version(source: &str, module: &str, old: &str, new: &str) -> String {
-    let (from, to) = (format!("\"{module}@{old}\""), format!("\"{module}@{new}\""));
+    let old = format!("{module}@{old}");
+    let from = nix_string(&old);
+    let to = nix_string(&format!("{module}@{new}"));
     let mut out = String::with_capacity(source.len());
     let mut copied = 0;
     for range in assignment_values(source, PLUGINS_MARKER, '[', ']') {
@@ -208,6 +312,15 @@ pub fn bump_version(source: &str, module: &str, old: &str, new: &str) -> String 
         copied = range.end;
     }
     out.push_str(&source[copied..]);
+    let nested = nested_caddy(&out);
+    let mut changes: Vec<_> = nested_plugin_strings(&nested)
+        .filter(|literal| plain_string(literal).as_deref() == Some(old.as_str()))
+        .map(|literal| string_range(&literal))
+        .collect();
+    changes.sort_unstable_by_key(|range| std::cmp::Reverse(range.start));
+    for range in changes {
+        out.replace_range(range, &to);
+    }
     out
 }
 
@@ -243,15 +356,50 @@ pub fn extract_got_hashes(stderr: &str) -> Vec<String> {
 
 /// Expression for the flake's vendor derivation; `None` forces [`FAKE_HASH`].
 pub fn vendor_expr(flake: &Path, system: &str, plugins: &[Plugin], hash: Option<&str>) -> String {
-    let plugins = plugins
-        .iter()
-        .map(|p| format!("\"{}@{}\"", p.module, p.version))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let plugins = vendor_plugins(plugins);
     let hash = hash.unwrap_or(FAKE_HASH);
     format!(
         "((builtins.getFlake {flake}).legacyPackages.{system}.caddyPluginsVendorFor [ {plugins} ] \"{hash}\")",
         flake = nix_string(&flake.display().to_string()),
+    )
+}
+
+fn vendor_plugins(plugins: &[Plugin]) -> String {
+    plugins
+        .iter()
+        .map(|p| nix_string(&format!("{}@{}", p.module, p.version)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn versioned_vendor_expr(
+    flake: &Path,
+    system: &str,
+    plugins: &[Plugin],
+    version: &str,
+    hash: Option<&str>,
+) -> String {
+    // Use the flake's pinned nixpkgs, never an arbitrary Caddy source override:
+    // its withPlugins helper carries the corresponding Go/xcaddy setup.
+    format!(
+        r#"let
+            inputs = (builtins.getFlake {flake}).inputs;
+            version = {version};
+            caddyFor = name: inputs.${{name}}.legacyPackages.${{ {system} }}.caddy;
+            matches = name:
+              let result = builtins.tryEval ((caddyFor name).version == version);
+              in result.success && result.value;
+            pins = builtins.filter
+              (name: builtins.match "nixpkgs(-.*)?" name != null && matches name)
+              (builtins.attrNames inputs);
+            caddy = if pins == [] then throw ("No pinned nixpkgs provides Caddy " + version)
+              else caddyFor (builtins.head pins);
+          in (caddy.withPlugins {{ plugins = [ {plugins} ]; hash = {hash}; }}).src"#,
+        flake = nix_string(&flake.display().to_string()),
+        version = nix_string(version),
+        system = nix_string(system),
+        plugins = vendor_plugins(plugins),
+        hash = nix_string(hash.unwrap_or(FAKE_HASH)),
     )
 }
 
@@ -374,7 +522,7 @@ pub fn find_nix_files(root: &Path, marker: &str) -> Result<Vec<PathBuf>> {
 /// Plugin occurrences under `root`, with paths relative to `root`.
 pub fn discover(root: &Path) -> Result<Vec<Plugin>> {
     let mut plugins = Vec::new();
-    for file in find_nix_files(root, PLUGINS_MARKER)? {
+    for file in find_nix_files(root, "plugins")? {
         plugins.extend(extract_plugins(
             &fs::read_to_string(root.join(&file))?,
             &file,
@@ -383,12 +531,16 @@ pub fn discover(root: &Path) -> Result<Vec<Plugin>> {
     Ok(plugins)
 }
 
-/// Files under `root` assigning a `caddy.pluginsHash = "..."` literal,
-/// relative to `root`.
+/// Files under `root` assigning dotted or nested Caddy hashes, relative to `root`.
 pub fn hash_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    for file in find_nix_files(root, HASH_MARKER)? {
-        if set_plugins_hash(&fs::read_to_string(root.join(&file))?, "").1 > 0 {
+    for file in find_nix_files(root, "pluginsHash")? {
+        let raw = fs::read_to_string(root.join(&file))?;
+        if set_plugins_hash(&raw, "").1 > 0
+            || nested_fields(&nested_caddy(&raw), "pluginsHash")
+                .next()
+                .is_some()
+        {
             files.push(file);
         }
     }
@@ -427,11 +579,18 @@ pub fn fetch_latest(module: &str) -> Result<String> {
 /// Resolve and realize the vendor hash for `plugins` from the flake at `flake`.
 pub fn resolve_hash(flake: &Path, plugins: &[Plugin], nix: &mut impl Nix) -> Result<Resolved> {
     let system = nix.system()?;
-    let stderr = nix.probe(&vendor_expr(flake, &system, plugins, None))?;
+    resolve_vendor(nix, |hash| vendor_expr(flake, &system, plugins, hash))
+}
+
+fn resolve_vendor(
+    nix: &mut impl Nix,
+    expression: impl Fn(Option<&str>) -> String,
+) -> Result<Resolved> {
+    let stderr = nix.probe(&expression(None))?;
     let hash = extract_got_hashes(&stderr)
         .pop()
         .ok_or_else(|| format!("nix build failed without a fixed-output 'got:' hash:\n{stderr}"))?;
-    let store_path = nix.realize(&vendor_expr(flake, &system, plugins, Some(&hash)))?;
+    let store_path = nix.realize(&expression(Some(&hash)))?;
     Ok(Resolved { hash, store_path })
 }
 
@@ -442,8 +601,10 @@ pub struct Refresh {
     pub plugins: Vec<Plugin>,
     /// Updated `(module, old, new)` occurrences.
     pub updates: Vec<(String, String, String)>,
-    /// Resolved hash; `None` for a dry run or when no plugins are declared.
+    /// Resolved hash for a dotted declaration; `None` for versioned configs or dry runs.
     pub resolved: Option<Resolved>,
+    /// Resolved hashes for a versioned declaration, keyed by Caddy version.
+    pub resolved_by_version: BTreeMap<String, Resolved>,
 }
 
 /// Bump every plugin under `root` to its latest version (unless `hash_only`),
@@ -459,17 +620,43 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
     // Every occurrence lives in this one file (validate_single_owner).
     let file = root.join(&occurrences[0].file);
     let raw = fs::read_to_string(&file)?;
-    // One hash covers exactly one plugin set; reject anything else up front.
+    // Both layouts require a single plugin set and a single owner.
     let lists = assignment_values(&raw, PLUGINS_MARKER, '[', ']').len();
     let hashes = set_plugins_hash(&raw, "").1;
-    if lists != 1 || hashes != 1 {
+    let nested = nested_caddy(&raw);
+    let nested_lists: Vec<_> = nested_fields(&nested, "plugins").collect();
+    let nested_hashes: Vec<_> = nested_fields(&nested, "pluginsHash").collect();
+    let version_hashes = if lists == 1
+        && hashes == 1
+        && nested_lists.is_empty()
+        && nested_hashes.is_empty()
+    {
+        None
+    } else if lists == 0
+        && hashes == 0
+        && nested_hashes.len() == 1
+        && matches!(nested_lists.as_slice(), [Expr::List(list)] if list.items().count() == occurrences.len())
+        && nested.iter().any(|set| {
+            let set = std::slice::from_ref(set);
+            nested_fields(set, "plugins").next().is_some()
+                && nested_fields(set, "pluginsHash").next().is_some()
+        })
+    {
+        Some(
+            nested_version_hashes(nested_hashes[0].clone()).ok_or_else(|| {
+                format!(
+                    "{} must contain unique literal Caddy versions and hashes",
+                    file.display()
+                )
+            })?,
+        )
+    } else {
         return Err(format!(
-            "{} must contain exactly one `caddy.plugins = [ ... ]` list and one \
-             `caddy.pluginsHash = \"...\"` string assignment (found {lists} and {hashes})",
+            "{} must contain one Caddy plugin list and one matching literal or versioned hash declaration",
             file.display()
         )
         .into());
-    }
+    };
     let mut latest = BTreeMap::new();
     if !hash_only {
         // ponytail: sequential Go proxy lookups; parallelize if plugin sets grow.
@@ -493,22 +680,42 @@ pub fn refresh(root: &Path, nix: &mut impl Nix, hash_only: bool, dry_run: bool) 
         return Ok(Refresh {
             plugins,
             updates,
-            resolved: None,
+            ..Refresh::default()
         });
     }
-    let resolved = resolve_hash(&root, &plugins, nix)?;
     let mut updated = raw.clone();
+    let mut resolved_by_version = BTreeMap::new();
+    let resolved = if let Some(versions) = version_hashes {
+        let system = nix.system()?;
+        let mut replacements = Vec::new();
+        for (version, range) in versions {
+            let resolved = resolve_vendor(nix, |hash| {
+                versioned_vendor_expr(&root, &system, &plugins, &version, hash)
+            })?;
+            replacements.push((range, nix_string(&resolved.hash)));
+            resolved_by_version.insert(version, resolved);
+        }
+        replacements.sort_unstable_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        for (range, hash) in replacements {
+            updated.replace_range(range, &hash);
+        }
+        None
+    } else {
+        let resolved = resolve_hash(&root, &plugins, nix)?;
+        updated = set_plugins_hash(&updated, &resolved.hash).0;
+        Some(resolved)
+    };
     for (module, old, new) in &updates {
         updated = bump_version(&updated, module, old, new);
     }
-    let (updated, _) = set_plugins_hash(&updated, &resolved.hash);
     if updated != raw {
         fs::write(&file, updated)?;
     }
     Ok(Refresh {
         plugins,
         updates,
-        resolved: Some(resolved),
+        resolved,
+        resolved_by_version,
     })
 }
 
@@ -720,6 +927,103 @@ mod tests {
             assert!(expr.contains("\"sha256-NEW=\""));
             Ok("/nix/store/x-vendor".into())
         }
+    }
+
+    #[test]
+    fn refreshes_nested_hashes_with_their_own_caddy_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let source = r#"{ pkgs, ... }: {
+          unrelated.plugins = ["github.com/example/ignored@v1"];
+          services.caddy = {
+            plugins = [
+              "github.com/example/plugin@v1"
+              # "github.com/example/plugin@v1"
+            ];
+            pluginsHash =
+              {
+                # "2.11.6" = "sha256-comment=";
+                "2.11.7" = "sha256-old7=";
+                "2.11.9" = "sha256-old9=";
+              }
+              .${pkgs.caddy.version};
+          };
+        }"#;
+        let path = dir.path().join("ingress.nix");
+        fs::write(&path, source).unwrap();
+        assert_eq!(
+            hash_files(dir.path()).unwrap(),
+            [PathBuf::from("ingress.nix")]
+        );
+        assert_eq!(
+            discover(dir.path()).unwrap(),
+            [plugin("ingress.nix", "github.com/example/plugin", "v1")]
+        );
+        assert_eq!(
+            bump_version(source, "github.com/example/plugin", "v1", "v2"),
+            source.replacen(
+                "github.com/example/plugin@v1",
+                "github.com/example/plugin@v2",
+                1
+            )
+        );
+
+        struct Versioned;
+        impl Nix for Versioned {
+            fn system(&mut self) -> Result<String> {
+                Ok("x86_64-linux".into())
+            }
+            fn probe(&mut self, expr: &str) -> Result<String> {
+                assert!(expr.contains("github.com/example/plugin@v1"));
+                let suffix = if expr.contains("\"2.11.7\"") {
+                    "7"
+                } else {
+                    assert!(expr.contains("\"2.11.9\""));
+                    "9"
+                };
+                Ok(format!("got: sha256-NEW{suffix}="))
+            }
+            fn realize(&mut self, expr: &str) -> Result<String> {
+                let suffix = if expr.contains("\"2.11.7\"") {
+                    "7"
+                } else {
+                    assert!(expr.contains("\"2.11.9\""));
+                    "9"
+                };
+                assert!(expr.contains(&format!("sha256-NEW{suffix}=")));
+                Ok(format!("/nix/store/vendor{suffix}"))
+            }
+        }
+        let dry = refresh(dir.path(), &mut Versioned, true, true).unwrap();
+        assert!(dry.resolved_by_version.is_empty());
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        let done = refresh(dir.path(), &mut Versioned, true, false).unwrap();
+        assert!(done.resolved.is_none());
+        assert_eq!(
+            done.resolved_by_version["2.11.7"].store_path,
+            "/nix/store/vendor7"
+        );
+        assert_eq!(
+            done.resolved_by_version["2.11.9"].store_path,
+            "/nix/store/vendor9"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            source
+                .replace("sha256-old7=", "sha256-NEW7=")
+                .replace("sha256-old9=", "sha256-NEW9=")
+        );
+        let computed = source.replace("\"sha256-old9=\"", "pkgs.lib.fakeHash");
+        fs::write(&path, &computed).unwrap();
+        assert!(refresh(dir.path(), &mut Versioned, true, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), computed);
     }
 
     #[test]

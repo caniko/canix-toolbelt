@@ -13,6 +13,17 @@ use std::{
 const REQUEST_MARKER: &str = "<!-- toolbelt-review-request:v1 ";
 const DISPOSITION_MARKER: &str = "<!-- toolbelt-review-disposition:v1 ";
 
+/// GitHub merge strategy for [`GitHub::merge_pull_at_head`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MergeMethod {
+    /// Create a merge commit.
+    Merge,
+    /// Squash the pull request into one commit.
+    Squash,
+    /// Rebase the pull request commits onto the base.
+    Rebase,
+}
+
 /// Native GitHub REST transport. Credentials never enter persisted receipts.
 #[derive(Clone)]
 pub struct GitHub {
@@ -232,6 +243,43 @@ impl GitHub {
     /// `apply` performs an explicitly authorized merge; otherwise this is read-only.
     pub fn merge_native(&mut self, candidate: &Candidate, apply: bool) -> Result<Value, Error> {
         self.merge_with_policy(candidate, None, apply)
+    }
+
+    /// Merge only if GitHub still sees `expected_head` as the PR's head.
+    ///
+    /// This explicitly opts into GitHub's own rules without the additional
+    /// toolbelt policy gates. It does not query or infer branch protection.
+    /// Returns GitHub's resulting commit SHA. A transport failure can leave
+    /// the result unknown; inspect the PR rather than blindly retrying.
+    pub fn merge_pull_at_head(
+        &self,
+        pull_url: &str,
+        expected_head: &str,
+        method: MergeMethod,
+    ) -> Result<String, Error> {
+        let full_sha =
+            |value: &str| value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit());
+        if !full_sha(expected_head) {
+            return Err(Error("merge requires a full commit SHA".into()));
+        }
+        let pr = PullRequest::parse(pull_url)?;
+        let method = match method {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        };
+        let (status, value) = self.request(
+            "PUT",
+            &format!("/repos/{}/pulls/{}/merge", pr.repository, pr.number),
+            Some(json!({"sha": expected_head, "merge_method": method})),
+        )?;
+        if status != 200 || value.get("merged").and_then(Value::as_bool) != Some(true) {
+            return Err(Error(format!(
+                "GitHub did not confirm merge (HTTP {status}); inspect authoritative PR state"
+            )));
+        }
+        value["sha"].as_str().filter(|sha| full_sha(sha)).map(str::to_owned)
+            .ok_or_else(|| Error("GitHub reported a merge without a full result SHA; inspect authoritative PR state".into()))
     }
 
     fn merge_with_policy(
@@ -954,6 +1002,14 @@ mod tests {
         replies: Vec<(u16, Value)>,
         headers: &'static str,
     ) -> (GitHub, thread::JoinHandle<()>) {
+        server_checking_request(replies, headers, |_, _| ())
+    }
+
+    fn server_checking_request(
+        replies: Vec<(u16, Value)>,
+        headers: &'static str,
+        check: impl Fn(&str, &[u8]) + Send + 'static,
+    ) -> (GitHub, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
@@ -991,6 +1047,10 @@ mod tests {
                     assert!(count > 0, "incomplete fixture request body");
                     request.extend_from_slice(&buffer[..count]);
                 }
+                check(
+                    std::str::from_utf8(&request[..header_end]).unwrap(),
+                    &request[header_end..header_end + body_size],
+                );
                 let body = value.to_string();
                 write!(stream, "HTTP/1.1 {status} Test\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
@@ -1011,6 +1071,73 @@ mod tests {
             draft: false,
             open: true,
         }
+    }
+
+    #[test]
+    fn expected_head_merge_sends_the_full_sha_and_method_and_rejects_conflict() {
+        let head = "a".repeat(40);
+        let merged = "c".repeat(40);
+        for (status, reply, accepted) in [
+            (200, json!({"merged": true, "sha": merged}), true),
+            (409, json!({"message": "Head SHA changed"}), false),
+            (200, json!({"merged": false}), false),
+            (404, Value::Null, false),
+        ] {
+            let expected = head.clone();
+            let (github, handle) =
+                server_checking_request(vec![(status, reply)], "", move |req, body| {
+                    assert!(req.starts_with("PUT /repos/example/project/pulls/12/merge HTTP/"));
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(body).unwrap(),
+                        json!({"sha": expected, "merge_method": "squash"}),
+                    );
+                });
+            let out = github.merge_pull_at_head(&candidate().url, &head, MergeMethod::Squash);
+            handle.join().unwrap();
+            if accepted {
+                assert_eq!(out.unwrap(), merged);
+            } else {
+                assert!(
+                    out.unwrap_err()
+                        .to_string()
+                        .contains(&format!("HTTP {status}"))
+                );
+            }
+        }
+        let (github, handle) = server(vec![]);
+        assert!(
+            github
+                .merge_pull_at_head(&candidate().url, "abc123", MergeMethod::Merge)
+                .unwrap_err()
+                .to_string()
+                .contains("full")
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn missing_branch_protection_does_not_trigger_an_expected_head_merge() {
+        let current = candidate();
+        let (mut github, handle) = server_checking_request(
+            vec![
+                (
+                    200,
+                    json!({"html_url":current.url,"head":{"sha":current.head,"ref":current.source_branch,"repo":{"full_name":current.source_repository}},
+                    "base":{"sha":current.base,"ref":current.target_branch},"state":"open","draft":false}),
+                ),
+                (404, Value::Null),
+            ],
+            "",
+            |request, _| assert!(request.starts_with("GET ")),
+        );
+        assert!(
+            github
+                .merge(&current, &protected_policy())
+                .unwrap_err()
+                .to_string()
+                .contains("resource missing or not accessible")
+        );
+        handle.join().unwrap();
     }
 
     fn protected_policy() -> Policy {

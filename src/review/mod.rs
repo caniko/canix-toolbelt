@@ -8,7 +8,7 @@ pub use model::*;
 mod engine;
 pub use engine::*;
 mod github;
-pub use github::{GitHub, GreptileGitHub};
+pub use github::{GitHub, GreptileGitHub, MergeMethod};
 
 /// Select exactly the configured provider/transport. Historical Greptile is
 /// available only when explicitly selected.
