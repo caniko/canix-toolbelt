@@ -36,7 +36,10 @@ const SYSTEMCTL: &str = match option_env!("CANIX_PINENTRY_SYSTEMCTL") {
     Some(path) => path,
     None => "systemctl",
 };
+const WLOPM: Option<&str> = option_env!("CANIX_PINENTRY_WLOPM");
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+// Bound Wayland display-power probes so a stuck compositor cannot stall routing.
+const DISPLAY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 // A peer's greeting follows its SSH connect and, at most, one popup start.
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(20);
 // `--serve` exits with this before any Assuan output when its seat is not in use.
@@ -529,18 +532,100 @@ fn output(program: &str, args: &[&str]) -> io::Result<String> {
     String::from_utf8(output.stdout).map_err(io::Error::other)
 }
 
+fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Result<String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = stdout.read_to_end(&mut bytes);
+        let _ = sender.send(read.map(|_| bytes));
+    });
+    let bytes = match receiver.recv_timeout(timeout) {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "command timed out"));
+        }
+    };
+    if !child.wait()?.success() {
+        return Err(io::Error::other("command failed"));
+    }
+    String::from_utf8(bytes).map_err(io::Error::other)
+}
+
+fn seat_property<'a>(properties: &'a str, name: &str) -> Option<&'a str> {
+    properties
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+}
+
 /// A seat is in use while its graphical session is local, active and unlocked.
 /// Lockers must maintain logind's `LockedHint` for an unattended seat to decline.
 fn seat_in_use(properties: &str) -> bool {
-    let value = |name: &str| {
-        properties
-            .lines()
-            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
-    };
-    value("Active") == Some("yes")
-        && value("LockedHint") == Some("no")
-        && value("Remote") == Some("no")
-        && matches!(value("Type"), Some("wayland" | "x11"))
+    seat_property(properties, "Active") == Some("yes")
+        && seat_property(properties, "LockedHint") == Some("no")
+        && seat_property(properties, "Remote") == Some("no")
+        && matches!(seat_property(properties, "Type"), Some("wayland" | "x11"))
+}
+
+/// Parses `wlopm` output (`<output> on|off`). Returns `Some(false)` only when
+/// at least one output is reported and every reported output is powered off.
+fn displays_powered_on(output: &str) -> Option<bool> {
+    let mut saw_off = false;
+    for line in output.lines() {
+        let mut words = line.split_whitespace();
+        let Some(_output) = words.next() else {
+            continue;
+        };
+        match words.next_back() {
+            Some("on") => return Some(true),
+            Some("off") => saw_off = true,
+            _ => {}
+        }
+    }
+    saw_off.then_some(false)
+}
+
+fn manager_display_env() -> io::Result<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    for line in output(SYSTEMCTL, &["--user", "show-environment"])?.lines() {
+        if let Some((name, value)) = line.split_once('=')
+            && DISPLAY_VARIABLES.contains(&name)
+            // Shell-quoted values would reach Qt with their quotes; leave them unset.
+            && !value.starts_with('\'')
+            && !value.starts_with("$'")
+        {
+            env.push((name.to_string(), value.to_string()));
+        }
+    }
+    Ok(env)
+}
+
+/// Checks Wayland output power via `wlopm` using the user manager's Wayland
+/// socket. Returns `None` when no probe is available so non-wlr compositors
+/// fall back to logind's lock state.
+fn wayland_outputs_powered_on() -> Option<bool> {
+    let wlopm = WLOPM?;
+    let manager_env = manager_display_env().ok()?;
+    let wayland_display = manager_env.iter().find_map(|(name, value)| {
+        (name == "WAYLAND_DISPLAY" && !value.is_empty()).then_some(value)
+    })?;
+    let mut command = Command::new(wlopm);
+    command.env("WAYLAND_DISPLAY", wayland_display);
+    if let Some(runtime_dir) = manager_env
+        .iter()
+        .find_map(|(name, value)| (name == "XDG_RUNTIME_DIR" && !value.is_empty()).then_some(value))
+    {
+        command.env("XDG_RUNTIME_DIR", runtime_dir);
+    }
+    let stdout = output_with_timeout(command, DISPLAY_PROBE_TIMEOUT).ok()?;
+    displays_powered_on(&stdout)
 }
 
 fn present() -> io::Result<bool> {
@@ -565,7 +650,15 @@ fn present() -> io::Result<bool> {
             "Type",
         ],
     )?;
-    Ok(seat_in_use(&properties))
+    if !seat_in_use(&properties) {
+        return Ok(false);
+    }
+    if seat_property(&properties, "Type") == Some("wayland")
+        && wayland_outputs_powered_on() == Some(false)
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// The focused terminal pane of a client attached to `zellij action list-clients`.
@@ -593,31 +686,31 @@ fn attached_pane() -> Option<(u32, String)> {
         })
 }
 
-/// Prompts on this seat for a request without a usable origin: a floating pane
-/// in an attached Zellij session, else Qt on the user manager's display. The
-/// requester's terminal and display options name no surface here either.
+/// Prompts on this seat for a request without a usable origin: Qt on the user
+/// manager's display so it surfaces over desktop apps, else a floating pane in
+/// an attached Zellij session. The requester's terminal and display options
+/// name no surface here either.
 fn prompt_here() -> io::Result<ExitCode> {
-    if let Some((pane, session)) = attached_pane() {
-        match popup(pane, &session) {
-            Ok(popup) => return run_popup(popup, Command::new(TTY), true),
-            Err(error) => eprintln!("toolbelt-pinentry: {error}; using the desktop"),
+    if let Ok(manager_env) = manager_display_env()
+        && manager_env.iter().any(|(name, value)| {
+            matches!(name.as_str(), "DISPLAY" | "WAYLAND_DISPLAY") && !value.is_empty()
+        })
+    {
+        let mut qt = Command::new(QT);
+        for name in DISPLAY_VARIABLES {
+            qt.env_remove(name);
         }
-    }
-    let mut qt = Command::new(QT);
-    for name in DISPLAY_VARIABLES {
-        qt.env_remove(name);
-    }
-    for line in output(SYSTEMCTL, &["--user", "show-environment"])?.lines() {
-        if let Some((name, value)) = line.split_once('=')
-            && DISPLAY_VARIABLES.contains(&name)
-            // Shell-quoted values would reach Qt with their quotes; leave them unset.
-            && !value.starts_with('\'')
-            && !value.starts_with("$'")
-        {
+        for (name, value) in manager_env {
             qt.env(name, value);
         }
+        return relay(qt, None, true);
     }
-    relay(qt, None, true)
+    if let Some((pane, session)) = attached_pane() {
+        return run_popup(popup(pane, &session)?, Command::new(TTY), true);
+    }
+    Err(io::Error::other(
+        "no graphical display or attached Zellij session is available",
+    ))
 }
 
 /// Tab-separated peer commands, one per line; `--serve` is appended to each.

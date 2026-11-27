@@ -12,6 +12,7 @@
   xorg-server,
   xdotool,
   systemd,
+  wlopm,
 }:
 assert lib.versionAtLeast zellij.version "0.45";
   stdenv.mkDerivation {
@@ -29,6 +30,7 @@ assert lib.versionAtLeast zellij.version "0.45";
       CANIX_PINENTRY_GPG = "${gnupg}/bin/gpg";
       CANIX_PINENTRY_LOGINCTL = "${systemd}/bin/loginctl";
       CANIX_PINENTRY_SYSTEMCTL = "${systemd}/bin/systemctl";
+      CANIX_PINENTRY_WLOPM = lib.getExe wlopm;
     };
     buildPhase = ''
       runHook preBuild

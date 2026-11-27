@@ -154,6 +154,59 @@ class RequestContextIntegration(unittest.TestCase):
             self.assertTrue(closed, "the backend outlived the signalled router and kept Assuan stdout open")
             process.stdin.close()
 
+    def test_wayland_display_power_off_forwards_to_peer_and_prefers_qt_over_zellij(self):
+        root = Path(self.temp.name) / "display-power"
+        root.mkdir()
+        record = root / "record.json"
+        qt = root / "qt"
+        qt.write_text(f"#!{sys.executable}\nimport json, os, sys\nfrom pathlib import Path\n"
+                      "print('OK', flush=True)\n"
+                      "for line in sys.stdin:\n"
+                      " if line.startswith('GETPIN'): print('D power-fixture-pin', flush=True)\n"
+                      " print('OK', flush=True)\n"
+                      " if line.startswith('BYE'): break\n"
+                      "Path(os.environ['PINENTRY_FIXTURE_RECORD']).write_text(json.dumps({'backend': 'qt', 'seat': os.environ.get('FIXTURE_SEAT'), 'power': os.environ.get('FIXTURE_POWER')}))\n")
+        # A live Zellij binary that fails the test if prompt_here picks it over Qt.
+        zellij = root / "zellij"
+        zellij.write_text(f"#!{sys.executable}\nimport sys\n"
+                          "if sys.argv[1:3] == ['list-sessions', '--no-formatting']: print('main [Created 1m ago]')\n"
+                          "elif 'list-clients' in sys.argv: print('CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\\n1 terminal_0 btop')\n"
+                          "else: raise SystemExit('zellij popup must not be preferred when Qt display exists')\n")
+        wlopm = root / "wlopm"
+        wlopm.write_text(f"#!{sys.executable}\nimport os\n"
+                         "power = os.environ.get('FIXTURE_POWER', 'on')\n"
+                         "if power == 'fail': raise SystemExit(1)\n"
+                         "print(f'eDP-1 {power}')\n")
+        router = compile_seat_router(root, QT=qt, ZELLIJ=zellij, WLOPM=wlopm,
+                                     SYSTEMCTL=Path(self.temp.name) / "manager")
+        agent = root / "canix-toolbelt-pinentry-agent"
+        agent.symlink_to(router)
+        peer = root / "peer-on"
+        peer.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                        f"os.execve({str(router)!r}, [{str(router)!r}, *sys.argv[1:]], "
+                        "dict(os.environ, FIXTURE_SEAT='in-use', FIXTURE_POWER='on'))\n")
+        peer.chmod(0o700)
+        (root / "config/canix-toolbelt").mkdir(parents=True, exist_ok=True)
+        (root / "config/canix-toolbelt/pinentry-peers").write_text(f"{peer}\n")
+        request = "GETPIN\nBYE\n"
+        base_env = dict(self.env, PINENTRY_FIXTURE_RECORD=str(record),
+                        PINENTRY_USER_DATA="canix-pinentry-v1:headless",
+                        XDG_CONFIG_HOME=str(root / "config"), FIXTURE_SEAT="in-use")
+        # Unlocked local seat with display powered off forwards to the display-on peer,
+        # which chooses Qt even though an attached Zellij session is present.
+        result = subprocess.run([agent], env=dict(base_env, FIXTURE_POWER="off"),
+                                input=request, text=True, capture_output=True, check=True, timeout=15)
+        self.assertIn("D power-fixture-pin", result.stdout, result.stderr)
+        actual = json.loads(record.read_text())
+        self.assertEqual(actual, {"backend": "qt", "seat": "in-use", "power": "on"})
+        # When wlopm fails (non-wlr compositor), fall back to logind and stay local.
+        record.unlink()
+        result = subprocess.run([agent], env=dict(base_env, FIXTURE_POWER="fail"),
+                                input=request, text=True, capture_output=True, check=True, timeout=15)
+        self.assertIn("D power-fixture-pin", result.stdout, result.stderr)
+        actual = json.loads(record.read_text())
+        self.assertEqual(actual, {"backend": "qt", "seat": "in-use", "power": "fail"})
+
     def test_agent_preserves_all_request_display_values(self):
         env = dict(self.env, PINENTRY_USER_DATA="canix-pinentry-v1:desktop", DISPLAY=":request",
                    WAYLAND_DISPLAY="request-wayland", XAUTHORITY="request-auth", XDG_SESSION_TYPE="request-type")
@@ -484,7 +537,9 @@ class PinentryIntegration(unittest.TestCase):
     def test_forwarded_headless_request_prompts_in_the_peers_attached_session(self):
         root = self.root / "forward"
         root.mkdir()
-        router = compile_seat_router(root)
+        no_systemctl = root / "systemctl"
+        no_systemctl.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
+        router = compile_seat_router(root, SYSTEMCTL=no_systemctl)
         agent = root / "canix-toolbelt-pinentry-agent"
         agent.symlink_to(router)
         write_peers(root, router, ["absent", "in-use"])
